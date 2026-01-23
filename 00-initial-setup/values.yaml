@@ -1,0 +1,11 @@
+USER-SUPPLIED VALUES:
+providers:
+  default: openAI
+  openAI:
+    apiKey: 
+otel:
+  tracing:
+    enabled: true
+    exporter:
+      otlp:
+        endpoint: http://jaeger.jaeger.svc.cluster.local:4317
