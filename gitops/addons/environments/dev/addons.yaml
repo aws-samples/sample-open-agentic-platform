@@ -29,3 +29,4 @@ jaeger:
   enabled: true
 kagent-monitoring:
   enabled: true
+
