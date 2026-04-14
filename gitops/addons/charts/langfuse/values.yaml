@@ -1,0 +1,27 @@
+replicas: 1
+
+image:
+  repository: langfuse/langfuse
+  tag: "2"
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+
+postgres:
+  image:
+    repository: postgres
+    tag: "16-alpine"
+  storage: 10Gi
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi

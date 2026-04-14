@@ -1,0 +1,245 @@
+syncPolicy:
+  automated:
+    selfHeal: true
+    allowEmpty: true
+    prune: true
+  retry:
+    limit: -1
+    backoff:
+      duration: 5s
+      factor: 2
+      maxDuration: 10m
+  syncOptions:
+    - CreateNamespace=true
+    - ServerSideApply=true
+syncPolicyAppSet:
+  preserveResourcesOnDeletion: false
+useSelectors: true
+repoURLGit: '{{.metadata.annotations.addons_repo_url}}'
+repoURLGitRevision: '{{.metadata.annotations.addons_repo_revision}}'
+repoURLGitBasePath: '{{.metadata.annotations.addons_repo_basepath}}'
+
+valueFiles:
+  - default/addons
+  - environments/{{.metadata.labels.environment}}/addons
+  - clusters/{{.nameNormalized}}/addons
+useValuesFilePrefix: true
+valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
+
+########################################
+# Platform Prerequisites
+########################################
+
+flux:
+  enabled: false
+  namespace: flux-system
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/flux'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  selector:
+    matchExpressions:
+      - key: enable_flux
+        operator: In
+        values: ['true']
+  valuesObject:
+    flux2:
+      helmController:
+        create: false
+      imageAutomationController:
+        create: false
+      imageReflectionController:
+        create: false
+      kustomizeController:
+        create: false
+      notificationController:
+        create: true
+
+tofu-controller:
+  enabled: false
+  namespace: flux-system
+  chartName: tf-controller
+  defaultVersion: '0.16.0-rc.4'
+  chartRepository: 'https://flux-iac.github.io/tofu-controller'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  selector:
+    matchExpressions:
+      - key: enable_tofu_controller
+        operator: In
+        values: ['true']
+  valuesObject:
+    allowCrossNamespaceRefs: true
+    watchAllNamespaces: true
+    awsPackage:
+      install: true
+      repository: ghcr.io/flux-iac/aws-primitive-modules
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: '{{.metadata.annotations.tofu_controller_role_arn}}'
+
+########################################
+# KAgent Operator
+########################################
+
+kagent-crds:
+  enabled: false
+  namespace: kagent
+  chartName: kagent-crds
+  defaultVersion: '0.7.9'
+  chartNamespace: kagent-dev
+  chartRepository: public.ecr.aws
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  selector:
+    matchExpressions:
+      - key: enable_kagent
+        operator: In
+        values: ['true']
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /metadata/annotations
+
+kagent:
+  enabled: false
+  namespace: kagent
+  chartName: kagent
+  defaultVersion: '0.7.9'
+  chartNamespace: kagent-dev
+  chartRepository: public.ecr.aws
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  selector:
+    matchExpressions:
+      - key: enable_kagent
+        operator: In
+        values: ['true']
+
+########################################
+# Agent Core Infrastructure
+########################################
+
+agent-core:
+  enabled: false
+  namespace: agent-core-infra
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/agent-core'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '4'
+  selector:
+    matchExpressions:
+      - key: enable_agent_core
+        operator: In
+        values: ['true']
+  valuesObject:
+    global:
+      awsRegion: '{{.metadata.annotations.aws_region}}'
+      eksClusterName: '{{.metadata.annotations.aws_cluster_name}}'
+      projectName: '{{default "agent-core" (index .metadata.annotations "agent_core_project_name")}}'
+      networkMode: '{{default "PUBLIC" (index .metadata.annotations "agent_core_network_mode")}}'
+      terraformRepoUrl: '{{.metadata.annotations.agent_core_terraform_repo_url}}'
+      terraformRepoRevision: '{{default "main" (index .metadata.annotations "agent_core_terraform_repo_revision")}}'
+    capabilities:
+      memory: true
+      browser: true
+      codeInterpreter: true
+    mcpServer:
+      image:
+        repository: '{{.metadata.annotations.agent_core_mcp_image}}'
+        tag: '{{default "latest" (index .metadata.annotations "agent_core_mcp_image_tag")}}'
+
+########################################
+# Observability — LLM Gateway
+########################################
+
+litellm:
+  enabled: false
+  namespace: kagent
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/litellm'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  selector:
+    matchExpressions:
+      - key: enable_litellm
+        operator: In
+        values: ['true']
+  valuesObject:
+    global:
+      awsRegion: '{{.metadata.annotations.aws_region}}'
+
+########################################
+# Observability — Tracing & Metrics
+########################################
+
+langfuse:
+  enabled: false
+  namespace: langfuse
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/langfuse'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '5'
+  selector:
+    matchExpressions:
+      - key: enable_langfuse
+        operator: In
+        values: ['true']
+
+jaeger:
+  enabled: false
+  namespace: jaeger
+  chartName: jaeger
+  defaultVersion: '3.4.1'
+  chartRepository: 'https://jaegertracing.github.io/helm-charts'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '5'
+  selector:
+    matchExpressions:
+      - key: enable_jaeger
+        operator: In
+        values: ['true']
+  valuesObject:
+    provisionDataStore:
+      cassandra: false
+    allInOne:
+      enabled: true
+    storage:
+      type: memory
+    agent:
+      enabled: false
+    collector:
+      enabled: false
+    query:
+      enabled: false
+
+kagent-monitoring:
+  enabled: false
+  namespace: kagent
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/kagent-monitoring'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '6'
+  selector:
+    matchExpressions:
+      - key: enable_kagent_monitoring
+        operator: In
+        values: ['true']
+
+########################################
+# KAgent Setup (ModelConfig + Bedrock)
+########################################
+
+kagent-setup:
+  enabled: false
+  namespace: kagent
+  defaultVersion: '0.1.0'
+  path: '{{.metadata.annotations.addons_repo_basepath}}charts/kagent-setup'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  selector:
+    matchExpressions:
+      - key: enable_kagent
+        operator: In
+        values: ['true']

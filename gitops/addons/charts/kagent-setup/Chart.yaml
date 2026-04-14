@@ -1,0 +1,5 @@
+apiVersion: v2
+name: kagent-setup
+description: KAgent ModelConfig and Bedrock secret for LiteLLM integration
+type: application
+version: 0.1.0
