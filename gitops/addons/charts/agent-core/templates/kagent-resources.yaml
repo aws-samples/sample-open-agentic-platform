@@ -20,7 +20,7 @@ metadata:
   labels:
     {{- include "agent-core.labels" . | nindent 4 }}
 spec:
-  url: http://agent-core-mcp-{{ include "agent-core.name" . }}:8080/mcp
+  url: http://agent-core-mcp-{{ include "agent-core.name" . }}.{{ include "agent-core.namespace" . }}.svc.cluster.local:8080/mcp
   description: "Agent Core capabilities: Memory, Browser, Code Interpreter"
 ---
 apiVersion: kagent.dev/v1alpha2
@@ -35,10 +35,8 @@ metadata:
 spec:
   type: Declarative
   description: "Weather-Based Activity Planning Assistant with memory"
-  serviceAccountName: {{ include "agent-core.name" . }}-agent-sa
   declarative:
     modelConfig: {{ .Values.kagent.modelConfig }}
-    stream: true
     systemMessage: |
       You are a Weather-Based Activity Planning Assistant with memory.
 
