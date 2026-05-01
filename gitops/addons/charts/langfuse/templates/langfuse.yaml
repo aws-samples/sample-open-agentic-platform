@@ -51,6 +51,8 @@ spec:
               value: langfuse
             - name: POSTGRES_PASSWORD
               value: langfuse-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data

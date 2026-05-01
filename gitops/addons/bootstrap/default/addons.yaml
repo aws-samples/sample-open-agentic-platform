@@ -33,8 +33,9 @@ valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
 flux:
   enabled: false
   namespace: flux-system
-  defaultVersion: '0.1.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/flux'
+  chartName: flux2
+  defaultVersion: '2.12.4'
+  chartRepository: 'https://fluxcd-community.github.io/helm-charts'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '0'
   selector:
@@ -43,17 +44,16 @@ flux:
         operator: In
         values: ['true']
   valuesObject:
-    flux2:
-      helmController:
-        create: false
-      imageAutomationController:
-        create: false
-      imageReflectionController:
-        create: false
-      kustomizeController:
-        create: false
-      notificationController:
-        create: true
+    helmController:
+      create: false
+    imageAutomationController:
+      create: false
+    imageReflectionController:
+      create: false
+    kustomizeController:
+      create: false
+    notificationController:
+      create: true
 
 tofu-controller:
   enabled: false
@@ -87,8 +87,8 @@ kagent-crds:
   namespace: kagent
   chartName: kagent-crds
   defaultVersion: '0.7.9'
-  chartNamespace: kagent-dev
-  chartRepository: public.ecr.aws
+  chartNamespace: kagent-dev/kagent/helm
+  chartRepository: ghcr.io
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '2'
   selector:
@@ -107,8 +107,8 @@ kagent:
   namespace: kagent
   chartName: kagent
   defaultVersion: '0.7.9'
-  chartNamespace: kagent-dev
-  chartRepository: public.ecr.aws
+  chartNamespace: kagent-dev/kagent/helm
+  chartRepository: ghcr.io
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '3'
   selector:
