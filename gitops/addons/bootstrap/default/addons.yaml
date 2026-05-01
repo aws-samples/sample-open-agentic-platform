@@ -74,9 +74,6 @@ tofu-controller:
     awsPackage:
       install: true
       repository: ghcr.io/flux-iac/aws-primitive-modules
-    serviceAccount:
-      annotations:
-        eks.amazonaws.com/role-arn: '{{.metadata.annotations.tofu_controller_role_arn}}'
 
 ########################################
 # KAgent Operator
