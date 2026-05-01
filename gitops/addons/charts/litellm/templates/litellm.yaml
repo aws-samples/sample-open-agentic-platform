@@ -14,11 +14,11 @@ data:
     model_list:
       - model_name: bedrock-claude-3-5-sonnet
         litellm_params:
-          model: bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0
+          model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0
           aws_region_name: os.environ/AWS_REGION_NAME
       - model_name: bedrock-claude-3-haiku
         litellm_params:
-          model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+          model: bedrock/anthropic.claude-haiku-4-5-20251001-v1:0
           aws_region_name: os.environ/AWS_REGION_NAME
     router_settings:
       fallbacks:
