@@ -29,4 +29,6 @@ jaeger:
   enabled: true
 kagent-monitoring:
   enabled: true
+prometheus-operator-crds:
+  enabled: true
 
