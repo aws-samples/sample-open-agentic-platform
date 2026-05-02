@@ -136,8 +136,8 @@ agent-core:
       eksClusterName: '{{.metadata.annotations.aws_cluster_name}}'
       projectName: '{{default "agent-core" (index .metadata.annotations "agent_core_project_name")}}'
       networkMode: '{{default "PUBLIC" (index .metadata.annotations "agent_core_network_mode")}}'
-      terraformRepoUrl: '{{.metadata.annotations.agent_core_terraform_repo_url}}'
-      terraformRepoRevision: '{{default "main" (index .metadata.annotations "agent_core_terraform_repo_revision")}}'
+      terraformRepoUrl: '{{default .metadata.annotations.addons_repo_url (index .metadata.annotations "agent_core_terraform_repo_url")}}'
+      terraformRepoRevision: '{{default .metadata.annotations.addons_repo_revision (index .metadata.annotations "agent_core_terraform_repo_revision")}}'
     capabilities:
       memory: true
       browser: true

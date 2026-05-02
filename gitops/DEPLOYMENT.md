@@ -64,7 +64,7 @@ metadata:
     # agent_core_network_mode: "PUBLIC"
     # agent_core_mcp_image: "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/agent-core-mcp"
     # agent_core_mcp_image_tag: "latest"
-    # agent_core_terraform_repo_url: "https://github.com/<ORG>/eks-agent-core-pocs.git"
+    # agent_core_terraform_repo_url: "https://github.com/aws-samples/sample-agent-platform-on-eks.git"
     # agent_core_terraform_repo_revision: "main"
 type: Opaque
 stringData:
@@ -256,7 +256,7 @@ kubectl annotate secret agent-platform -n argocd \
   agent_core_network_mode="PUBLIC" \
   agent_core_mcp_image="<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/agent-core-mcp" \
   agent_core_mcp_image_tag="latest" \
-  agent_core_terraform_repo_url="https://github.com/<ORG>/eks-agent-core-pocs.git" \
+  agent_core_terraform_repo_url="https://github.com/aws-samples/sample-agent-platform-on-eks.git" \
   agent_core_terraform_repo_revision="main"
 ```
 

@@ -14,7 +14,7 @@ REPO_REVISION="${REPO_REVISION:-main}"
 PROJECT_NAME="${PROJECT_NAME:-agent-core}"
 TOFU_ROLE_ARN="${TOFU_CONTROLLER_ROLE_ARN:-}"
 MCP_IMAGE="${AGENT_CORE_MCP_IMAGE:-}"
-TF_REPO_URL="${AGENT_CORE_TERRAFORM_REPO_URL:-https://github.com/your-org/eks-agent-core-pocs}"
+TF_REPO_URL="${AGENT_CORE_TERRAFORM_REPO_URL:-https://github.com/aws-samples/sample-agent-platform-on-eks}"
 TF_REPO_REVISION="${AGENT_CORE_TERRAFORM_REPO_REVISION:-main}"
 ENVIRONMENT="${ENVIRONMENT:-dev}"
 
