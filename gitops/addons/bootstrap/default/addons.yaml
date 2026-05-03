@@ -15,9 +15,9 @@ syncPolicy:
 syncPolicyAppSet:
   preserveResourcesOnDeletion: false
 useSelectors: true
-repoURLGit: '{{.metadata.annotations.addons_repo_url}}'
-repoURLGitRevision: '{{.metadata.annotations.addons_repo_revision}}'
-repoURLGitBasePath: '{{.metadata.annotations.addons_repo_basepath}}'
+repoURLGit: '{{default "https://github.com/aws-samples/sample-agent-platform-on-eks.git" .metadata.annotations.addons_repo_url}}'
+repoURLGitRevision: '{{default "main" .metadata.annotations.addons_repo_revision}}'
+repoURLGitBasePath: '{{default "gitops/addons/" .metadata.annotations.addons_repo_basepath}}'
 
 valueFiles:
   - default/addons
@@ -122,7 +122,7 @@ agent-core:
   enabled: false
   namespace: agent-core-infra
   defaultVersion: '0.1.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/agent-core'
+  path: 'gitops/addons/charts/agent-core'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '4'
   selector:
@@ -155,7 +155,7 @@ litellm:
   enabled: false
   namespace: kagent
   defaultVersion: '0.1.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/litellm'
+  path: 'gitops/addons/charts/litellm'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '3'
   selector:
@@ -175,7 +175,7 @@ langfuse:
   enabled: false
   namespace: langfuse
   defaultVersion: '0.1.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/langfuse'
+  path: 'gitops/addons/charts/langfuse'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '5'
   selector:
@@ -221,7 +221,7 @@ kagent-monitoring:
   enabled: false
   namespace: kagent
   defaultVersion: '0.2.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/kagent-monitoring'
+  path: 'gitops/addons/charts/kagent-monitoring'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '6'
   selector:
@@ -257,7 +257,7 @@ kagent-setup:
   enabled: false
   namespace: kagent
   defaultVersion: '0.1.0'
-  path: '{{.metadata.annotations.addons_repo_basepath}}charts/kagent-setup'
+  path: 'gitops/addons/charts/kagent-setup'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '3'
   selector:
