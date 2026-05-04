@@ -1,0 +1,5 @@
+apiVersion: v2
+name: litellm
+description: LiteLLM gateway for LLM routing, rate limiting, caching, and fallbacks
+type: application
+version: 0.1.0

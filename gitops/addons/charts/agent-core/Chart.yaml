@@ -1,0 +1,5 @@
+apiVersion: v2
+name: agent-core
+description: Bedrock AgentCore infrastructure - Terraform CR, MCP server, and KAgent agent
+type: application
+version: 0.1.0

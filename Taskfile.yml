@@ -1,0 +1,73 @@
+version: '3'
+
+tasks:
+  build-helm-dependencies:
+    desc: Build Helm chart dependencies for addon charts that require them
+    cmds:
+      - echo "Adding required Helm repositories..."
+      - helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts || true
+      - helm repo update
+      - echo "Building dependencies for flux chart..."
+      - cd ./gitops/addons/charts/flux && helm dependency build
+      - echo "All Helm chart dependencies built successfully!"
+
+  test-applicationsets:
+    desc: Test ApplicationSet generation locally using helm template
+    cmds:
+      - |
+        cd ./gitops/addons/charts/application-sets && \
+        helm template test-appsets . \
+          -f ../../bootstrap/default/addons.yaml \
+          -f ../../environments/dev/addons.yaml \
+          --set repoURLGit="https://github.com/your-org/sample-agent-platform-on-eks" \
+          --set repoURLGitRevision="main" \
+          --set repoURLGitBasePath="gitops/addons/"
+
+  test-agent-core-chart:
+    desc: Test agent-core helm chart rendering
+    cmds:
+      - |
+        cd ./gitops/addons/charts/agent-core && \
+        helm template agent-core . \
+          -f values.yaml \
+          --set global.awsRegion=us-west-2 \
+          --set global.eksClusterName=dev \
+          --set global.projectName=test-agent \
+          --set global.terraformRepoUrl=https://github.com/test/repo \
+          --set mcpServer.image.repository=test-repo/mcp-server \
+          --dry-run
+
+  test-litellm-chart:
+    desc: Test LiteLLM helm chart rendering
+    cmds:
+      - |
+        cd ./gitops/addons/charts/litellm && \
+        helm template litellm . -f values.yaml --dry-run
+
+  test-langfuse-chart:
+    desc: Test Langfuse helm chart rendering
+    cmds:
+      - |
+        cd ./gitops/addons/charts/langfuse && \
+        helm template langfuse . -f values.yaml --dry-run
+
+  test-all:
+    desc: Run all chart tests
+    cmds:
+      - task: test-applicationsets
+      - task: test-agent-core-chart
+      - task: test-litellm-chart
+      - task: test-langfuse-chart
+
+  clean-helm-dependencies:
+    desc: Clean all generated Helm dependency files
+    cmds:
+      - echo "Cleaning Chart.lock files and charts/ directories..."
+      - find ./gitops/addons/charts -name "Chart.lock" -delete
+      - find ./gitops/addons/charts -name "charts" -type d -exec rm -rf {} + 2>/dev/null || true
+      - echo "Cleaned all Helm dependency files"
+
+  bootstrap:
+    desc: Bootstrap the agent platform on the current cluster
+    cmds:
+      - ./scripts/bootstrap.sh

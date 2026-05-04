@@ -1,0 +1,35 @@
+apiVersion: infra.contrib.fluxcd.io/v1alpha2
+kind: Terraform
+metadata:
+  name: agent-core-components-{{ include "agent-core.name" . }}
+  namespace: {{ include "agent-core.namespace" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    {{- include "agent-core.labels" . | nindent 4 }}
+spec:
+  interval: 1m
+  path: ./terraform/agent-core-components
+  serviceAccountName: tf-runner
+  sourceRef:
+    kind: GitRepository
+    name: agent-core-terraform-{{ include "agent-core.name" . }}
+  vars:
+    - name: aws_region
+      value: {{ .Values.global.awsRegion }}
+    - name: project_name
+      value: {{ .Values.global.projectName }}
+    - name: eks_cluster_name
+      value: {{ .Values.global.eksClusterName }}
+    - name: network_mode
+      value: {{ .Values.global.networkMode }}
+    - name: enable_memory
+      value: {{ .Values.capabilities.memory | quote }}
+    - name: enable_browser
+      value: {{ .Values.capabilities.browser | quote }}
+    - name: enable_code_interpreter
+      value: {{ .Values.capabilities.codeInterpreter | quote }}
+  writeOutputsToSecret:
+    name: agent-core-outputs-{{ include "agent-core.name" . }}
+  destroyResourcesOnDeletion: true
+  approvePlan: auto

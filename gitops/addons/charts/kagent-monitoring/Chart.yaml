@@ -1,0 +1,5 @@
+apiVersion: v2
+name: kagent-monitoring
+description: ServiceMonitor and metrics service for KAgent controller (requires prometheus-operator-crds)
+type: application
+version: 0.2.0

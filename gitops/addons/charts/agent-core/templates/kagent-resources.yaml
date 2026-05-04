@@ -1,0 +1,62 @@
+{{- if .Values.kagent.enabled }}
+{{- if .Values.mcpServer.image.repository }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "agent-core.name" . }}-agent-sa
+  namespace: {{ include "agent-core.namespace" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  labels:
+    {{- include "agent-core.labels" . | nindent 4 }}
+---
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: agent-core-tools-{{ include "agent-core.name" . }}
+  namespace: {{ include "agent-core.namespace" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  labels:
+    {{- include "agent-core.labels" . | nindent 4 }}
+spec:
+  url: http://agent-core-mcp-{{ include "agent-core.name" . }}.{{ include "agent-core.namespace" . }}.svc.cluster.local:8080/mcp
+  description: "Agent Core capabilities: Memory, Browser, Code Interpreter"
+---
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: weather-agent-{{ include "agent-core.name" . }}
+  namespace: {{ include "agent-core.namespace" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  labels:
+    {{- include "agent-core.labels" . | nindent 4 }}
+spec:
+  type: Declarative
+  description: "Weather-Based Activity Planning Assistant with memory"
+  declarative:
+    modelConfig: {{ .Values.kagent.modelConfig }}
+    systemMessage: |
+      You are a Weather-Based Activity Planning Assistant with memory.
+
+      When a user asks about activities for a location:
+      1. Extract city from query
+      2. Call get_activity_preferences() to check if user has stored preferences
+      3. If user mentions preferences in their query, call store_user_preferences() to save them
+      4. Call get_weather_data(city) to get weather forecast
+      5. Call generate_analysis_code(weather_data) to create classification code
+      6. Call execute_code(python_code) to classify weather days
+      7. Generate personalized activity recommendations based on weather and preferences
+      8. Call store_activity_plan(city, plan) to save the plan in memory for future reference
+
+      Memory stores user preferences across sessions. Always check memory first and save new preferences/plans.
+    tools:
+      - type: McpServer
+        mcpServer:
+          apiGroup: kagent.dev
+          kind: RemoteMCPServer
+          name: agent-core-tools-{{ include "agent-core.name" . }}
+          toolNames: []
+{{- end }}
+{{- end }}

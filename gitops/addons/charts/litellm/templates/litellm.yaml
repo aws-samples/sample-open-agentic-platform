@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |-
+    model_list:
+      - model_name: bedrock-claude-3-5-sonnet
+        litellm_params:
+          model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+          aws_region_name: os.environ/AWS_REGION_NAME
+      - model_name: bedrock-claude-3-haiku
+        litellm_params:
+          model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+          aws_region_name: os.environ/AWS_REGION_NAME
+    router_settings:
+      fallbacks:
+        - bedrock-claude-3-5-sonnet:
+            - bedrock-claude-3-haiku
+      num_retries: 2
+      retry_after: 5
+      timeout: {{ .Values.settings.requestTimeout }}
+      allowed_fails: 3
+    litellm_settings:
+      request_timeout: {{ .Values.settings.requestTimeout }}
+      rpm_limit: {{ .Values.settings.rpmLimit }}
+      tpm_limit: {{ .Values.settings.tpmLimit }}
+      cache: {{ .Values.settings.cache }}
+      drop_params: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: litellm
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      serviceAccountName: litellm
+      volumes:
+        - name: config-volume
+          configMap:
+            name: litellm-config
+      containers:
+        - name: litellm
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - '--port'
+            - '4000'
+            - '--config'
+            - /app/config/config.yaml
+          ports:
+            - containerPort: 4000
+              protocol: TCP
+          env:
+            - name: AWS_REGION_NAME
+              value: {{ .Values.global.awsRegion }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: litellm
+  ports:
+    - protocol: TCP
+      port: 4000
+      targetPort: 4000
+  type: ClusterIP

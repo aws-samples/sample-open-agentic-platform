@@ -1,0 +1,5 @@
+apiVersion: v2
+name: application-sets
+description: Generates ArgoCD ApplicationSets for agent platform addons
+type: application
+version: 0.1.0
