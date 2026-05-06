@@ -5,7 +5,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 type: Opaque
 stringData:
-  OPENAI_API_KEY: ""
+  # LiteLLM uses Pod Identity for Bedrock auth, not API keys.
+  # This dummy value satisfies the kagent agent framework which requires
+  # a non-empty Authorization header for OpenAI-compatible endpoints.
+  OPENAI_API_KEY: "sk-bedrock-pod-identity"
 ---
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
