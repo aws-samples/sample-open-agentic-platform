@@ -1,0 +1,15 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: mcp-servers-backend
+  namespace: {{ .Values.mcpBackend.namespace }}
+spec:
+  mcp:
+    targets:
+    {{- range .Values.mcpBackend.targets }}
+    - name: {{ .name }}
+      static:
+        host: {{ .host }}
+        port: {{ .port }}
+        protocol: {{ .protocol }}
+    {{- end }}

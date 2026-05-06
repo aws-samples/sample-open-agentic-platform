@@ -17,6 +17,10 @@ Deploy the AI agent platform on an EKS cluster using the ArgoCD EKS Capability.
 | 5 | jaeger (distributed tracing) | Helm: `jaegertracing/jaeger:3.4.1` | jaeger |
 | 5 | prometheus-operator-crds | Helm: `prometheus-community/prometheus-operator-crds:28.0.1` | kagent |
 | 6 | kagent-monitoring (ServiceMonitor) | Local chart | kagent |
+| 7 | gateway-api-crds | Local chart (Job) | agentgateway-system |
+| 7 | agentgateway-crds | OCI: `cr.agentgateway.dev/charts/agentgateway-crds:v1.1.0` | agentgateway-system |
+| 8 | agentgateway (control plane) | OCI: `cr.agentgateway.dev/charts/agentgateway:v1.1.0` | agentgateway-system |
+| 9 | agent-gateway (Gateway + Policies) | Local chart | agent-core-infra |
 
 ## Deployment via appmod-blueprints
 
@@ -184,6 +188,47 @@ The hub cluster secret must have `enable_agent_platform: "true"` label for the g
 - Pod Identity (not IRSA) for AWS credentials on EKS Auto Mode
 - Duplicate cluster secrets with the same ARN are rejected
 
+## AgentGateway Configuration
+
+AgentGateway provides MCP authentication via KeyCloak JWT validation. It deploys:
+
+1. **Gateway API CRDs** — Standard Kubernetes Gateway API resources (via Job)
+2. **AgentGateway CRDs** — Custom resources for AgentgatewayBackend and AgentgatewayPolicy
+3. **AgentGateway control plane** — Watches Gateway API resources and provisions proxy instances
+4. **Platform resources** — Gateway, Backend, HTTPRoute, and JWT/MCP authentication policies
+
+### KeyCloak Integration
+
+The agent-gateway chart requires KeyCloak configuration via cluster secret annotations:
+
+| Annotation | Default | Purpose |
+|---|---|---|
+| `keycloak_issuer_url` | (required) | External KeyCloak issuer URL (must match JWT `iss` claim) |
+| `keycloak_service_name` | `keycloak-service` | Kubernetes Service name for JWKS fetching |
+| `keycloak_namespace` | `keycloak` | Namespace where KeyCloak is deployed |
+| `agent_gateway_resource_url` | (optional) | MCP resource identifier for OAuth discovery |
+
+When deployed via appmod-blueprints, the KeyCloak issuer URL is derived from the `ingress_domain_name` annotation.
+
+### Architecture
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐
+│  MCP Client │────▶│  AgentGateway    │────▶│  MCP Servers        │
+│  (Agent)    │     │  Proxy           │     │  (code/browser/mem) │
+│             │     │  - JWT validation│     │                     │
+│             │     │  - MCP auth      │     │                     │
+└─────────────┘     └──────────────────┘     └─────────────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │  KeyCloak    │
+                    │  (JWKS)      │
+                    └──────────────┘
+```
+
+Agents connect to the AgentGateway proxy (port 8080) which validates JWT tokens against KeyCloak before forwarding requests to the MCP backend servers.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -196,3 +241,7 @@ The hub cluster secret must have `enable_agent_platform: "true"` label for the g
 | Jaeger OOMKilled | No resource limits | Jaeger chart includes 256Mi/512Mi limits |
 | kagent-controller CrashLoop | Startup probe timeout | Upstream kagent chart issue — may need resource tuning |
 | ApplicationSet "map has no entry" | Cluster secret missing annotations | Use `useSelectors: false` with `globalSelectors` |
+| Gateway API CRDs Job fails | No outbound internet | Ensure NAT gateway is configured for EKS nodes |
+| AgentGateway proxy not starting | Missing Gateway API CRDs | Verify gateway-api-crds Job completed successfully |
+| JWT validation fails | Wrong issuer URL | Ensure `keycloak_issuer_url` matches the `iss` claim in tokens |
+| AgentGateway "no backends" | MCP servers not running | Verify agent-core MCP pods are healthy in agent-core-infra namespace |

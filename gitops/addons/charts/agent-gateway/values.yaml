@@ -1,0 +1,66 @@
+global:
+  # KeyCloak configuration
+  keycloak:
+    # Kubernetes service name for JWKS fetching (cluster-internal)
+    serviceName: keycloak-service
+    # Namespace where KeyCloak is deployed
+    namespace: keycloak
+    # Service port
+    servicePort: 8080
+    # External issuer URL (must match 'iss' claim in JWT tokens)
+    # This is the externally-reachable KeyCloak URL
+    issuerUrl: ""
+    # Realm to use
+    realm: master
+  # Gateway listener port
+  gatewayPort: 8080
+
+# MCP backend targets - the agent-core MCP servers
+mcpBackend:
+  namespace: agent-core-infra
+  targets:
+    - name: code
+      host: execute-code-mcp-v1.agent-core-infra.svc.cluster.local
+      port: 8080
+      protocol: SSE
+    - name: browser
+      host: browser-mcp-v1.agent-core-infra.svc.cluster.local
+      port: 8080
+      protocol: SSE
+    - name: memory
+      host: memory-mcp-v1.agent-core-infra.svc.cluster.local
+      port: 8080
+      protocol: SSE
+
+# JWT authentication configuration
+jwtAuth:
+  # Validation mode: Strict requires all claims to be valid
+  mode: Strict
+  # Cache duration for JWKS keys
+  cacheDuration: "5m"
+  # Authorization - CEL expression for allowed groups
+  allowExpression: 'jwt.groups.exists(g, g == "admin-group")'
+
+# MCP authentication configuration
+mcpAuth:
+  # Validation mode
+  mode: Strict
+  # Identity provider type
+  provider: Keycloak
+  # Expected audiences in JWT tokens
+  audiences:
+    - mcp-client
+  # Resource metadata for OAuth discovery
+  resourceMetadata:
+    # Resource identifier for this MCP server (external URL)
+    resource: ""
+    # Scopes supported by this MCP server
+    scopesSupported:
+      - email
+      - openid
+      - profile
+    # Methods for providing bearer tokens
+    bearerMethodsSupported:
+      - header
+      - body
+      - query

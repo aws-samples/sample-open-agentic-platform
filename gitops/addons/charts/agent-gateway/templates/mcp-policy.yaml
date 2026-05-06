@@ -1,0 +1,42 @@
+{{- $issuerUrl := .Values.global.keycloak.issuerUrl -}}
+{{- $realm := .Values.global.keycloak.realm -}}
+{{- $jwksPath := printf "/realms/%s/protocol/openid-connect/certs" $realm -}}
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: mcp-server-authn
+  namespace: {{ .Values.mcpBackend.namespace }}
+spec:
+  targetRefs:
+  - group: agentgateway.dev
+    kind: AgentgatewayBackend
+    name: mcp-servers-backend
+  backend:
+    mcp:
+      authentication:
+        issuer: {{ $issuerUrl | quote }}
+        jwks:
+          backendRef:
+            name: {{ .Values.global.keycloak.serviceName }}
+            kind: Service
+            namespace: {{ .Values.global.keycloak.namespace }}
+            port: {{ .Values.global.keycloak.servicePort }}
+          jwksPath: {{ $jwksPath | quote }}
+        audiences:
+        {{- range .Values.mcpAuth.audiences }}
+        - {{ . | quote }}
+        {{- end }}
+        mode: {{ .Values.mcpAuth.mode }}
+        provider: {{ .Values.mcpAuth.provider }}
+        resourceMetadata:
+          resource: {{ .Values.mcpAuth.resourceMetadata.resource | quote }}
+          authorizationServers:
+          - {{ $issuerUrl | quote }}
+          scopesSupported:
+          {{- range .Values.mcpAuth.resourceMetadata.scopesSupported }}
+          - {{ . }}
+          {{- end }}
+          bearerMethodsSupported:
+          {{- range .Values.mcpAuth.resourceMetadata.bearerMethodsSupported }}
+          - {{ . }}
+          {{- end }}

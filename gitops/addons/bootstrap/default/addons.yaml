@@ -265,3 +265,83 @@ kagent-setup:
       - key: enable_kagent
         operator: In
         values: ['true']
+
+########################################
+# AgentGateway — MCP Auth Gateway
+########################################
+
+gateway-api-crds:
+  enabled: false
+  namespace: agentgateway-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/gateway-api-crds'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '7'
+  selector:
+    matchExpressions:
+      - key: enable_agent_gateway
+        operator: In
+        values: ['true']
+  valuesObject:
+    gatewayApiVersion: "1.5.0"
+
+agentgateway-crds:
+  enabled: false
+  namespace: agentgateway-system
+  chartName: agentgateway-crds
+  defaultVersion: 'v1.1.0'
+  chartRepository: 'cr.agentgateway.dev'
+  chartNamespace: charts
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '7'
+  selector:
+    matchExpressions:
+      - key: enable_agent_gateway
+        operator: In
+        values: ['true']
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jsonPointers:
+        - /metadata/annotations
+
+agentgateway:
+  enabled: false
+  namespace: agentgateway-system
+  chartName: agentgateway
+  defaultVersion: 'v1.1.0'
+  chartRepository: 'cr.agentgateway.dev'
+  chartNamespace: charts
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '8'
+  selector:
+    matchExpressions:
+      - key: enable_agent_gateway
+        operator: In
+        values: ['true']
+  valuesObject:
+    controller:
+      extraEnv:
+        KGW_ENABLE_GATEWAY_API_EXPERIMENTAL_FEATURES: "true"
+
+agent-gateway:
+  enabled: false
+  namespace: agent-core-infra
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-gateway'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '9'
+  selector:
+    matchExpressions:
+      - key: enable_agent_gateway
+        operator: In
+        values: ['true']
+  valuesObject:
+    global:
+      keycloak:
+        issuerUrl: '{{default "" (index .metadata.annotations "keycloak_issuer_url")}}'
+        serviceName: '{{default "keycloak-service" (index .metadata.annotations "keycloak_service_name")}}'
+        namespace: '{{default "keycloak" (index .metadata.annotations "keycloak_namespace")}}'
+    mcpAuth:
+      resourceMetadata:
+        resource: '{{default "" (index .metadata.annotations "agent_gateway_resource_url")}}'

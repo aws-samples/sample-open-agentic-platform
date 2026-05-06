@@ -32,3 +32,13 @@ kagent-monitoring:
 prometheus-operator-crds:
   enabled: true
 
+# AgentGateway (MCP Auth via KeyCloak)
+gateway-api-crds:
+  enabled: true
+agentgateway-crds:
+  enabled: true
+agentgateway:
+  enabled: true
+agent-gateway:
+  enabled: true
+
