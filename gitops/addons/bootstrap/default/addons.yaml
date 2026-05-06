@@ -339,9 +339,9 @@ agent-gateway:
   valuesObject:
     global:
       keycloak:
-        issuerUrl: '{{default "" (index .metadata.annotations "keycloak_issuer_url")}}'
+        issuerUrl: '{{default "http://keycloak.keycloak.svc.cluster.local:8080/realms/master" (index .metadata.annotations "keycloak_issuer_url")}}'
         serviceName: '{{default "keycloak" (index .metadata.annotations "keycloak_service_name")}}'
         namespace: '{{default "keycloak" (index .metadata.annotations "keycloak_namespace")}}'
     mcpAuth:
       resourceMetadata:
-        resource: '{{default "" (index .metadata.annotations "agent_gateway_resource_url")}}'
+        resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
