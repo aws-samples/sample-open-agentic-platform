@@ -10,9 +10,9 @@ global:
     # External issuer URL (must match 'iss' claim in JWT tokens)
     # This is the externally-reachable KeyCloak URL
     # For internal-only use: http://keycloak.keycloak.svc.cluster.local:8080/realms/master
-    issuerUrl: "https://idp.hmmuthus.people.aws.dev/keycloak/realms/master"
+    issuerUrl: "https://idp.hmmuthus.people.aws.dev/keycloak/realms/platform"
     # Realm to use
-    realm: master
+    realm: platform
     # HTTP relative path prefix (matches KeyCloak's http-relative-path setting)
     pathPrefix: "/keycloak"
   # Gateway listener port
@@ -42,7 +42,7 @@ jwtAuth:
   # Cache duration for JWKS keys
   cacheDuration: "5m"
   # Authorization - CEL expression for allowed groups
-  allowExpression: 'jwt.groups.exists(g, g == "admin-group")'
+  allowExpression: 'jwt.groups.exists(g, g == "admin")'
 
 # MCP authentication configuration
 mcpAuth:
