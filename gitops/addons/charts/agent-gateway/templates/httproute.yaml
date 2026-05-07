@@ -24,4 +24,4 @@ spec:
         value: /.well-known/oauth-authorization-server/mcp
     - path:
         type: PathPrefix
-        value: /realms/{{ .Values.global.keycloak.realm }}/protocol/openid-connect/certs
+        value: /{{ trimPrefix "/" .Values.global.keycloak.pathPrefix }}/realms/{{ .Values.global.keycloak.realm }}/protocol/openid-connect/certs

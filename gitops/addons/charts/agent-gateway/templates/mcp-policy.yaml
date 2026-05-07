@@ -1,6 +1,7 @@
 {{- $issuerUrl := .Values.global.keycloak.issuerUrl -}}
 {{- $realm := .Values.global.keycloak.realm -}}
-{{- $jwksPath := printf "/realms/%s/protocol/openid-connect/certs" $realm -}}
+{{- $pathPrefix := .Values.global.keycloak.pathPrefix | default "" -}}
+{{- $jwksPath := printf "%s/realms/%s/protocol/openid-connect/certs" $pathPrefix $realm -}}
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:

@@ -10,9 +10,11 @@ global:
     # External issuer URL (must match 'iss' claim in JWT tokens)
     # This is the externally-reachable KeyCloak URL
     # For internal-only use: http://keycloak.keycloak.svc.cluster.local:8080/realms/master
-    issuerUrl: "http://keycloak.keycloak.svc.cluster.local:8080/realms/master"
+    issuerUrl: "http://keycloak.keycloak.svc.cluster.local:8080/keycloak/realms/master"
     # Realm to use
     realm: master
+    # HTTP relative path prefix (matches KeyCloak's http-relative-path setting)
+    pathPrefix: "/keycloak"
   # Gateway listener port
   gatewayPort: 8080
 
