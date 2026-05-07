@@ -16,13 +16,14 @@ module "memory" {
   count  = var.enable_memory ? 1 : 0
   source = "../modules/memory"
 
-  name                  = var.project_name
-  description           = "Memory for ${var.project_name} agent"
+  name                  = "${var.eks_cluster_name}_${var.project_name}"
+  description           = "Memory for ${var.project_name} agent on ${var.eks_cluster_name}"
   event_expiry_duration = 30
 
   tags = {
-    Name    = "${var.project_name}-memory"
+    Name    = "${var.eks_cluster_name}-${var.project_name}-memory"
     Project = var.project_name
+    Cluster = var.eks_cluster_name
   }
 }
 
@@ -34,13 +35,14 @@ module "browser" {
   count  = var.enable_browser ? 1 : 0
   source = "../modules/browser"
 
-  name         = var.project_name
-  description  = "Browser for ${var.project_name} agent"
+  name         = "${var.eks_cluster_name}_${var.project_name}"
+  description  = "Browser for ${var.project_name} agent on ${var.eks_cluster_name}"
   network_mode = var.network_mode
 
   tags = {
-    Name    = "${var.project_name}-browser"
+    Name    = "${var.eks_cluster_name}-${var.project_name}-browser"
     Project = var.project_name
+    Cluster = var.eks_cluster_name
   }
 }
 
@@ -52,13 +54,14 @@ module "code_interpreter" {
   count  = var.enable_code_interpreter ? 1 : 0
   source = "../modules/code-interpreter"
 
-  name         = var.project_name
-  description  = "Code Interpreter for ${var.project_name} agent"
+  name         = "${var.eks_cluster_name}_${var.project_name}"
+  description  = "Code Interpreter for ${var.project_name} agent on ${var.eks_cluster_name}"
   network_mode = var.network_mode
 
   tags = {
-    Name    = "${var.project_name}-code-interpreter"
+    Name    = "${var.eks_cluster_name}-${var.project_name}-code-interpreter"
     Project = var.project_name
+    Cluster = var.eks_cluster_name
   }
 }
 
@@ -67,7 +70,7 @@ module "code_interpreter" {
 # ============================================================================
 
 resource "aws_iam_role" "strands_agent_role" {
-  name = "${var.project_name}-strands-agent-role"
+  name = "${var.eks_cluster_name}-${var.project_name}-strands-agent-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -89,11 +92,12 @@ resource "aws_iam_role" "strands_agent_role" {
 # ============================================================================
 
 resource "aws_s3_bucket" "results" {
-  bucket = "${var.project_name}-weather-results"
+  bucket = "${var.eks_cluster_name}-${var.project_name}-results"
 
   tags = {
-    Name    = "${var.project_name}-weather-results"
+    Name    = "${var.eks_cluster_name}-${var.project_name}-results"
     Project = var.project_name
+    Cluster = var.eks_cluster_name
   }
 }
 
