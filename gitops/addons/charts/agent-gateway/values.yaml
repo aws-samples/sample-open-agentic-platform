@@ -45,7 +45,11 @@ jwtAuth:
   allowExpression: 'jwt.groups.exists(g, g == "admin")'
 
 # MCP authentication configuration
+# Disabled by default — Gateway-level JWT auth (jwt-policy.yaml) handles
+# authentication. Enable only if you need MCP-specific OAuth discovery
+# without Gateway-level auth.
 mcpAuth:
+  enabled: false
   # Validation mode
   mode: Strict
   # Identity provider type

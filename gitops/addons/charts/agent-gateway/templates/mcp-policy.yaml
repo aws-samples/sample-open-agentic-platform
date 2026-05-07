@@ -1,3 +1,4 @@
+{{- if .Values.mcpAuth.enabled }}
 {{- $issuerUrl := .Values.global.keycloak.issuerUrl -}}
 {{- $realm := .Values.global.keycloak.realm -}}
 {{- $pathPrefix := .Values.global.keycloak.pathPrefix | default "" -}}
@@ -41,3 +42,4 @@ spec:
           {{- range .Values.mcpAuth.resourceMetadata.bearerMethodsSupported }}
           - {{ . }}
           {{- end }}
+{{- end }}
