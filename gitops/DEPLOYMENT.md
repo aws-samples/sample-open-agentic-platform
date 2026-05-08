@@ -195,39 +195,109 @@ AgentGateway provides MCP authentication via KeyCloak JWT validation. It deploys
 1. **Gateway API CRDs** — Standard Kubernetes Gateway API resources (via Job)
 2. **AgentGateway CRDs** — Custom resources for AgentgatewayBackend and AgentgatewayPolicy
 3. **AgentGateway control plane** — Watches Gateway API resources and provisions proxy instances
-4. **Platform resources** — Gateway, Backend, HTTPRoute, and JWT/MCP authentication policies
+4. **Platform resources** — Gateway, Backend, HTTPRoute, and JWT authentication policy
+
+### How the Agent Platform Works
+
+There are two communication paths in the platform:
+
+#### Path 1: Agent A2A (Agent-to-Agent Protocol)
+
+Direct chat with agents — no gateway or KeyCloak involved:
+
+```
+┌──────────┐     ┌───────────────────┐     ┌──────────────────┐     ┌─────────────┐     ┌─────────┐
+│  Client  │────▶│  Agent Pod        │────▶│ kagent-controller│     │   LiteLLM   │────▶│ Bedrock │
+│  (curl/  │ A2A │  (bedrock-asst    │     │  (session mgmt)  │     │  (proxy)    │     │  (LLM)  │
+│   UI)    │     │   or k8s-ops)     │     │                  │     │             │     │         │
+└──────────┘     └───────┬───────────┘     └──────────────────┘     └─────────────┘     └─────────┘
+                         │  OpenAI-compatible API                           ▲
+                         └─────────────────────────────────────────────────┘
+```
+
+1. Client sends JSON-RPC `message/send` to the agent's Service (port 8080)
+2. Agent framework calls kagent-controller to create/manage sessions
+3. Agent calls LiteLLM (OpenAI-compatible) which routes to Bedrock via Pod Identity
+4. For tool-using agents (k8s-ops), the agent also calls `kagent-tool-server` via MCP
+
+#### Path 2: Authenticated MCP via AgentGateway + KeyCloak
+
+External/authenticated access to MCP tool servers:
+
+```
+┌──────────┐  1.Get Token  ┌──────────────┐
+│  Client  │──────────────▶│  KeyCloak    │
+│          │◀──────────────│  (platform   │
+│          │   JWT Token   │   realm)     │
+└────┬─────┘               └──────────────┘
+     │
+     │ 2. MCP request + JWT
+     ▼
+┌──────────────────┐  3. Validate JWT   ┌──────────────┐
+│  AgentGateway    │───────────────────▶│  KeyCloak    │
+│  Proxy (:8080)   │   (JWKS fetch)     │  (JWKS)      │
+│  - JWT validation│◀───────────────────│              │
+│  - Group authz   │                    └──────────────┘
+└────────┬─────────┘
+         │ 4. Forward (if authorized)
+         ▼
+┌─────────────────────┐
+│  MCP Servers        │
+│  - code-interpreter │
+│  - browser          │
+│  - memory           │
+└─────────────────────┘
+```
+
+1. Client obtains JWT from KeyCloak (`platform` realm, `mcp-client` client)
+2. Client sends MCP request to AgentGateway proxy with `Authorization: Bearer <token>`
+3. Gateway validates JWT signature via KeyCloak JWKS, checks `admin` group membership
+4. If authorized, request is forwarded to the MCP backend servers
+
+#### KeyCloak Setup
+
+KeyCloak is configured with:
+- **Realm**: `platform` (users, groups, and clients live here)
+- **Client**: `mcp-client` (public, with `groups` scope for JWT group claims)
+- **Groups**: `admin`, `editor`, `viewer`, `base-user`
+- **Authorization**: Only users in the `admin` group can access MCP tools via the gateway
+- **JWKS**: Gateway controller fetches keys from `http://keycloak.keycloak.svc.cluster.local:8080/keycloak/realms/platform/protocol/openid-connect/certs`
+
+#### Testing the Flow
+
+```bash
+# 1. Get a JWT token from KeyCloak
+TOKEN=$(curl -s -X POST "https://<DOMAIN>/keycloak/realms/platform/protocol/openid-connect/token" \
+  -d "grant_type=password&client_id=mcp-client&username=user1&password=<PASSWORD>" \
+  | jq -r .access_token)
+
+# 2. Verify token has groups claim
+echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq '{sub:.preferred_username, groups:.groups}'
+
+# 3. Test gateway without token (should get 401)
+curl -s -w "%{http_code}" -X POST http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse
+
+# 4. Test gateway with token (should get 200 + SSE stream)
+curl -s -N http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse \
+  -H "Authorization: Bearer $TOKEN"
+
+# 5. Test A2A agent directly (no auth needed for internal access)
+curl -s -X POST http://bedrock-assistant.kagent.svc.cluster.local:8080/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","messageId":"test","parts":[{"type":"text","text":"Hello"}]}}}'
+```
 
 ### KeyCloak Integration
 
-The agent-gateway chart requires KeyCloak configuration via cluster secret annotations:
+When deployed via appmod-blueprints, the KeyCloak issuer URL is auto-derived from the `ingress_domain_name` annotation (`https://{domain}/keycloak/realms/platform`). No manual annotation needed.
+
+For standalone deployments, set the `keycloak_issuer_url` annotation on the cluster secret:
 
 | Annotation | Default | Purpose |
 |---|---|---|
-| `keycloak_issuer_url` | (required) | External KeyCloak issuer URL (must match JWT `iss` claim) |
-| `keycloak_service_name` | `keycloak-service` | Kubernetes Service name for JWKS fetching |
+| `keycloak_issuer_url` | auto-derived from `ingress_domain_name` | External KeyCloak issuer URL (must match JWT `iss` claim) |
+| `keycloak_service_name` | `keycloak` | Kubernetes Service name for JWKS fetching |
 | `keycloak_namespace` | `keycloak` | Namespace where KeyCloak is deployed |
-| `agent_gateway_resource_url` | (optional) | MCP resource identifier for OAuth discovery |
-
-When deployed via appmod-blueprints, the KeyCloak issuer URL is derived from the `ingress_domain_name` annotation.
-
-### Architecture
-
-```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│  MCP Client │────▶│  AgentGateway    │────▶│  MCP Servers        │
-│  (Agent)    │     │  Proxy           │     │  (code/browser/mem) │
-│             │     │  - JWT validation│     │                     │
-│             │     │  - MCP auth      │     │                     │
-└─────────────┘     └──────────────────┘     └─────────────────────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │  KeyCloak    │
-                    │  (JWKS)      │
-                    └──────────────┘
-```
-
-Agents connect to the AgentGateway proxy (port 8080) which validates JWT tokens against KeyCloak before forwarding requests to the MCP backend servers.
 
 ## Troubleshooting
 
