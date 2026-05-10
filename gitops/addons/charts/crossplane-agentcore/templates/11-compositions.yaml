@@ -2,7 +2,7 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: default-memory.agentplatform.aws.example.com
+  name: agentcore-memory.agentplatform.aws.example.com
   labels:
     provider: aws
   annotations:
@@ -63,7 +63,7 @@ spec:
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: default-browser.agentplatform.aws.example.com
+  name: agentcore-browser.agentplatform.aws.example.com
   labels:
     provider: aws
   annotations:
@@ -125,7 +125,7 @@ spec:
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: default-code-interpreter.agentplatform.aws.example.com
+  name: agentcore-code-interpreter.agentplatform.aws.example.com
   labels:
     provider: aws
   annotations:
