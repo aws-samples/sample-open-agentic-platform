@@ -6,6 +6,9 @@ apiVersion: iam.aws.upbound.io/v1beta1
 kind: Role
 metadata:
   name: {{ .Values.global.eksClusterName }}-agentcore-provider-role
+  labels:
+    platform.gitops.io/role: agentcore-provider
+    platform.gitops.io/cluster: {{ .Values.global.eksClusterName }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 spec:
