@@ -6,6 +6,8 @@ metadata:
   name: {{ .Values.global.projectName }}-memory
   namespace: {{ .Release.Namespace }}
   annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   parameters:
@@ -27,6 +29,8 @@ metadata:
   name: {{ .Values.global.projectName }}-browser
   namespace: {{ .Release.Namespace }}
   annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   parameters:
@@ -48,6 +52,8 @@ metadata:
   name: {{ .Values.global.projectName }}-code-interpreter
   namespace: {{ .Release.Namespace }}
   annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   parameters:

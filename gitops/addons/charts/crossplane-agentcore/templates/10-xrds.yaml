@@ -4,6 +4,7 @@ kind: CompositeResourceDefinition
 metadata:
   name: xagentcorememories.agentplatform.aws.example.com
   annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   group: agentplatform.aws.example.com
   names:
@@ -60,6 +61,7 @@ kind: CompositeResourceDefinition
 metadata:
   name: xagentcorebrowsers.agentplatform.aws.example.com
   annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   group: agentplatform.aws.example.com
   names:
@@ -117,6 +119,7 @@ kind: CompositeResourceDefinition
 metadata:
   name: xagentcorecodeinterpreters.agentplatform.aws.example.com
   annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   group: agentplatform.aws.example.com
   names:

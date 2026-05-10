@@ -10,6 +10,7 @@ metadata:
     platform.gitops.io/role: agentcore-provider
     platform.gitops.io/cluster: {{ .Values.global.eksClusterName }}
   annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   forProvider:
     assumeRolePolicy: |
@@ -46,6 +47,7 @@ kind: PodIdentityAssociation
 metadata:
   name: {{ .Values.global.eksClusterName }}-agentcore-provider
   annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   forProvider:
     clusterName: {{ .Values.global.eksClusterName }}

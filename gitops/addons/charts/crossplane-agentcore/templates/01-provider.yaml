@@ -29,6 +29,7 @@ kind: Provider
 metadata:
   name: provider-aws-bedrockagentcore
   annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   package: xpkg.upbound.io/upbound/provider-aws-bedrockagentcore:{{ .Values.provider.version }}
   packagePullPolicy: IfNotPresent

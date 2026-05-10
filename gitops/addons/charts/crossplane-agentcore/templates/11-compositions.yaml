@@ -6,6 +6,7 @@ metadata:
   labels:
     provider: aws
   annotations:
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   compositeTypeRef:
     apiVersion: agentplatform.aws.example.com/v1alpha1
@@ -67,6 +68,7 @@ metadata:
   labels:
     provider: aws
   annotations:
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   compositeTypeRef:
     apiVersion: agentplatform.aws.example.com/v1alpha1
@@ -129,6 +131,7 @@ metadata:
   labels:
     provider: aws
   annotations:
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   compositeTypeRef:
     apiVersion: agentplatform.aws.example.com/v1alpha1
