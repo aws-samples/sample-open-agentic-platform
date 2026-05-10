@@ -1,3 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.podIdentity.serviceAccountName }}
+  namespace: {{ .Values.podIdentity.namespace }}
+---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: DeploymentRuntimeConfig
 metadata:
