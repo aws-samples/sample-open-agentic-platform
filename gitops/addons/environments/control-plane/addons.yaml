@@ -1,11 +1,5 @@
 useSelectors: true
 
-# Platform Prerequisites
-flux:
-  enabled: true
-tofu-controller:
-  enabled: true
-
 # KAgent Operator
 kagent-crds:
   enabled: true
@@ -14,10 +8,6 @@ kagent:
 
 # KAgent Setup (ModelConfig, Bedrock secret)
 kagent-setup:
-  enabled: true
-
-# Agent Core Infrastructure
-agent-core:
   enabled: true
 
 # Observability
@@ -41,4 +31,3 @@ agentgateway:
   enabled: true
 agent-gateway:
   enabled: true
-

@@ -27,55 +27,6 @@ useValuesFilePrefix: true
 valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
 
 ########################################
-# Platform Prerequisites
-########################################
-
-flux:
-  enabled: false
-  namespace: flux-system
-  chartName: flux2
-  defaultVersion: '2.12.4'
-  chartRepository: 'https://fluxcd-community.github.io/helm-charts'
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '0'
-  selector:
-    matchExpressions:
-      - key: enable_flux
-        operator: In
-        values: ['true']
-  valuesObject:
-    helmController:
-      create: false
-    imageAutomationController:
-      create: false
-    imageReflectionController:
-      create: false
-    kustomizeController:
-      create: false
-    notificationController:
-      create: true
-
-tofu-controller:
-  enabled: false
-  namespace: flux-system
-  chartName: tf-controller
-  defaultVersion: '0.16.0-rc.4'
-  chartRepository: 'https://flux-iac.github.io/tofu-controller'
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '1'
-  selector:
-    matchExpressions:
-      - key: enable_tofu_controller
-        operator: In
-        values: ['true']
-  valuesObject:
-    allowCrossNamespaceRefs: true
-    watchAllNamespaces: true
-    awsPackage:
-      install: true
-      repository: ghcr.io/flux-iac/aws-primitive-modules
-
-########################################
 # KAgent Operator
 ########################################
 
@@ -113,39 +64,6 @@ kagent:
       - key: enable_kagent
         operator: In
         values: ['true']
-
-########################################
-# Agent Core Infrastructure
-########################################
-
-agent-core:
-  enabled: false
-  namespace: agent-core-infra
-  defaultVersion: '0.1.0'
-  path: 'gitops/addons/charts/agent-core'
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '4'
-  selector:
-    matchExpressions:
-      - key: enable_agent_core
-        operator: In
-        values: ['true']
-  valuesObject:
-    global:
-      awsRegion: '{{.metadata.annotations.aws_region}}'
-      eksClusterName: '{{.metadata.annotations.aws_cluster_name}}'
-      projectName: '{{default "agent-core" (index .metadata.annotations "agent_core_project_name")}}'
-      networkMode: '{{default "PUBLIC" (index .metadata.annotations "agent_core_network_mode")}}'
-      terraformRepoUrl: '{{default .metadata.annotations.addons_repo_url (index .metadata.annotations "agent_core_terraform_repo_url")}}'
-      terraformRepoRevision: '{{default .metadata.annotations.addons_repo_revision (index .metadata.annotations "agent_core_terraform_repo_revision")}}'
-    capabilities:
-      memory: true
-      browser: true
-      codeInterpreter: true
-    mcpServer:
-      image:
-        repository: '{{.metadata.annotations.agent_core_mcp_image}}'
-        tag: '{{default "latest" (index .metadata.annotations "agent_core_mcp_image_tag")}}'
 
 ########################################
 # Observability — LLM Gateway
