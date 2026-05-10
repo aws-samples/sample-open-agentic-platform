@@ -1,0 +1,25 @@
+global:
+  awsRegion: us-west-2
+  eksClusterName: ""
+  projectName: "agent-core"
+  networkMode: "PUBLIC"
+
+# Crossplane provider version
+provider:
+  version: "v2.5.3"
+
+# AgentCore capabilities to enable
+capabilities:
+  memory: true
+  browser: true
+  codeInterpreter: true
+
+# Memory configuration
+memory:
+  eventExpiryDuration: 30
+
+# Pod Identity for the Crossplane provider
+podIdentity:
+  # ServiceAccount name used by the bedrockagentcore provider
+  serviceAccountName: provider-aws-bedrockagentcore
+  namespace: crossplane-system

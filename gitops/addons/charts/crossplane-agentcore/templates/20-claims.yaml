@@ -1,0 +1,66 @@
+{{- $name := printf "%s_%s" .Values.global.eksClusterName .Values.global.projectName | replace "-" "_" }}
+{{- if .Values.capabilities.memory }}
+apiVersion: agentplatform.aws.example.com/v1alpha1
+kind: AgentCoreMemory
+metadata:
+  name: {{ .Values.global.projectName }}-memory
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  parameters:
+    region: {{ .Values.global.awsRegion }}
+    name: {{ $name }}_memory
+    description: "Memory for {{ .Values.global.projectName }} on {{ .Values.global.eksClusterName }}"
+    eventExpiryDuration: {{ .Values.memory.eventExpiryDuration }}
+    tags:
+      Project: {{ .Values.global.projectName }}
+      Cluster: {{ .Values.global.eksClusterName }}
+  writeConnectionSecretToRef:
+    name: {{ .Values.global.projectName }}-memory-conn
+---
+{{- end }}
+{{- if .Values.capabilities.browser }}
+apiVersion: agentplatform.aws.example.com/v1alpha1
+kind: AgentCoreBrowser
+metadata:
+  name: {{ .Values.global.projectName }}-browser
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  parameters:
+    region: {{ .Values.global.awsRegion }}
+    name: {{ $name }}_browser
+    description: "Browser for {{ .Values.global.projectName }} on {{ .Values.global.eksClusterName }}"
+    networkMode: {{ .Values.global.networkMode }}
+    tags:
+      Project: {{ .Values.global.projectName }}
+      Cluster: {{ .Values.global.eksClusterName }}
+  writeConnectionSecretToRef:
+    name: {{ .Values.global.projectName }}-browser-conn
+---
+{{- end }}
+{{- if .Values.capabilities.codeInterpreter }}
+apiVersion: agentplatform.aws.example.com/v1alpha1
+kind: AgentCoreCodeInterpreter
+metadata:
+  name: {{ .Values.global.projectName }}-code-interpreter
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  parameters:
+    region: {{ .Values.global.awsRegion }}
+    name: {{ $name }}_code_interpreter
+    description: "Code Interpreter for {{ .Values.global.projectName }} on {{ .Values.global.eksClusterName }}"
+    networkMode: {{ .Values.global.networkMode }}
+    tags:
+      Project: {{ .Values.global.projectName }}
+      Cluster: {{ .Values.global.eksClusterName }}
+  writeConnectionSecretToRef:
+    name: {{ .Values.global.projectName }}-code-interpreter-conn
+{{- end }}

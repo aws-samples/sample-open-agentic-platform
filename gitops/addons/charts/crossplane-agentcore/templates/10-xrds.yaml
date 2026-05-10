@@ -1,0 +1,172 @@
+{{- if .Values.capabilities.memory }}
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xagentcorememories.agentplatform.aws.example.com
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  group: agentplatform.aws.example.com
+  names:
+    kind: XAgentCoreMemory
+    plural: xagentcorememories
+  claimNames:
+    kind: AgentCoreMemory
+    plural: agentcorememories
+  connectionSecretKeys:
+    - id
+    - arn
+    - name
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  properties:
+                    region:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    eventExpiryDuration:
+                      type: integer
+                      default: 30
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                  required: [region, name]
+              required: [parameters]
+            status:
+              type: object
+              properties:
+                id:
+                  type: string
+                arn:
+                  type: string
+---
+{{- end }}
+{{- if .Values.capabilities.browser }}
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xagentcorebrowsers.agentplatform.aws.example.com
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  group: agentplatform.aws.example.com
+  names:
+    kind: XAgentCoreBrowser
+    plural: xagentcorebrowsers
+  claimNames:
+    kind: AgentCoreBrowser
+    plural: agentcorebrowsers
+  connectionSecretKeys:
+    - id
+    - arn
+    - name
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  properties:
+                    region:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    networkMode:
+                      type: string
+                      enum: [PUBLIC, SANDBOX]
+                      default: PUBLIC
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                  required: [region, name]
+              required: [parameters]
+            status:
+              type: object
+              properties:
+                id:
+                  type: string
+                arn:
+                  type: string
+---
+{{- end }}
+{{- if .Values.capabilities.codeInterpreter }}
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xagentcorecodeinterpreters.agentplatform.aws.example.com
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  group: agentplatform.aws.example.com
+  names:
+    kind: XAgentCoreCodeInterpreter
+    plural: xagentcorecodeinterpreters
+  claimNames:
+    kind: AgentCoreCodeInterpreter
+    plural: agentcorecodeinterpreters
+  connectionSecretKeys:
+    - id
+    - arn
+    - name
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  properties:
+                    region:
+                      type: string
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    networkMode:
+                      type: string
+                      enum: [PUBLIC, SANDBOX]
+                      default: PUBLIC
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                  required: [region, name]
+              required: [parameters]
+            status:
+              type: object
+              properties:
+                id:
+                  type: string
+                arn:
+                  type: string
+{{- end }}

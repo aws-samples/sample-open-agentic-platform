@@ -1,0 +1,59 @@
+{{/*
+  IAM Role and Pod Identity Association for the Crossplane BedrockAgentCore provider.
+  This gives the provider permissions to create/manage AgentCore resources.
+*/}}
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: {{ .Values.global.eksClusterName }}-agentcore-provider-role
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "pods.eks.amazonaws.com"},
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }]
+      }
+    inlinePolicy:
+      - name: AgentCoreFullAccess
+        policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "bedrock-agentcore:*",
+                "bedrock:InvokeAgentCoreTool"
+              ],
+              "Resource": "*"
+            }]
+          }
+    tags:
+      platform.gitops.io/role: agentcore-provider
+      platform.gitops.io/cluster: {{ .Values.global.eksClusterName }}
+  providerConfigRef:
+    name: default
+---
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: PodIdentityAssociation
+metadata:
+  name: {{ .Values.global.eksClusterName }}-agentcore-provider
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  forProvider:
+    clusterName: {{ .Values.global.eksClusterName }}
+    namespace: {{ .Values.podIdentity.namespace }}
+    serviceAccount: {{ .Values.podIdentity.serviceAccountName }}
+    roleArnSelector:
+      matchLabels:
+        platform.gitops.io/role: agentcore-provider
+        platform.gitops.io/cluster: {{ .Values.global.eksClusterName }}
+    region: {{ .Values.global.awsRegion }}
+  providerConfigRef:
+    name: default

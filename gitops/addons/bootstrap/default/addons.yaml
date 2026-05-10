@@ -185,6 +185,42 @@ kagent-setup:
         values: ['true']
 
 ########################################
+# AgentCore — Crossplane Compositions
+########################################
+
+crossplane-agentcore:
+  enabled: false
+  namespace: crossplane-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/crossplane-agentcore'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '4'
+  selector:
+    matchExpressions:
+      - key: enable_agent_core
+        operator: In
+        values: ['true']
+  valuesObject:
+    global:
+      awsRegion: '{{.metadata.annotations.aws_region}}'
+      eksClusterName: '{{.metadata.annotations.aws_cluster_name}}'
+      projectName: '{{default "agent-core" (index .metadata.annotations "agent_core_project_name")}}'
+      networkMode: '{{default "PUBLIC" (index .metadata.annotations "agent_core_network_mode")}}'
+  ignoreDifferences:
+    - group: apiextensions.crossplane.io
+      kind: Composition
+      jsonPointers:
+        - /spec/mode
+        - /spec/publishConnectionDetailsWithStoreConfigRef
+      jqPathExpressions:
+        - .spec.resources[].readinessChecks
+        - .spec.resources[].patches[].type
+    - group: apiextensions.crossplane.io
+      kind: CompositeResourceDefinition
+      jsonPointers:
+        - /metadata/annotations
+
+########################################
 # AgentGateway — MCP Auth Gateway
 ########################################
 
