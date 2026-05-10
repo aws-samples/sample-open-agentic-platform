@@ -10,6 +10,7 @@ Deploy the AI agent platform on an EKS cluster using the ArgoCD EKS Capability.
 | 3 | kagent (operator + UI) | OCI: `ghcr.io/kagent-dev/kagent/helm/kagent:0.7.9` | kagent |
 | 3 | kagent-setup (ModelConfig) | Local chart | kagent |
 | 3 | litellm (LLM gateway) | Local chart | kagent |
+| 4 | crossplane-agentcore | Local chart | crossplane-system |
 | 5 | langfuse (LLM tracing + PostgreSQL) | Local chart | langfuse |
 | 5 | jaeger (distributed tracing) | Helm: `jaegertracing/jaeger:3.4.1` | jaeger |
 | 5 | prometheus-operator-crds | Helm: `prometheus-community/prometheus-operator-crds:28.0.1` | kagent |
@@ -19,7 +20,16 @@ Deploy the AI agent platform on an EKS cluster using the ArgoCD EKS Capability.
 | 8 | agentgateway (control plane) | OCI: `cr.agentgateway.dev/charts/agentgateway:v1.1.0` | agentgateway-system |
 | 9 | agent-gateway (Gateway + Policies) | Local chart | agent-core-infra |
 
-AgentCore resources (Memory, Browser, Code Interpreter) are provisioned via Crossplane compositions — see the `crossplane-compositions/` directory (Phase 2, coming soon).
+### AgentCore via Crossplane (wave 4)
+
+The `crossplane-agentcore` chart provisions Bedrock AgentCore resources using Crossplane compositions:
+
+- **Provider**: `provider-aws-bedrockagentcore` (v2.5.3) with its own Pod Identity
+- **XRDs**: `AgentCoreMemory`, `AgentCoreBrowser`, `AgentCoreCodeInterpreter`
+- **Compositions**: Pipeline mode using `function-patch-and-transform`
+- **Claims**: Create Memory, Browser, and Code Interpreter with cluster-unique names (`{clusterName}_{projectName}_{type}`)
+
+Prerequisites: Crossplane must be installed with `provider-family-aws`, `provider-aws-iam`, and `provider-aws-eks` (provided by appmod-blueprints or installed separately).
 
 ## Deployment via appmod-blueprints
 
