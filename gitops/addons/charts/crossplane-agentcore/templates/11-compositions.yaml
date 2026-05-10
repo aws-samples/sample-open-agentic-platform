@@ -12,44 +12,52 @@ spec:
     apiVersion: agentplatform.aws.example.com/v1alpha1
     kind: XAgentCoreMemory
   writeConnectionSecretsToNamespace: crossplane-system
-  resources:
-    - name: memory
-      base:
-        apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
-        kind: Memory
-        spec:
-          forProvider:
-            eventExpiryDuration: 30
-          providerConfigRef:
-            name: agentcore
-          deletionPolicy: Delete
-      patches:
-        - fromFieldPath: spec.parameters.region
-          toFieldPath: spec.forProvider.region
-        - fromFieldPath: spec.parameters.name
-          toFieldPath: spec.forProvider.name
-        - fromFieldPath: spec.parameters.description
-          toFieldPath: spec.forProvider.description
-        - fromFieldPath: spec.parameters.eventExpiryDuration
-          toFieldPath: spec.forProvider.eventExpiryDuration
-        - fromFieldPath: spec.parameters.tags
-          toFieldPath: spec.forProvider.tags
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.id
-          toFieldPath: status.id
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.arn
-          toFieldPath: status.arn
-      connectionDetails:
-        - name: id
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.id
-        - name: arn
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.arn
-        - name: name
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.name
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: memory
+            base:
+              apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
+              kind: Memory
+              spec:
+                forProvider:
+                  eventExpiryDuration: 30
+                providerConfigRef:
+                  name: agentcore
+                deletionPolicy: Delete
+            patches:
+              - fromFieldPath: spec.parameters.region
+                toFieldPath: spec.forProvider.region
+              - fromFieldPath: spec.parameters.name
+                toFieldPath: spec.forProvider.name
+              - fromFieldPath: spec.parameters.description
+                toFieldPath: spec.forProvider.description
+              - fromFieldPath: spec.parameters.eventExpiryDuration
+                toFieldPath: spec.forProvider.eventExpiryDuration
+              - fromFieldPath: spec.parameters.tags
+                toFieldPath: spec.forProvider.tags
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.id
+                toFieldPath: status.id
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.arn
+                toFieldPath: status.arn
+            connectionDetails:
+              - name: id
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.id
+              - name: arn
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.arn
+              - name: name
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.name
 ---
 {{- end }}
 {{- if .Values.capabilities.browser }}
@@ -66,45 +74,53 @@ spec:
     apiVersion: agentplatform.aws.example.com/v1alpha1
     kind: XAgentCoreBrowser
   writeConnectionSecretsToNamespace: crossplane-system
-  resources:
-    - name: browser
-      base:
-        apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
-        kind: Browser
-        spec:
-          forProvider:
-            networkConfiguration:
-              networkMode: PUBLIC
-          providerConfigRef:
-            name: agentcore
-          deletionPolicy: Delete
-      patches:
-        - fromFieldPath: spec.parameters.region
-          toFieldPath: spec.forProvider.region
-        - fromFieldPath: spec.parameters.name
-          toFieldPath: spec.forProvider.name
-        - fromFieldPath: spec.parameters.description
-          toFieldPath: spec.forProvider.description
-        - fromFieldPath: spec.parameters.networkMode
-          toFieldPath: spec.forProvider.networkConfiguration.networkMode
-        - fromFieldPath: spec.parameters.tags
-          toFieldPath: spec.forProvider.tags
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.browserId
-          toFieldPath: status.id
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.browserArn
-          toFieldPath: status.arn
-      connectionDetails:
-        - name: id
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.browserId
-        - name: arn
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.browserArn
-        - name: name
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.name
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: browser
+            base:
+              apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
+              kind: Browser
+              spec:
+                forProvider:
+                  networkConfiguration:
+                    networkMode: PUBLIC
+                providerConfigRef:
+                  name: agentcore
+                deletionPolicy: Delete
+            patches:
+              - fromFieldPath: spec.parameters.region
+                toFieldPath: spec.forProvider.region
+              - fromFieldPath: spec.parameters.name
+                toFieldPath: spec.forProvider.name
+              - fromFieldPath: spec.parameters.description
+                toFieldPath: spec.forProvider.description
+              - fromFieldPath: spec.parameters.networkMode
+                toFieldPath: spec.forProvider.networkConfiguration.networkMode
+              - fromFieldPath: spec.parameters.tags
+                toFieldPath: spec.forProvider.tags
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.browserId
+                toFieldPath: status.id
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.browserArn
+                toFieldPath: status.arn
+            connectionDetails:
+              - name: id
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.browserId
+              - name: arn
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.browserArn
+              - name: name
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.name
 ---
 {{- end }}
 {{- if .Values.capabilities.codeInterpreter }}
@@ -121,43 +137,51 @@ spec:
     apiVersion: agentplatform.aws.example.com/v1alpha1
     kind: XAgentCoreCodeInterpreter
   writeConnectionSecretsToNamespace: crossplane-system
-  resources:
-    - name: code-interpreter
-      base:
-        apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
-        kind: CodeInterpreter
-        spec:
-          forProvider:
-            networkConfiguration:
-              networkMode: PUBLIC
-          providerConfigRef:
-            name: agentcore
-          deletionPolicy: Delete
-      patches:
-        - fromFieldPath: spec.parameters.region
-          toFieldPath: spec.forProvider.region
-        - fromFieldPath: spec.parameters.name
-          toFieldPath: spec.forProvider.name
-        - fromFieldPath: spec.parameters.description
-          toFieldPath: spec.forProvider.description
-        - fromFieldPath: spec.parameters.networkMode
-          toFieldPath: spec.forProvider.networkConfiguration.networkMode
-        - fromFieldPath: spec.parameters.tags
-          toFieldPath: spec.forProvider.tags
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.codeInterpreterId
-          toFieldPath: status.id
-        - type: ToCompositeFieldPath
-          fromFieldPath: status.atProvider.codeInterpreterArn
-          toFieldPath: status.arn
-      connectionDetails:
-        - name: id
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.codeInterpreterId
-        - name: arn
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.codeInterpreterArn
-        - name: name
-          type: FromFieldPath
-          fromFieldPath: status.atProvider.name
+  mode: Pipeline
+  pipeline:
+    - step: patch-and-transform
+      functionRef:
+        name: function-patch-and-transform
+      input:
+        apiVersion: pt.fn.crossplane.io/v1beta1
+        kind: Resources
+        resources:
+          - name: code-interpreter
+            base:
+              apiVersion: bedrockagentcore.aws.upbound.io/v1beta1
+              kind: CodeInterpreter
+              spec:
+                forProvider:
+                  networkConfiguration:
+                    networkMode: PUBLIC
+                providerConfigRef:
+                  name: agentcore
+                deletionPolicy: Delete
+            patches:
+              - fromFieldPath: spec.parameters.region
+                toFieldPath: spec.forProvider.region
+              - fromFieldPath: spec.parameters.name
+                toFieldPath: spec.forProvider.name
+              - fromFieldPath: spec.parameters.description
+                toFieldPath: spec.forProvider.description
+              - fromFieldPath: spec.parameters.networkMode
+                toFieldPath: spec.forProvider.networkConfiguration.networkMode
+              - fromFieldPath: spec.parameters.tags
+                toFieldPath: spec.forProvider.tags
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.codeInterpreterId
+                toFieldPath: status.id
+              - type: ToCompositeFieldPath
+                fromFieldPath: status.atProvider.codeInterpreterArn
+                toFieldPath: status.arn
+            connectionDetails:
+              - name: id
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.codeInterpreterId
+              - name: arn
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.codeInterpreterArn
+              - name: name
+                type: FromFieldPath
+                fromFieldPath: status.atProvider.name
 {{- end }}
