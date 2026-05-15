@@ -50,10 +50,20 @@ spec:
       labels:
         app: langfuse-postgres
     spec:
+      # Pin pod-spec fields the apiserver would otherwise default, so Argo
+      # does not see drift on every reconcile.
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      securityContext: {}
       containers:
         - name: postgres
           image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
           imagePullPolicy: IfNotPresent
+          # Pin defaulted container fields too.
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
           ports:
             - containerPort: 5432
               protocol: TCP
