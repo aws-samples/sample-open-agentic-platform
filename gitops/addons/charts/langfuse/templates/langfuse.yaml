@@ -31,6 +31,17 @@ metadata:
 spec:
   serviceName: langfuse-postgres
   replicas: 1
+  # Set fields explicitly that the apiserver would otherwise default, so Argo
+  # does not see drift on every reconcile.
+  podManagementPolicy: OrderedReady
+  revisionHistoryLimit: 10
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   selector:
     matchLabels:
       app: langfuse-postgres
@@ -42,8 +53,10 @@ spec:
       containers:
         - name: postgres
           image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5432
+              protocol: TCP
           env:
             - name: POSTGRES_DB
               value: langfuse
