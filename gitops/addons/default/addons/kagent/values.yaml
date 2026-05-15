@@ -1,0 +1,11 @@
+# Disable the argo-rollouts subchart: kagent v0.7.9 ships an Agent CR with
+# spec.declarative.deployment unset, which fails CRD validation:
+#   spec.declarative.deployment: Invalid value: "null": must be of type object
+# Tracking upstream fix in kagent-dev/kagent. Re-enable once a release ships
+# the deployment field populated (or the schema relaxes its requirement).
+#
+# Subchart condition lives at top-level per Chart.yaml
+# (condition: argo-rollouts-agent.enabled), not under agents.* — kagent's own
+# values.yaml only uses agents.* for resources, not the dependency toggle.
+argo-rollouts-agent:
+  enabled: false
