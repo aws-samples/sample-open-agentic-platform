@@ -82,10 +82,14 @@ spec:
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: postgres-data
       spec:
         accessModes: ["ReadWriteOnce"]
+        # Pin volumeMode so it matches the apiserver-defaulted live state.
+        volumeMode: Filesystem
         resources:
           requests:
             storage: {{ .Values.postgres.storage }}
