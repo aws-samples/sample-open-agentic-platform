@@ -23,5 +23,5 @@ postgres:
       cpu: 250m
       memory: 256Mi
     limits:
-      cpu: 1000m
+      cpu: "1"
       memory: 512Mi
