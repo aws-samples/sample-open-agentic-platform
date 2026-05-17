@@ -240,25 +240,6 @@ bifrost:
   valuesObject:
     image:
       tag: 'v1.5.0'
-    bifrost:
-      port: 8080
-      logLevel: info
-      logStyle: json
-      providers:
-        bedrock:
-          keys:
-            - name: "bedrock-default"
-              value: "pod-identity"
-              weight: 1
-      mcp:
-        enabled: true
-      plugins:
-        telemetry:
-          enabled: true
-        logging:
-          enabled: true
-    service:
-      type: ClusterIP
 
 ########################################
 # AgentGateway — MCP Auth Gateway
