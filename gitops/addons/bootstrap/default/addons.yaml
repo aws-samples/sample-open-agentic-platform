@@ -247,7 +247,8 @@ bifrost:
       providers:
         bedrock:
           keys:
-            - value: "pod-identity"
+            - name: "bedrock-default"
+              value: "pod-identity"
               weight: 1
       mcp:
         enabled: true
