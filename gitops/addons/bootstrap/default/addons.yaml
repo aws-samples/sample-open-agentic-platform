@@ -228,7 +228,7 @@ bifrost:
   enabled: false
   namespace: bifrost
   chartName: bifrost
-  defaultVersion: '2.1.17'
+  defaultVersion: '2.1.16'
   chartRepository: 'https://maximhq.github.io/bifrost/helm-charts'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '5'
@@ -239,7 +239,7 @@ bifrost:
         values: ['true']
   valuesObject:
     image:
-      tag: 'v1.5.2'
+      tag: 'v1.5.0'
     bifrost:
       port: 8080
       logLevel: info
