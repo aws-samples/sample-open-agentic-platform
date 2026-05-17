@@ -1,0 +1,64 @@
+# Bifrost AI Gateway - Default values override
+# Docs: https://docs.getbifrost.ai/
+# Chart: https://github.com/maximhq/bifrost/tree/dev/helm-charts/bifrost
+
+image:
+  tag: 'v1.5.2'
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+bifrost:
+  port: 8080
+  host: "0.0.0.0"
+  logLevel: info
+  logStyle: json
+
+  # AWS Bedrock provider via Pod Identity (no static keys needed)
+  providers:
+    bedrock:
+      keys:
+        - value: "pod-identity"
+          weight: 1
+
+  # MCP gateway support
+  mcp:
+    enabled: true
+    toolManagerConfig:
+      toolExecutionTimeout: "30s"
+      maxAgentDepth: 10
+
+  # Plugins
+  plugins:
+    telemetry:
+      enabled: true
+    logging:
+      enabled: true
+
+  # Client configuration
+  client:
+    initialPoolSize: 100
+
+# Storage - SQLite for simplicity in dev
+storage:
+  mode: sqlite
+  persistence:
+    enabled: true
+    size: 5Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Autoscaling disabled by default (single replica for dev)
+autoscaling:
+  enabled: false

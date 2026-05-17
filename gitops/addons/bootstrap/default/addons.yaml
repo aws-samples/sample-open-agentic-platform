@@ -221,6 +221,45 @@ crossplane-agentcore:
         - /metadata/annotations
 
 ########################################
+# Bifrost — AI Gateway
+########################################
+
+bifrost:
+  enabled: false
+  namespace: bifrost
+  chartName: bifrost
+  defaultVersion: '2.1.17'
+  chartRepository: 'https://maximhq.github.io/bifrost/helm-charts'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '5'
+  selector:
+    matchExpressions:
+      - key: enable_bifrost
+        operator: In
+        values: ['true']
+  valuesObject:
+    image:
+      tag: 'v1.5.2'
+    bifrost:
+      port: 8080
+      logLevel: info
+      logStyle: json
+      providers:
+        bedrock:
+          keys:
+            - value: "pod-identity"
+              weight: 1
+      mcp:
+        enabled: true
+      plugins:
+        telemetry:
+          enabled: true
+        logging:
+          enabled: true
+    service:
+      type: ClusterIP
+
+########################################
 # AgentGateway — MCP Auth Gateway
 ########################################
 
