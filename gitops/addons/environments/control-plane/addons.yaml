@@ -26,6 +26,10 @@ kagent-monitoring:
 prometheus-operator-crds:
   enabled: true
 
+# Bifrost AI Gateway
+bifrost:
+  enabled: true
+
 # AgentGateway (MCP Auth via KeyCloak)
 gateway-api-crds:
   enabled: true
