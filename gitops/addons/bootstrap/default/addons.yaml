@@ -101,6 +101,10 @@ langfuse:
       - key: enable_langfuse
         operator: In
         values: ['true']
+  valuesObject:
+    ingress:
+      enabled: true
+      host: '{{.metadata.annotations.ingress_domain_name}}'
 
 jaeger:
   enabled: false

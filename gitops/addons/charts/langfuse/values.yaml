@@ -5,6 +5,11 @@ image:
   tag: "2"
   pullPolicy: IfNotPresent
 
+ingress:
+  enabled: false
+  className: platform
+  host: ""
+
 resources:
   requests:
     cpu: 500m
