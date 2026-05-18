@@ -6,7 +6,9 @@ metadata:
   namespace: agentgateway-system
   annotations:
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-path: /sse
+    alb.ingress.kubernetes.io/healthcheck-port: "8080"
+    alb.ingress.kubernetes.io/success-codes: "200,405"
     argocd.argoproj.io/sync-wave: "10"
 spec:
   ingressClassName: {{ .Values.ingress.className | default "platform" }}
@@ -14,7 +16,14 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          - path: /agentgateway
+          - path: /sse
+            pathType: Prefix
+            backend:
+              service:
+                name: agentgateway-proxy
+                port:
+                  number: 8080
+          - path: /.well-known/oauth-protected-resource
             pathType: Prefix
             backend:
               service:
