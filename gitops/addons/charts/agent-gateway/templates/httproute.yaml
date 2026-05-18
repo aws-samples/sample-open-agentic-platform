@@ -21,6 +21,9 @@ spec:
         value: /sse
     - path:
         type: PathPrefix
+        value: /mcp
+    - path:
+        type: PathPrefix
         value: /.well-known/oauth-protected-resource/mcp
     - path:
         type: PathPrefix
