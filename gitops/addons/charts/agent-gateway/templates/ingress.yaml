@@ -2,8 +2,8 @@
 ---
 # Separate ClusterIP service for ALB ingress routing.
 # The agentgateway-proxy service is a LoadBalancer (NLB) managed by the
-# Gateway API controller and can't be changed. This service targets the
-# same pods but allows the ALB to create IP-mode target groups.
+# Gateway API controller. This service targets the same pods but allows
+# the ALB to create IP-mode target groups without conflict.
 apiVersion: v1
 kind: Service
 metadata:
@@ -26,10 +26,8 @@ metadata:
   namespace: agentgateway-system
   annotations:
     alb.ingress.kubernetes.io/target-type: ip
-    alb.ingress.kubernetes.io/backend-protocol: HTTP
-    alb.ingress.kubernetes.io/healthcheck-path: /sse
-    alb.ingress.kubernetes.io/healthcheck-port: "8080"
-    alb.ingress.kubernetes.io/success-codes: "200,405,426"
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
     argocd.argoproj.io/sync-wave: "10"
 spec:
   ingressClassName: {{ .Values.ingress.className | default "platform" }}
