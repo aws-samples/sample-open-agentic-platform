@@ -240,6 +240,11 @@ bifrost:
   valuesObject:
     image:
       tag: 'v1.5.0'
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates
 
 ########################################
 # AgentGateway — MCP Auth Gateway
