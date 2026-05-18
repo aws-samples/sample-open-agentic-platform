@@ -31,15 +31,15 @@ mcpBackend:
     - name: code
       host: execute-code-mcp-v1.agent-core-infra.svc.cluster.local
       port: 8080
-      protocol: SSE
+      protocol: StreamableHTTP
     - name: browser
       host: browser-mcp-v1.agent-core-infra.svc.cluster.local
       port: 8080
-      protocol: SSE
+      protocol: StreamableHTTP
     - name: memory
       host: memory-mcp-v1.agent-core-infra.svc.cluster.local
       port: 8080
-      protocol: SSE
+      protocol: StreamableHTTP
 
 # JWT authentication configuration
 jwtAuth:
