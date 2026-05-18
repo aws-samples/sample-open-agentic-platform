@@ -322,6 +322,9 @@ agent-gateway:
         issuerUrl: '{{default (printf "https://%s/keycloak/realms/platform" (index .metadata.annotations "ingress_domain_name")) (index .metadata.annotations "keycloak_issuer_url")}}'
         serviceName: '{{default "keycloak" (index .metadata.annotations "keycloak_service_name")}}'
         namespace: '{{default "keycloak" (index .metadata.annotations "keycloak_namespace")}}'
+    ingress:
+      enabled: true
+      host: '{{index .metadata.annotations "ingress_domain_name"}}'
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'

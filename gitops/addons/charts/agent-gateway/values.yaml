@@ -18,6 +18,12 @@ global:
   # Gateway listener port
   gatewayPort: 8080
 
+# Ingress for exposing agent gateway via the platform ALB
+ingress:
+  enabled: true
+  className: platform
+  host: ""
+
 # MCP backend targets - the agent-core MCP servers
 mcpBackend:
   namespace: agent-core-infra

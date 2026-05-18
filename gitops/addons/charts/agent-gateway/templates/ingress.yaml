@@ -1,0 +1,24 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentgateway
+  namespace: agentgateway-system
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  ingressClassName: {{ .Values.ingress.className | default "platform" }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /agentgateway
+            pathType: Prefix
+            backend:
+              service:
+                name: agentgateway-proxy
+                port:
+                  number: 8080
+{{- end }}
