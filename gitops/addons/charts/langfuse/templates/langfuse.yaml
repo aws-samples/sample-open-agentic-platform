@@ -22,6 +22,11 @@ data:
   TELEMETRY_ENABLED: "false"
   LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
   NODE_ENV: "production"
+  AUTH_KEYCLOAK_CLIENT_ID: "langfuse"
+  AUTH_KEYCLOAK_CLIENT_SECRET: "{{ .Values.keycloak.clientSecret }}"
+  AUTH_KEYCLOAK_ISSUER: "{{ .Values.keycloak.issuerUrl }}"
+  AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING: "true"
+  AUTH_DISABLE_SIGNUP: "{{ .Values.keycloak.disableSignup | default "false" }}"
 ---
 apiVersion: apps/v1
 kind: StatefulSet
