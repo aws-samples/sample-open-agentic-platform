@@ -9,3 +9,10 @@
 # values.yaml only uses agents.* for resources, not the dependency toggle.
 argo-rollouts-agent:
   enabled: false
+
+otel:
+  tracing:
+    enabled: true
+    exporter:
+      otlp:
+        endpoint: http://otel-collector.otel.svc.cluster.local:4317

@@ -142,6 +142,22 @@ jaeger:
     query:
       enabled: false
 
+otel-collector:
+  enabled: false
+  namespace: otel
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/otel-collector'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '6'
+  selector:
+    matchExpressions:
+      - key: enable_otel_collector
+        operator: In
+        values: ['true']
+  valuesObject:
+    global:
+      awsRegion: '{{.metadata.annotations.aws_region}}'
+
 kagent-monitoring:
   enabled: false
   namespace: kagent

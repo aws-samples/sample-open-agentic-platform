@@ -1,0 +1,5 @@
+apiVersion: v2
+name: otel-collector
+description: OpenTelemetry Collector CR for agent tracing (OTLP → X-Ray + Jaeger)
+type: application
+version: 0.1.0

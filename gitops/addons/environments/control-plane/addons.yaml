@@ -21,6 +21,8 @@ langfuse:
   enabled: true
 jaeger:
   enabled: true
+otel-collector:
+  enabled: true
 kagent-monitoring:
   enabled: true
 prometheus-operator-crds:
