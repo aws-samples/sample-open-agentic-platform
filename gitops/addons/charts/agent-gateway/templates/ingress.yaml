@@ -43,6 +43,13 @@ spec:
                 name: agentgateway-ingress
                 port:
                   number: 8080
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: agentgateway-ingress
+                port:
+                  number: 8080
           - path: /.well-known/oauth-protected-resource
             pathType: Prefix
             backend:
