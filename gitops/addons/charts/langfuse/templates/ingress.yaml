@@ -9,8 +9,7 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/healthcheck-path: /api/public/health
-    alb.ingress.kubernetes.io/actions.url-rewrite: '{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"langfuse","servicePort":"3000"}]}}'
-    alb.ingress.kubernetes.io/conditions.url-rewrite: '[{"field":"path-pattern","pathPatternConfig":{"values":["/langfuse","/langfuse/*"]}}]'
+    alb.ingress.kubernetes.io/order: "100"
     argocd.argoproj.io/sync-wave: "10"
 spec:
   ingressClassName: {{ .Values.ingress.className | default "platform" }}
@@ -18,7 +17,7 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          - path: /langfuse
+          - path: /
             pathType: Prefix
             backend:
               service:

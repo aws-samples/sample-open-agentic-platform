@@ -18,8 +18,7 @@ metadata:
   name: langfuse-config
   namespace: {{ .Release.Namespace }}
 data:
-  NEXTAUTH_URL: "https://{{ .Values.ingress.host }}/langfuse"
-  NEXT_PUBLIC_BASE_PATH: "/langfuse"
+  NEXTAUTH_URL: "https://{{ .Values.ingress.host }}"
   TELEMETRY_ENABLED: "false"
   LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
   NODE_ENV: "production"
