@@ -299,3 +299,7 @@ agent-gateway:
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
+    ingress:
+      enabled: true
+      className: platform
+      host: '{{index .metadata.annotations "ingress_domain_name"}}'

@@ -71,3 +71,9 @@ mcpAuth:
       - header
       - body
       - query
+
+# Ingress configuration for the AgentGateway proxy
+ingress:
+  enabled: false
+  className: platform
+  host: ""
