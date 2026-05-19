@@ -18,7 +18,8 @@ metadata:
   name: langfuse-config
   namespace: {{ .Release.Namespace }}
 data:
-  NEXTAUTH_URL: "http://langfuse.{{ .Release.Namespace }}.svc.cluster.local:3000"
+  NEXTAUTH_URL: "https://{{ .Values.ingress.host }}/langfuse"
+  NEXT_PUBLIC_BASE_PATH: "/langfuse"
   TELEMETRY_ENABLED: "false"
   LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
   NODE_ENV: "production"
