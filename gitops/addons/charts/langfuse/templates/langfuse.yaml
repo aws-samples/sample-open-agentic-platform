@@ -23,7 +23,6 @@ data:
   LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
   NODE_ENV: "production"
   AUTH_KEYCLOAK_CLIENT_ID: "langfuse"
-  AUTH_KEYCLOAK_CLIENT_SECRET: "{{ .Values.keycloak.clientSecret }}"
   AUTH_KEYCLOAK_ISSUER: "{{ .Values.keycloak.issuerUrl }}"
   AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING: "true"
   AUTH_DISABLE_SIGNUP: "{{ .Values.keycloak.disableSignup | default "false" }}"
@@ -145,6 +144,12 @@ spec:
           env:
             - name: HOSTNAME
               value: "0.0.0.0"
+            - name: AUTH_KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-keycloak-secret
+                  key: LANGFUSE_CLIENT_SECRET
+                  optional: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           livenessProbe:
@@ -172,3 +177,22 @@ spec:
     - port: 3000
       targetPort: 3000
   type: ClusterIP
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: langfuse-keycloak-secret
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: aws-secrets-manager
+  refreshInterval: "5m"
+  target:
+    name: langfuse-keycloak-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: LANGFUSE_CLIENT_SECRET
+      remoteRef:
+        key: {{ .Values.keycloak.secretManagerKey | default "hub/keycloak-clients" }}
+        property: LANGFUSE_CLIENT_SECRET

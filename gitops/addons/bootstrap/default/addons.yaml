@@ -106,8 +106,8 @@ langfuse:
       enabled: true
       host: '{{.metadata.annotations.ingress_domain_name}}'
     keycloak:
-      clientSecret: '{{default "" (index .metadata.annotations "langfuse_keycloak_client_secret")}}'
       issuerUrl: '{{default (printf "https://%s/keycloak/realms/platform" .metadata.annotations.ingress_domain_name) (index .metadata.annotations "keycloak_issuer_url")}}'
+      secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/keycloak-clients'
 
 jaeger:
   enabled: false

@@ -14,6 +14,7 @@ keycloak:
   clientSecret: ""
   issuerUrl: ""
   disableSignup: "false"
+  secretManagerKey: "hub/keycloak-clients"
 
 resources:
   requests:
