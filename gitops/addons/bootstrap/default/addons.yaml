@@ -108,6 +108,12 @@ langfuse:
     keycloak:
       issuerUrl: '{{default (printf "https://%s/keycloak/realms/platform" .metadata.annotations.ingress_domain_name) (index .metadata.annotations "keycloak_issuer_url")}}'
       secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/keycloak-clients'
+  ignoreDifferences:
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jsonPointers:
+        - /spec/dataFrom
+        - /spec/data
 
 jaeger:
   enabled: false
