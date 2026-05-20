@@ -3,7 +3,7 @@ global:
 
 image:
   repository: ghcr.io/berriai/litellm
-  tag: main-v1.67.0-stable
+  tag: main-stable
   pullPolicy: IfNotPresent
 
 replicas: 1
