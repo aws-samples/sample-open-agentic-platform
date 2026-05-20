@@ -10,6 +10,17 @@
 argo-rollouts-agent:
   enabled: false
 
+# Override default model config to use Bedrock via LiteLLM proxy
+providers:
+  default: openAI
+  openAI:
+    provider: OpenAI
+    model: bedrock-claude-3-5-sonnet
+    apiKeySecretRef: kagent-openai
+    apiKeySecretKey: OPENAI_API_KEY
+    config:
+      baseUrl: http://litellm-service.kagent.svc.cluster.local:4000
+
 otel:
   tracing:
     enabled: true
