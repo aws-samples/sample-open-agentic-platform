@@ -1,0 +1,46 @@
+# Open Agentic Platform Configuration
+# Copy to config.local.yaml and customize for your environment.
+
+# Platform base (appmod-blueprints)
+platform:
+  repo: "https://github.com/aws-samples/appmod-blueprints.git"
+  ref: "main"                          # Tag or branch (e.g., "v1.0.0")
+  clusterProvider: "kind-crossplane"
+
+# AWS
+aws:
+  region: "us-west-2"
+  accountId: ""
+  profile: "default"
+
+# Hub cluster
+hub:
+  clusterName: ""
+  kubernetesVersion: "1.35"
+
+# Domain and networking
+domain: ""
+resourcePrefix: ""
+
+# AWS Identity Center
+identityCenter:
+  instanceArn: ""
+  region: ""
+  adminGroupId: ""
+
+# Agentic platform git repo (this repo — used by ArgoCD)
+agenticRepo:
+  url: "https://github.com/aws-samples/sample-agent-platform-on-eks.git"
+  revision: "main"
+  basepath: "gitops/addons/"
+
+# Components to enable
+components:
+  kagent: true
+  litellm: true
+  langfuse: true
+  jaeger: true
+  otelCollector: true
+  bifrost: true
+  agentGateway: true
+  agentCore: true
