@@ -95,9 +95,9 @@ spec:
   project: default
   sources:
     - ref: values
-      repoURL: https://github.com/aws-samples/sample-agent-platform-on-eks.git
+      repoURL: https://github.com/aws-samples/sample-open-agentic-platform.git
       targetRevision: main
-    - repoURL: https://github.com/aws-samples/sample-agent-platform-on-eks.git
+    - repoURL: https://github.com/aws-samples/sample-open-agentic-platform.git
       path: gitops/addons/charts/application-sets
       targetRevision: main
       helm:
