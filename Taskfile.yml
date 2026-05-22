@@ -141,9 +141,10 @@ tasks:
       REPO_URL: "{{.AGENTIC_REPO_URL}}"
       REVISION: "{{.AGENTIC_REPO_REVISION}}"
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
+      HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
       - task: agentic:label-clusters
-      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to all clusters with enable_agent_platform=true label.\n'
 
   # ─── Utilities ──────────────────────────────────────────────────────────────

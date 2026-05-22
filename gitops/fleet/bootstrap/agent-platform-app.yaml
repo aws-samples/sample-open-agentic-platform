@@ -27,7 +27,7 @@ spec:
           repoURLGitBasePath: "${BASEPATH}"
   destination:
     namespace: argocd
-    server: https://kubernetes.default.svc
+    name: ${HUB_CLUSTER_NAME}
   syncPolicy:
     automated:
       selfHeal: true
