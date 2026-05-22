@@ -40,15 +40,17 @@ vars:
 
 tasks:
   install:
-    desc: Install the full agentic platform (base platform + agentic components)
+    desc: Install the full agentic platform (base platform + spokes + agentic components)
     cmds:
       - task: platform:install
+      - task: spokes:install
       - task: agentic:install
 
   upgrade:
-    desc: Upgrade the platform and agentic components
+    desc: Upgrade the platform, spokes, and agentic components
     cmds:
       - task: platform:upgrade
+      - task: spokes:install
       - task: agentic:upgrade
 
   # ─── Platform (appmod-blueprints) ───────────────────────────────────────────
@@ -73,8 +75,8 @@ tasks:
         cat > {{.PLATFORM_DIR}}/config.local.yaml <<EOF
         clusterProvider: "{{.CLUSTER_PROVIDER}}"
         repo:
-          url: "{{.AGENTIC_REPO_URL}}"
-          revision: "{{.AGENTIC_REPO_REVISION}}"
+          url: "{{.PLATFORM_REPO}}"
+          revision: "{{.PLATFORM_REF}}"
           basepath: "gitops/"
         hub:
           clusterName: "{{.HUB_CLUSTER_NAME}}"
@@ -106,6 +108,60 @@ tasks:
       - cd {{.PLATFORM_DIR}} && git fetch origin && git checkout {{.PLATFORM_REF}} && git pull origin {{.PLATFORM_REF}} 2>/dev/null || true
       - task: platform:configure
       - cd {{.PLATFORM_DIR}} && task install
+
+  # ─── Spokes ──────────────────────────────────────────────────────────────────
+
+  spokes:install:
+    desc: Provision spoke clusters via Crossplane PlatformCluster claims
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - |
+        SPOKES=$(yq -r '.spokes // {}' {{.CONFIG_FILE}})
+        if [ "$SPOKES" = "{}" ] || [ "$SPOKES" = "null" ]; then
+          printf '✓ No spokes configured (hub-only).\n'
+          exit 0
+        fi
+        for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
+          REGION=$(yq -r ".spokes.${SPOKE}.region // \"{{.AWS_REGION}}\"" {{.CONFIG_FILE}})
+          K8S_VER=$(yq -r ".spokes.${SPOKE}.kubernetesVersion // \"1.35\"" {{.CONFIG_FILE}})
+          VPC_CIDR=$(yq -r ".spokes.${SPOKE}.vpcCidr // \"10.1.0.0/16\"" {{.CONFIG_FILE}})
+          AUTO_MODE=$(yq -r ".spokes.${SPOKE}.autoMode // true" {{.CONFIG_FILE}})
+          kubectl apply -f - <<EOF
+        apiVersion: platform.gitops.io/v1alpha1
+        kind: PlatformCluster
+        metadata:
+          name: ${SPOKE}
+          namespace: crossplane-system
+          annotations:
+            crossplane.io/external-name: ${SPOKE}
+        spec:
+          region: ${REGION}
+          clusterName: ${SPOKE}
+          vpcCidr: "${VPC_CIDR}"
+          kubernetesVersion: "${K8S_VER}"
+          autoMode: ${AUTO_MODE}
+          argoCDRoleArn: "arn:aws:iam::{{.AWS_ACCOUNT_ID}}:role/{{.HUB_CLUSTER_NAME}}-ArgoCDCapabilityRole"
+          writeConnectionSecretToRef:
+            name: ${SPOKE}-kubeconfig
+        EOF
+          printf "✓ PlatformCluster claim applied: %s\n" "$SPOKE"
+        done
+
+  spokes:status:
+    desc: Check spoke cluster provisioning status
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - kubectl get platformclusters.platform.gitops.io -n crossplane-system --no-headers 2>/dev/null || printf 'No PlatformCluster claims found.\n'
+
+  spokes:destroy:
+    desc: Delete spoke clusters
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - |
+        for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
+          kubectl delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
+          printf "✓ PlatformCluster claim deleted: %s\n" "$SPOKE"
+        done
 
   # ─── Agentic Platform ──────────────────────────────────────────────────────
 

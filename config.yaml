@@ -44,3 +44,15 @@ components:
   bifrost: true
   agentGateway: true
   agentCore: true
+
+# Spoke clusters (optional — hub-only by default)
+# Each entry provisions a spoke cluster via Crossplane from the hub.
+spokes: {}
+  # Example:
+  # spoke-dev:
+  #   region: us-west-2
+  #   environment: dev
+  #   kubernetesVersion: "1.35"
+  #   vpcCidr: "10.1.0.0/16"
+  #   autoMode: true
+
