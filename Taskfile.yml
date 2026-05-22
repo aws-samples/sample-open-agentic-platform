@@ -6,37 +6,37 @@ vars:
 
   # Parsed from config
   PLATFORM_REPO:
-    sh: yq '.platform.repo' {{.CONFIG_FILE}}
+    sh: yq -r '.platform.repo' {{.CONFIG_FILE}}
   PLATFORM_REF:
-    sh: yq '.platform.ref' {{.CONFIG_FILE}}
+    sh: yq -r '.platform.ref' {{.CONFIG_FILE}}
   CLUSTER_PROVIDER:
-    sh: yq '.platform.clusterProvider' {{.CONFIG_FILE}}
+    sh: yq -r '.platform.clusterProvider' {{.CONFIG_FILE}}
   AWS_REGION:
-    sh: yq '.aws.region' {{.CONFIG_FILE}}
+    sh: yq -r '.aws.region' {{.CONFIG_FILE}}
   AWS_ACCOUNT_ID:
-    sh: yq '.aws.accountId' {{.CONFIG_FILE}}
+    sh: yq -r '.aws.accountId' {{.CONFIG_FILE}}
   AWS_PROFILE:
-    sh: yq '.aws.profile // "default"' {{.CONFIG_FILE}}
+    sh: yq -r '.aws.profile // "default"' {{.CONFIG_FILE}}
   HUB_CLUSTER_NAME:
-    sh: yq '.hub.clusterName' {{.CONFIG_FILE}}
+    sh: yq -r '.hub.clusterName' {{.CONFIG_FILE}}
   DOMAIN:
-    sh: yq '.domain' {{.CONFIG_FILE}}
+    sh: yq -r '.domain' {{.CONFIG_FILE}}
   RESOURCE_PREFIX:
-    sh: yq '.resourcePrefix' {{.CONFIG_FILE}}
+    sh: yq -r '.resourcePrefix' {{.CONFIG_FILE}}
   IDC_INSTANCE_ARN:
-    sh: yq '.identityCenter.instanceArn' {{.CONFIG_FILE}}
+    sh: yq -r '.identityCenter.instanceArn' {{.CONFIG_FILE}}
   IDC_REGION:
-    sh: yq '.identityCenter.region' {{.CONFIG_FILE}}
+    sh: yq -r '.identityCenter.region' {{.CONFIG_FILE}}
   IDC_ADMIN_GROUP_ID:
-    sh: yq '.identityCenter.adminGroupId' {{.CONFIG_FILE}}
+    sh: yq -r '.identityCenter.adminGroupId' {{.CONFIG_FILE}}
   K8S_VERSION:
-    sh: yq '.hub.kubernetesVersion // "1.35"' {{.CONFIG_FILE}}
+    sh: yq -r '.hub.kubernetesVersion // "1.35"' {{.CONFIG_FILE}}
   AGENTIC_REPO_URL:
-    sh: yq '.agenticRepo.url' {{.CONFIG_FILE}}
+    sh: yq -r '.agenticRepo.url' {{.CONFIG_FILE}}
   AGENTIC_REPO_REVISION:
-    sh: yq '.agenticRepo.revision' {{.CONFIG_FILE}}
+    sh: yq -r '.agenticRepo.revision' {{.CONFIG_FILE}}
   AGENTIC_REPO_BASEPATH:
-    sh: yq '.agenticRepo.basepath' {{.CONFIG_FILE}}
+    sh: yq -r '.agenticRepo.basepath' {{.CONFIG_FILE}}
 
 tasks:
   install:
@@ -137,51 +137,13 @@ tasks:
 
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
+    env:
+      REPO_URL: "{{.AGENTIC_REPO_URL}}"
+      REVISION: "{{.AGENTIC_REPO_REVISION}}"
+      BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
     cmds:
       - task: agentic:label-clusters
-      - |
-        kubectl apply -f - <<EOF
-        apiVersion: argoproj.io/v1alpha1
-        kind: Application
-        metadata:
-          name: agent-platform-addons
-          namespace: argocd
-        spec:
-          project: default
-          sources:
-            - ref: values
-              repoURL: "{{.AGENTIC_REPO_URL}}"
-              targetRevision: "{{.AGENTIC_REPO_REVISION}}"
-            - repoURL: "{{.AGENTIC_REPO_URL}}"
-              path: "{{.AGENTIC_REPO_BASEPATH}}charts/application-sets"
-              targetRevision: "{{.AGENTIC_REPO_REVISION}}"
-              helm:
-                releaseName: agent-platform-addons
-                ignoreMissingValueFiles: true
-                valueFiles:
-                  - \$values/{{.AGENTIC_REPO_BASEPATH}}bootstrap/default/addons.yaml
-                  - \$values/{{.AGENTIC_REPO_BASEPATH}}environments/control-plane/addons.yaml
-                valuesObject:
-                  useSelectors: false
-                  globalSelectors:
-                    enable_agent_platform: "true"
-                  repoURLGit: "{{.AGENTIC_REPO_URL}}"
-                  repoURLGitRevision: "{{.AGENTIC_REPO_REVISION}}"
-                  repoURLGitBasePath: "{{.AGENTIC_REPO_BASEPATH}}"
-          destination:
-            namespace: argocd
-            server: https://kubernetes.default.svc
-          syncPolicy:
-            automated:
-              selfHeal: true
-              allowEmpty: true
-              prune: true
-            retry:
-              limit: 100
-            syncOptions:
-              - CreateNamespace=true
-              - ServerSideApply=true
-        EOF
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to all clusters with enable_agent_platform=true label.\n'
 
   # ─── Utilities ──────────────────────────────────────────────────────────────

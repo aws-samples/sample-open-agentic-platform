@@ -135,63 +135,53 @@ Infrastructure and application metrics:
 ## 📋 Prerequisites
 
 - Amazon EKS cluster (1.28+)
+- [Task](https://taskfile.dev) (task runner)
 - kubectl configured
 - Helm 3.x
-- AWS credentials with Bedrock access
+- AWS CLI configured with Bedrock access
+- `yq` (YAML processor)
 - Podman or Docker (for building custom tools)
 
 ## 🛠️ Quick Start
 
-### 1. Initial Setup
+### 1. Configure
 
 ```bash
-# Install Kagent CRDs and operator
-cd 00-initial-setup
-kubectl apply -f bedrock-key.yaml
-kubectl apply -f litellm-config.yaml
-kubectl apply -f litellm-deploy.yaml
-
-# Install Kagent via Helm
-helm install kagent-crds oci://public.ecr.aws/kagent-dev/kagent-crds --version 0.7.9 -n kagent --create-namespace
-helm install kagent oci://public.ecr.aws/kagent-dev/kagent --version 0.7.9 -n kagent -f values.yaml
+# Copy the template and fill in your values
+cp config.local.template config.local.yaml
 ```
 
-### 2. Deploy Observability Stack
+Edit `config.local.yaml` with your environment details:
 
+| Field | Description |
+|-------|-------------|
+| `aws.region` | AWS region (e.g. `us-west-2`) |
+| `aws.accountId` | Your 12-digit AWS account ID |
+| `aws.profile` | AWS CLI profile name |
+| `hub.clusterName` | EKS hub cluster name |
+| `agenticRepo.revision` | Branch/tag to deploy from |
+
+> **Note:** `config.local.yaml` is git-ignored and should never be committed.
+
+### 2. Install
+
+**Full install** (provisions base platform + agentic components):
 ```bash
-cd 05-observability/langfuse
-
-# Deploy Langfuse
-kubectl apply -f 00-langfuse-secrets.yaml
-kubectl apply -f 01-postgres.yaml
-kubectl apply -f 02-langfuse-deployment.yaml
-
-# Setup LiteLLM gateway features
-./setup-gateway-features.sh
-
-# Deploy Jaeger
-kubectl apply -f ../tracing/jaeger.yaml
-
-# Deploy Prometheus ServiceMonitor
-kubectl apply -f ../prometheus/kagent-servicemonitor.yaml
+task install
 ```
 
-### 3. Deploy Agents
+**Agentic components only** (if you already have an EKS platform with ArgoCD):
+```bash
+task agentic:install
+```
+
+This connects to your hub cluster, labels ArgoCD cluster secrets, and applies the bootstrap Application that deploys all agentic components via GitOps.
+
+### 3. Verify
 
 ```bash
-# Simple agent
-kubectl apply -f 01-first-agent/sample-agent.yaml
-
-# K8s ops agent
-kubectl apply -f 02-k8s-ops-agent/k8s-ops-agent.yaml
-
-# Multi-tool agent
-cd 03-multi-tool-agent
-./deploy.sh
-
-# Financial services multi-agent
-cd 04-multi-agents/financial-services
-./deploy.sh
+# Check ArgoCD application status
+task status
 ```
 
 ### 4. Access UIs
@@ -209,6 +199,16 @@ kubectl port-forward -n jaeger svc/jaeger 16686:16686
 # Grafana (metrics)
 kubectl port-forward -n monitoring svc/kube-prom-stack-grafana 3001:80
 ```
+
+### Available Tasks
+
+| Command | Description |
+|---------|-------------|
+| `task install` | Full install (platform + agentic) |
+| `task agentic:install` | Deploy agentic components only |
+| `task status` | Show ArgoCD application status |
+| `task upgrade` | Upgrade platform + agentic components |
+| `task destroy` | Remove agentic components (keeps base platform) |
 
 ## 📊 Observability in Action
 
