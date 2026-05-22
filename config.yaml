@@ -34,17 +34,6 @@ agenticRepo:
   revision: "main"
   basepath: "gitops/addons/"
 
-# Components to enable
-components:
-  kagent: true
-  litellm: true
-  langfuse: true
-  jaeger: true
-  otelCollector: true
-  bifrost: true
-  agentGateway: true
-  agentCore: true
-
 # Spoke clusters (optional — hub-only by default)
 # Each entry provisions a spoke cluster via Crossplane from the hub.
 spokes: {}
