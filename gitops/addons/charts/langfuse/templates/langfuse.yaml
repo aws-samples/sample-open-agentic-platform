@@ -194,5 +194,5 @@ spec:
   data:
     - secretKey: LANGFUSE_CLIENT_SECRET
       remoteRef:
-        key: {{ .Values.keycloak.secretManagerKey | default "hub/keycloak-clients" }}
+        key: {{ .Values.keycloak.secretManagerKey }}
         property: LANGFUSE_CLIENT_SECRET

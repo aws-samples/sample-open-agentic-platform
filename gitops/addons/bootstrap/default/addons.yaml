@@ -113,7 +113,6 @@ langfuse:
       kind: ExternalSecret
       jsonPointers:
         - /spec/dataFrom
-        - /spec/data
 
 jaeger:
   enabled: false

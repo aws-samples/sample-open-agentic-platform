@@ -14,7 +14,7 @@ keycloak:
   clientSecret: ""
   issuerUrl: ""
   disableSignup: "false"
-  secretManagerKey: ""
+  secretManagerKey: ""  # Set dynamically by ApplicationSet: <cluster-name>/keycloak-clients
 
 resources:
   requests:
