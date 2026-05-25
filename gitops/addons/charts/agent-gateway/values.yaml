@@ -18,11 +18,26 @@ global:
   # Gateway listener port
   gatewayPort: 8080
 
-# Ingress for exposing agent gateway via the platform ALB
+# Ingress for exposing agent gateway via the platform ALB.
+#
+# className=agent isolates the agentgateway behind a dedicated ALB
+# (group.name=agent), provisioned by the matching IngressClass deployed
+# by the appmod-blueprints `ingress-class-alb` chart. This avoids
+# polluting the shared `platform` ALB group — the upstream
+# IngressClassParams `platform` enforces group.name=platform and
+# overrides any per-Ingress group.name annotation.
 ingress:
   enabled: true
-  className: platform
+  className: agent
   host: ""
+  # TLS termination at the ALB.
+  # - tls: true (default) → ALB listens on HTTPS:443 with ssl-redirect.
+  #   Requires alb.ingress.kubernetes.io/certificate-arn (or auto-discovery
+  #   via host) to be resolvable.
+  # - tls: false → ALB listens on HTTP:80 only. Use this when an upstream
+  #   layer (e.g. CloudFront in `cloudfront-alb` exposure mode) handles
+  #   TLS termination and forwards plaintext HTTP to the ALB.
+  tls: true
 
 # MCP backend targets - the agent-core MCP servers
 mcpBackend:

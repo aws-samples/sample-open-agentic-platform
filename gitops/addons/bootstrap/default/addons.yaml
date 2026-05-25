@@ -354,6 +354,11 @@ agent-gateway:
     ingress:
       enabled: true
       host: '{{index .metadata.annotations "ingress_domain_name"}}'
+      # TLS at ALB unless the cluster sits behind CloudFront, which terminates
+      # TLS upstream and forwards plaintext HTTP. Driven by the `exposure_mode`
+      # cluster-secret annotation: `cloudfront-alb` → HTTP:80, anything else
+      # (or unset) → HTTPS:443. Helm coerces the string `"true"`/`"false"` to bool.
+      tls: '{{ if eq (index .metadata.annotations "exposure_mode") "cloudfront-alb" }}false{{ else }}true{{ end }}'
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
