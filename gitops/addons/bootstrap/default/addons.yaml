@@ -105,6 +105,9 @@ langfuse:
     ingress:
       enabled: true
       host: '{{.metadata.annotations.ingress_domain_name}}'
+      # See agent-gateway block for rationale: cloudfront-alb mode → HTTP:80,
+      # otherwise HTTPS:443 (default).
+      tls: '{{ if eq (index .metadata.annotations "exposure_mode") "cloudfront-alb" }}false{{ else }}true{{ end }}'
     keycloak:
       issuerUrl: '{{default (printf "https://%s/keycloak/realms/platform" .metadata.annotations.ingress_domain_name) (index .metadata.annotations "keycloak_issuer_url")}}'
       secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/keycloak-clients'
