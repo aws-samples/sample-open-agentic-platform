@@ -26,8 +26,17 @@ metadata:
   namespace: agentgateway-system
   annotations:
     alb.ingress.kubernetes.io/target-type: ip
+    {{- $tls := .Values.ingress.tls }}
+    {{- if kindIs "invalid" $tls }}{{- $tls = true }}{{- end }}
+    {{- if kindIs "string" $tls }}{{- $tls = ne (lower $tls) "false" }}{{- end }}
+    {{- if $tls }}
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+    {{- else }}
+    # TLS terminated upstream (e.g. CloudFront in `cloudfront-alb` exposure
+    # mode). ALB listens plaintext HTTP only.
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    {{- end }}
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
     argocd.argoproj.io/sync-wave: "10"
 spec:

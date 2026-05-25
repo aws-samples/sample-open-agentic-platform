@@ -30,6 +30,14 @@ ingress:
   enabled: true
   className: agent
   host: ""
+  # TLS termination at the ALB.
+  # - tls: true (default) → ALB listens on HTTPS:443 with ssl-redirect.
+  #   Requires alb.ingress.kubernetes.io/certificate-arn (or auto-discovery
+  #   via host) to be resolvable.
+  # - tls: false → ALB listens on HTTP:80 only. Use this when an upstream
+  #   layer (e.g. CloudFront in `cloudfront-alb` exposure mode) handles
+  #   TLS termination and forwards plaintext HTTP to the ALB.
+  tls: true
 
 # MCP backend targets - the agent-core MCP servers
 mcpBackend:
