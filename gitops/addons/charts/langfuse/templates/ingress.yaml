@@ -8,7 +8,6 @@ metadata:
     alb.ingress.kubernetes.io/target-type: ip
     {{- if .Values.ingress.name }}
     alb.ingress.kubernetes.io/load-balancer-name: {{ .Values.ingress.name }}
-    alb.ingress.kubernetes.io/group.name: {{ .Values.ingress.name }}
     {{- end }}
     {{- $tls := .Values.ingress.tls }}
     {{- if kindIs "invalid" $tls }}{{- $tls = true }}{{- end }}
