@@ -105,6 +105,9 @@ langfuse:
     ingress:
       enabled: true
       host: '{{.metadata.annotations.ingress_domain_name}}'
+      # Align ALB load-balancer-name + group.name with cluster-level ingress_name
+      # (e.g. 'peeks-hub-ingress' for CloudFront VPC origin), default 'platform'.
+      name: '{{.metadata.annotations.ingress_name}}'
       # See agent-gateway block for rationale: cloudfront-alb mode → HTTP:80,
       # otherwise HTTPS:443 (default).
       tls: '{{ if eq (index .metadata.annotations "exposure_mode") "cloudfront-alb" }}false{{ else }}true{{ end }}'
