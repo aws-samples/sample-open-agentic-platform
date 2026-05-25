@@ -18,10 +18,17 @@ global:
   # Gateway listener port
   gatewayPort: 8080
 
-# Ingress for exposing agent gateway via the platform ALB
+# Ingress for exposing agent gateway via the platform ALB.
+#
+# className=agent isolates the agentgateway behind a dedicated ALB
+# (group.name=agent), provisioned by the matching IngressClass deployed
+# by the appmod-blueprints `ingress-class-alb` chart. This avoids
+# polluting the shared `platform` ALB group — the upstream
+# IngressClassParams `platform` enforces group.name=platform and
+# overrides any per-Ingress group.name annotation.
 ingress:
   enabled: true
-  className: platform
+  className: agent
   host: ""
 
 # MCP backend targets - the agent-core MCP servers
