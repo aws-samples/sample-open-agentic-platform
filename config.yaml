@@ -31,7 +31,7 @@ identityCenter:
 # Agentic platform git repo (this repo — used by ArgoCD)
 agenticRepo:
   url: "https://github.com/aws-samples/sample-open-agentic-platform.git"
-  revision: "main"
+  revision: "feature/agent-platform"
   basepath: "gitops/addons/"
 
 # Spoke clusters (optional — hub-only by default)
