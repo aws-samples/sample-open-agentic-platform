@@ -1,4 +1,4 @@
 clusterName: spoke-dev
 labels:
   environment: dev
-  tenant: workshop
+  tenant: default
