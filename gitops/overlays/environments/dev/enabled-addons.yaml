@@ -1,0 +1,18 @@
+# Enabled addons for spoke-dev clusters.
+# Keys use underscores matching the enable_<addon> label convention.
+enabledAddons:
+  # Core
+  metrics_server: true
+  ingress_class_alb: true
+  aws_load_balancer_controller: true
+  external_secrets: true
+  external_dns: true
+  # Security
+  kyverno: true
+  kyverno_policies: true
+  # Observability
+  kube_state_metrics: true
+  prometheus_node_exporter: true
+  aws_for_fluentbit: true
+  # Agentic Platform
+  agent_platform: true

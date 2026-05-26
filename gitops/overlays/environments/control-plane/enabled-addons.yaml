@@ -1,0 +1,7 @@
+# Enabled addons for the hub (control-plane) cluster.
+# Keys use underscores matching the enable_<addon> label convention.
+# Hub addons are primarily managed by the platform repo's own overlays.
+# This file adds agentic-platform-specific labels.
+enabledAddons:
+  # Agentic Platform
+  agent_platform: true
