@@ -4,7 +4,7 @@
 # Platform base (appmod-blueprints)
 platform:
   repo: "https://github.com/aws-samples/appmod-blueprints.git"
-  ref: "main"                          # Tag or branch (e.g., "v1.0.0")
+  ref: "feature/agent-platform"                          # Tag or branch (e.g., "v1.0.0")
   clusterProvider: "kind-crossplane"
 
 # AWS
@@ -31,7 +31,7 @@ identityCenter:
 # Agentic platform git repo (this repo — used by ArgoCD)
 agenticRepo:
   url: "https://github.com/aws-samples/sample-open-agentic-platform.git"
-  revision: "feature/agent-platform"
+  revision: "main"
   basepath: "gitops/addons/"
 
 # Spoke clusters (optional — hub-only by default)
