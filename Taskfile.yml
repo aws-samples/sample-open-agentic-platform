@@ -1,73 +1,219 @@
 version: '3'
 
+vars:
+  CONFIG_FILE: '{{.CONFIG_FILE | default "config.local.yaml"}}'
+  PLATFORM_DIR: '.platform'
+
+  # Parsed from config
+  PLATFORM_REPO:
+    sh: yq -r '.platform.repo' {{.CONFIG_FILE}}
+  PLATFORM_REF:
+    sh: yq -r '.platform.ref' {{.CONFIG_FILE}}
+  CLUSTER_PROVIDER:
+    sh: yq -r '.platform.clusterProvider' {{.CONFIG_FILE}}
+  AWS_REGION:
+    sh: yq -r '.aws.region' {{.CONFIG_FILE}}
+  AWS_ACCOUNT_ID:
+    sh: yq -r '.aws.accountId' {{.CONFIG_FILE}}
+  AWS_PROFILE:
+    sh: yq -r '.aws.profile // "default"' {{.CONFIG_FILE}}
+  HUB_CLUSTER_NAME:
+    sh: yq -r '.hub.clusterName' {{.CONFIG_FILE}}
+  DOMAIN:
+    sh: yq -r '.domain' {{.CONFIG_FILE}}
+  RESOURCE_PREFIX:
+    sh: yq -r '.resourcePrefix' {{.CONFIG_FILE}}
+  IDC_INSTANCE_ARN:
+    sh: yq -r '.identityCenter.instanceArn' {{.CONFIG_FILE}}
+  IDC_REGION:
+    sh: yq -r '.identityCenter.region' {{.CONFIG_FILE}}
+  IDC_ADMIN_GROUP_ID:
+    sh: yq -r '.identityCenter.adminGroupId' {{.CONFIG_FILE}}
+  K8S_VERSION:
+    sh: yq -r '.hub.kubernetesVersion // "1.35"' {{.CONFIG_FILE}}
+  AGENTIC_REPO_URL:
+    sh: yq -r '.agenticRepo.url' {{.CONFIG_FILE}}
+  AGENTIC_REPO_REVISION:
+    sh: yq -r '.agenticRepo.revision' {{.CONFIG_FILE}}
+  AGENTIC_REPO_BASEPATH:
+    sh: yq -r '.agenticRepo.basepath' {{.CONFIG_FILE}}
+
 tasks:
-  build-helm-dependencies:
-    desc: Build Helm chart dependencies for addon charts that require them
+  install:
+    desc: Install the full agentic platform (base platform + spokes + agentic components)
     cmds:
-      - echo "Adding required Helm repositories..."
-      - helm repo add fluxcd-community https://fluxcd-community.github.io/helm-charts || true
-      - helm repo update
-      - echo "Building dependencies for flux chart..."
-      - cd ./gitops/addons/charts/flux && helm dependency build
-      - echo "All Helm chart dependencies built successfully!"
+      - task: platform:install
+      - task: spokes:install
+      - task: agentic:install
 
-  test-applicationsets:
-    desc: Test ApplicationSet generation locally using helm template
+  upgrade:
+    desc: Upgrade the platform, spokes, and agentic components
+    cmds:
+      - task: platform:upgrade
+      - task: spokes:install
+      - task: agentic:upgrade
+
+  # ─── Platform (appmod-blueprints) ───────────────────────────────────────────
+
+  platform:clone:
+    desc: Clone or update the base platform repo
     cmds:
       - |
-        cd ./gitops/addons/charts/application-sets && \
-        helm template test-appsets . \
-          -f ../../bootstrap/default/addons.yaml \
-          -f ../../environments/dev/addons.yaml \
-          --set repoURLGit="https://github.com/your-org/sample-agent-platform-on-eks" \
-          --set repoURLGitRevision="main" \
-          --set repoURLGitBasePath="gitops/addons/"
+        if [ -d "{{.PLATFORM_DIR}}/.git" ]; then
+          cd {{.PLATFORM_DIR}} && git fetch origin && git checkout {{.PLATFORM_REF}} && git pull origin {{.PLATFORM_REF}} 2>/dev/null || true
+        else
+          git clone --branch {{.PLATFORM_REF}} --single-branch {{.PLATFORM_REPO}} {{.PLATFORM_DIR}}
+        fi
+    status:
+      - test -d "{{.PLATFORM_DIR}}/.git"
 
-  test-agent-core-chart:
-    desc: Test agent-core helm chart rendering
+  platform:configure:
+    desc: Generate platform config.local.yaml from agentic config
+    deps: [platform:clone]
     cmds:
       - |
-        cd ./gitops/addons/charts/agent-core && \
-        helm template agent-core . \
-          -f values.yaml \
-          --set global.awsRegion=us-west-2 \
-          --set global.eksClusterName=dev \
-          --set global.projectName=test-agent \
-          --set global.terraformRepoUrl=https://github.com/test/repo \
-          --set mcpServer.image.repository=test-repo/mcp-server \
-          --dry-run
+        cat > {{.PLATFORM_DIR}}/config.local.yaml <<EOF
+        clusterProvider: "{{.CLUSTER_PROVIDER}}"
+        repo:
+          url: "{{.PLATFORM_REPO}}"
+          revision: "{{.PLATFORM_REF}}"
+          basepath: "gitops/"
+        hub:
+          clusterName: "{{.HUB_CLUSTER_NAME}}"
+          kubernetesVersion: "{{.K8S_VERSION}}"
+        aws:
+          region: "{{.AWS_REGION}}"
+          accountId: "{{.AWS_ACCOUNT_ID}}"
+          profile: "{{.AWS_PROFILE}}"
+        domain: "{{.DOMAIN}}"
+        resourcePrefix: "{{.RESOURCE_PREFIX}}"
+        identityCenter:
+          instanceArn: "{{.IDC_INSTANCE_ARN}}"
+          region: "{{.IDC_REGION}}"
+          adminGroupId: "{{.IDC_ADMIN_GROUP_ID}}"
+        argocdCapability:
+          name: "argocd"
+        EOF
 
-  test-litellm-chart:
-    desc: Test LiteLLM helm chart rendering
+  platform:install:
+    desc: Provision the base EKS platform
+    cmds:
+      - task: platform:clone
+      - task: platform:configure
+      - cd {{.PLATFORM_DIR}} && task install
+
+  platform:upgrade:
+    desc: Upgrade the base platform to the configured ref
+    cmds:
+      - cd {{.PLATFORM_DIR}} && git fetch origin && git checkout {{.PLATFORM_REF}} && git pull origin {{.PLATFORM_REF}} 2>/dev/null || true
+      - task: platform:configure
+      - cd {{.PLATFORM_DIR}} && task install
+
+  # ─── Spokes ──────────────────────────────────────────────────────────────────
+
+  spokes:install:
+    desc: Provision spoke clusters via Crossplane PlatformCluster claims
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - |
+        SPOKES=$(yq -r '.spokes // {}' {{.CONFIG_FILE}})
+        if [ "$SPOKES" = "{}" ] || [ "$SPOKES" = "null" ]; then
+          printf '✓ No spokes configured (hub-only).\n'
+          exit 0
+        fi
+        for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
+          REGION=$(yq -r ".spokes.${SPOKE}.region // \"{{.AWS_REGION}}\"" {{.CONFIG_FILE}})
+          K8S_VER=$(yq -r ".spokes.${SPOKE}.kubernetesVersion // \"1.35\"" {{.CONFIG_FILE}})
+          VPC_CIDR=$(yq -r ".spokes.${SPOKE}.vpcCidr // \"10.1.0.0/16\"" {{.CONFIG_FILE}})
+          AUTO_MODE=$(yq -r ".spokes.${SPOKE}.autoMode // true" {{.CONFIG_FILE}})
+          kubectl apply -f - <<EOF
+        apiVersion: platform.gitops.io/v1alpha1
+        kind: PlatformCluster
+        metadata:
+          name: ${SPOKE}
+          namespace: crossplane-system
+          annotations:
+            crossplane.io/external-name: ${SPOKE}
+        spec:
+          region: ${REGION}
+          clusterName: ${SPOKE}
+          vpcCidr: "${VPC_CIDR}"
+          kubernetesVersion: "${K8S_VER}"
+          autoMode: ${AUTO_MODE}
+          argoCDRoleArn: "arn:aws:iam::{{.AWS_ACCOUNT_ID}}:role/{{.HUB_CLUSTER_NAME}}-ArgoCDCapabilityRole"
+          writeConnectionSecretToRef:
+            name: ${SPOKE}-kubeconfig
+        EOF
+          printf "✓ PlatformCluster claim applied: %s\n" "$SPOKE"
+        done
+
+  spokes:status:
+    desc: Check spoke cluster provisioning status
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - kubectl get platformclusters.platform.gitops.io -n crossplane-system --no-headers 2>/dev/null || printf 'No PlatformCluster claims found.\n'
+
+  spokes:destroy:
+    desc: Delete spoke clusters
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - |
+        for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
+          kubectl delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
+          printf "✓ PlatformCluster claim deleted: %s\n" "$SPOKE"
+        done
+
+  # ─── Agentic Platform ──────────────────────────────────────────────────────
+
+  agentic:install:
+    desc: Deploy agentic platform components to the hub (and spokes via ArgoCD)
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - task: agentic:bootstrap
+
+  agentic:upgrade:
+    desc: Sync agentic platform components (ArgoCD picks up changes automatically)
+    cmds:
+      - task: agentic:ensure-kubeconfig
+      - task: agentic:bootstrap
+
+  agentic:ensure-kubeconfig:
+    desc: Ensure kubectl points to the hub cluster
+    cmds:
+      - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}}
+
+  agentic:label-clusters:
+    desc: Label cluster secrets to enable agentic platform targeting
     cmds:
       - |
-        cd ./gitops/addons/charts/litellm && \
-        helm template litellm . -f values.yaml --dry-run
+        for secret in $(kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=cluster -o name); do
+          kubectl label -n argocd "$secret" enable_agent_platform=true --overwrite
+        done
+      - printf '✓ Cluster secrets labeled with enable_agent_platform=true\n'
 
-  test-langfuse-chart:
-    desc: Test Langfuse helm chart rendering
+  agentic:bootstrap:
+    desc: Apply the agentic platform bootstrap Application to ArgoCD
+    env:
+      REPO_URL: "{{.AGENTIC_REPO_URL}}"
+      REVISION: "{{.AGENTIC_REPO_REVISION}}"
+      BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
+      HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
-      - |
-        cd ./gitops/addons/charts/langfuse && \
-        helm template langfuse . -f values.yaml --dry-run
+      - task: agentic:label-clusters
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
+      - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to all clusters with enable_agent_platform=true label.\n'
 
-  test-all:
-    desc: Run all chart tests
-    cmds:
-      - task: test-applicationsets
-      - task: test-agent-core-chart
-      - task: test-litellm-chart
-      - task: test-langfuse-chart
+  # ─── Utilities ──────────────────────────────────────────────────────────────
 
-  clean-helm-dependencies:
-    desc: Clean all generated Helm dependency files
+  status:
+    desc: Show status of agentic platform ArgoCD applications
     cmds:
-      - echo "Cleaning Chart.lock files and charts/ directories..."
-      - find ./gitops/addons/charts -name "Chart.lock" -delete
-      - find ./gitops/addons/charts -name "charts" -type d -exec rm -rf {} + 2>/dev/null || true
-      - echo "Cleaned all Helm dependency files"
+      - task: agentic:ensure-kubeconfig
+      - kubectl get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl get applications.argoproj.io -n argocd --no-headers | grep -E "kagent|litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore"
 
-  bootstrap:
-    desc: Bootstrap the agent platform on the current cluster
+  destroy:
+    desc: Remove agentic platform components (does not destroy the base platform)
     cmds:
-      - ./scripts/bootstrap.sh
+      - task: agentic:ensure-kubeconfig
+      - kubectl delete application agent-platform-addons -n argocd --ignore-not-found
+      - printf '\n✓ Agentic platform bootstrap removed. ArgoCD will prune agentic components.\n'
