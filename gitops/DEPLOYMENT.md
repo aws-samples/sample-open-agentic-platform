@@ -33,7 +33,7 @@ Prerequisites: Crossplane must be installed with `provider-family-aws`, `provide
 
 ## Deployment via appmod-blueprints
 
-When deployed through the [appmod-blueprints](https://github.com/aws-samples/appmod-blueprints) platform, set `agent_platform: true` in `enabled-addons.yaml`. The appmod-blueprints bootstrap chart handles everything — see `gitops/AGENT-PLATFORM.md` in that repo.
+When deployed through the [appmod-blueprints](https://github.com/aws-samples/appmod-blueprints) platform, the `enable_agent_platform` label is set declaratively via `gitops/overlays/environments/<env>/enabled-addons.yaml` in this repo. The platform's fleet-secrets mechanism reads these overlays and applies the label to cluster secrets automatically — no manual labeling required.
 
 ## Standalone Deployment
 
@@ -126,7 +126,7 @@ spec:
       - ServerSideApply=true
 ```
 
-The hub cluster secret must have `enable_agent_platform: "true"` label for the generated ApplicationSets to match.
+The hub cluster secret must have `enable_agent_platform: "true"` label for the generated ApplicationSets to match. This label is set declaratively by the fleet-secret chart, which reads `enabledAddons.agent_platform: true` from `gitops/overlays/environments/<env>/enabled-addons.yaml` in this repo. To disable the agentic platform on a specific environment, set `agent_platform: false` in the corresponding overlay.
 
 ## How the Agent Platform Works
 
