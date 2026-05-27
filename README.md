@@ -35,7 +35,6 @@ Edit `config.local.yaml`:
 | `domain` | | Ingress domain (must have ACM cert + Route53 zone) |
 | `identityCenter` | `instanceArn`, `region`, `adminGroupId` | SSO for ArgoCD |
 | `agenticRepo` | `url`, `revision`, `basepath` | This repo's git coordinates (for ArgoCD) |
-| `components` | `kagent`, `litellm`, `langfuse`, etc. | Toggle agentic components |
 | `spokes` | | Optional spoke clusters (see below) |
 
 ### Spoke Clusters
@@ -57,6 +56,18 @@ spokes:
 ```
 
 Spokes are provisioned via Crossplane from the hub. Agentic components deploy to all clusters automatically.
+
+### Fleet Management & Targeting
+
+This repo controls which clusters receive the agentic platform via `gitops/overlays/environments/*/enabled-addons.yaml`:
+
+```yaml
+# gitops/overlays/environments/dev/enabled-addons.yaml
+enabledAddons:
+  agent_platform: true   # deploy agentic components to dev clusters
+```
+
+Set `agent_platform: false` to exclude an environment. Fleet member definitions in `gitops/fleet/members/` control spoke discovery.
 
 ## Available Commands
 

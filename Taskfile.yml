@@ -93,6 +93,10 @@ tasks:
           adminGroupId: "{{.IDC_ADMIN_GROUP_ID}}"
         argocdCapability:
           name: "argocd"
+        fleetRepo:
+          url: "{{.AGENTIC_REPO_URL}}"
+          revision: "{{.AGENTIC_REPO_REVISION}}"
+          basepath: "gitops/"
         EOF
 
   platform:install:
@@ -182,15 +186,6 @@ tasks:
     cmds:
       - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}}
 
-  agentic:label-clusters:
-    desc: Label cluster secrets to enable agentic platform targeting
-    cmds:
-      - |
-        for secret in $(kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=cluster -o name); do
-          kubectl label -n argocd "$secret" enable_agent_platform=true --overwrite
-        done
-      - printf '✓ Cluster secrets labeled with enable_agent_platform=true\n'
-
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
     env:
@@ -199,9 +194,8 @@ tasks:
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
       HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
-      - task: agentic:label-clusters
       - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
-      - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to all clusters with enable_agent_platform=true label.\n'
+      - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
 
   # ─── Utilities ──────────────────────────────────────────────────────────────
 

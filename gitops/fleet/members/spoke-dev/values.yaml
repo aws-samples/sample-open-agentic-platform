@@ -1,0 +1,4 @@
+clusterName: spoke-dev
+labels:
+  environment: dev
+  tenant: default
