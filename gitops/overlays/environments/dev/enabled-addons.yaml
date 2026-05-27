@@ -1,5 +1,4 @@
-# Enabled addons for spoke-dev clusters.
-# Keys use underscores matching the enable_<addon> label convention.
+# Enabled addons for the dev environment (spoke clusters).
 enabledAddons:
   # Core
   metrics_server: true
