@@ -203,7 +203,7 @@ tasks:
     desc: Show status of agentic platform ArgoCD applications
     cmds:
       - task: agentic:ensure-kubeconfig
-      - kubectl get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl get applications.argoproj.io -n argocd --no-headers | grep -E "kagent|litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore"
+      - kubectl get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl get applications.argoproj.io -n argocd --no-headers | grep -E "litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore"
 
   destroy:
     desc: Remove agentic platform components (does not destroy the base platform)

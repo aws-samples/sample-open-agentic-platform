@@ -1,6 +1,6 @@
 # Open Agentic Platform on Amazon EKS
 
-A production-ready AI agent platform built on Amazon EKS, featuring KAgent, LiteLLM gateway, Langfuse observability, AgentGateway (MCP auth), and multi-agent orchestration.
+A production-ready AI agent platform built on Amazon EKS, featuring LiteLLM gateway, Langfuse observability, AgentGateway (MCP auth), and multi-agent orchestration.
 
 ## Quick Start
 
@@ -103,7 +103,7 @@ Set `agent_platform: false` to exclude an environment. Fleet member definitions 
     │  ArgoCD ─── watches both repos (read-only)      │
     │  Crossplane ─── provisions spoke clusters       │
     │                                                  │
-    │  Agentic: KAgent, LiteLLM, Langfuse, Jaeger,   │
+    │  Agentic: LiteLLM, Langfuse, Jaeger,            │
     │           AgentGateway, Bifrost, AgentCore      │
     └─────────────────────────────────────────────────┘
 ```
@@ -112,7 +112,6 @@ Set `agent_platform: false` to exclude an environment. Fleet member definitions 
 
 | Component | Purpose |
 |-----------|---------|
-| **KAgent** | Kubernetes-native AI agent operator |
 | **LiteLLM** | LLM gateway with rate limiting, caching, fallbacks |
 | **Langfuse** | LLM observability — traces, costs, analytics |
 | **Jaeger** | Distributed tracing for agent interactions |
@@ -135,7 +134,6 @@ The `workshop/` directory contains hands-on examples:
 
 ## Resources
 
-- [KAgent](https://kagent.dev)
 - [LiteLLM](https://docs.litellm.ai)
 - [Langfuse](https://langfuse.com/docs)
 - [Amazon Bedrock](https://aws.amazon.com/bedrock)

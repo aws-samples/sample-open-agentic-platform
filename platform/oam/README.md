@@ -1,6 +1,6 @@
 # OAM Components for Agents and MCP Servers
 
-This directory contains OAM (Open Application Model) component definitions and examples for deploying AI agents and MCP servers with Argo Rollouts on Kubernetes.
+KubeVela ComponentDefinitions and Application examples for deploying AI agents and MCP servers with Argo Rollouts on Kubernetes.
 
 For architectural decisions and rationale, see **[DESIGN.md](DESIGN.md)**.
 
@@ -8,195 +8,170 @@ For architectural decisions and rationale, see **[DESIGN.md](DESIGN.md)**.
 
 | Component | File | Description |
 |---|---|---|
-| `agent` | `agent.cue` | A2A agent with blue-green deployment and agentgateway registration |
-| `mcp-server` | `mcp-server.cue` | MCP server with blue-green deployment, agentgateway backend, and tool-level auth |
+| `agent` | `definitions/components/agent.cue` | A2A agent with blue-green deployment, pluggable memory, and AgentGateway registration |
+| `mcp-server` | `definitions/components/mcp-server.cue` | MCP server with blue-green deployment and AgentGateway backend registration |
+| `agentcore-memory` | `definitions/components/agentcore-memory.cue` | Bedrock AgentCore Memory provisioned via the `crossplane-agentcore` Composition |
 
-## Files
+These ComponentDefinitions are packaged for cluster registration by the `oam-agent-components` Helm chart at `gitops/addons/charts/oam-agent-components/`.
 
-### Agent Component
-- `agent.cue` - Agent ComponentDefinition (CUE format)
-- `agent-crd.yaml` - Agent ComponentDefinition wrapped for KubeVela registration
-- `example-agent-simple.yaml` - Basic agent example
-- `example-agent-with-mcp.yaml` - Agent with MCP tool integration
-- `example-agent-minimal.yaml` - Minimal agent example
-- `kagent-rollout-component.yaml` - Legacy ComponentDefinition with canary/blue-green support
+## Layout
 
-### MCP Server Component
-- `mcp-server.cue` - MCP server ComponentDefinition (CUE format)
-- `example-mcp-local.yaml` - Example: deploy mcp-time-server via KubeVela
+```
+platform/oam/
+├── DESIGN.md                      Architectural decisions
+├── README.md                      This file
+├── generate.sh                    Regenerate ComponentDefinition YAMLs from CUE
+├── definitions/
+│   └── components/
+│       ├── agent.cue
+│       ├── mcp-server.cue
+│       └── agentcore-memory.cue
+└── examples/
+    ├── example-agent-minimal.yaml          Minimal agent
+    ├── example-agent-simple.yaml           Agent + LLM gateway
+    ├── example-agent-with-mcp.yaml         Agent integrated with an MCP server
+    ├── example-agent-agentcore-memory.yaml Agent backed by Bedrock AgentCore Memory
+    ├── example-agent-milvus-memory.yaml    Agent backed by Milvus vector store
+    ├── example-mcp-local.yaml              MCP server
+    ├── test-agentcore-memory.yaml          Standalone AgentCore Memory test
+    ├── agentgateway-backend.yaml           AgentGateway backend manifest
+    ├── agentgateway-httproute.yaml         AgentGateway HTTPRoute manifest
+    ├── kgateway-session-affinity.yaml      kgateway BackendConfigPolicy for sticky sessions
+    └── register-agent-with-gateway.yaml    Custom HTTPRoute examples
+```
 
-### Infrastructure
-- `agentgateway-backend.yaml` - AgentGateway backend configuration for Bedrock
-- `agentgateway-httproute.yaml` - HTTP routing configuration
-- `register-agent-with-gateway.yaml` - Examples for registering agents with AgentGateway
-- `appmod-service.cue` - Full-featured service ComponentDefinition with canary/blue-green support
-- `litellm-deployment.yaml` - LiteLLM proxy deployment
-- `kgateway-session-affinity.yaml` - Session affinity configuration
+## Regenerating ComponentDefinition YAMLs
 
-### Utilities
-- `generate-component-from-cue.sh` - Helper script to generate CRD from CUE files
-- `vela-cue-commands.md` - Documentation for vela CLI commands
+The Helm chart at `gitops/addons/charts/oam-agent-components/templates/` ships pre-generated YAMLs. To regenerate from CUE:
 
-## Important Note About Images
+```bash
+cd platform/oam
+./generate.sh
+```
 
-The example files use `tiangolo/uvicorn-gunicorn-fastapi:python3.11` as a placeholder image for testing the Argo Rollouts mechanism. This is NOT a Strands agent image and will not provide actual agent functionality.
+Output lands under `gitops/addons/charts/oam-agent-components/templates/`.
 
-To use real Strands agents, you must build and push your own images following the instructions below.
+## Image notes
+
+The example files use `tiangolo/uvicorn-gunicorn-fastapi:python3.11` as a placeholder image for testing the Argo Rollouts mechanism. For real agent functionality, build a Strands agent image using `applications/strands-agent-base/`.
 
 ## Prerequisites
 
-1. Kubernetes cluster with:
-   - KubeVela installed
-   - Argo Rollouts installed
-   - AWS Load Balancer Controller (for ALB traffic routing)
+- Kubernetes cluster with:
+  - KubeVela installed (provided by the `kubevela` addon from appmod-blueprints)
+  - Argo Rollouts installed
+  - AWS Load Balancer Controller (for ALB traffic routing, when using ingress)
+- AWS resources:
+  - Amazon Bedrock access with desired Claude/Anthropic models enabled
+  - ECR repository for agent images
+  - IAM roles / Pod Identity associations for Bedrock access (when bypassing the LLM gateway)
 
-2. AWS resources:
-   - Amazon Bedrock access with Claude models enabled
-   - ECR repository for your Strands agent images
-   - IAM roles/service accounts for pod identity
+## Building a Strands agent image
 
-## Building a Strands Agent Image
-
-You can build a Strands agent image using the provided application in `applications/strands/`:
+The reference Strands agent app lives at `applications/strands-agent-base/`:
 
 ```bash
-# Navigate to the Strands application directory
-cd applications/strands
+cd applications/strands-agent-base
 
-# Build for AMD64 (compatible with AWS EKS)
+# Build for AMD64 (compatible with EKS)
 ./build.sh
 
-# Or use Podman
+# Or with Podman
 ./build-podman.sh
 
 # Push to ECR
 ./build.sh push
-# Or with Podman
-./build-podman.sh push
 ```
 
-The build scripts automatically:
-- Build for AMD64 architecture
-- Detect AWS account ID and region
-- Create ECR repository if needed
-- Tag and push to ECR
+The build scripts auto-detect AWS account/region and create the ECR repo if needed. See `applications/strands-agent-base/README.md` for full details.
 
-See `applications/strands/README.md` for detailed instructions.
+## Pod Identity for Bedrock
 
-Alternatively, follow the [official Strands EKS deployment guide](https://strandsagents.com/latest/documentation/docs/examples/deploy_to_eks/).
+### Option 1: LLM Gateway (recommended)
 
-## Setting up Pod Identity for Bedrock
+LiteLLM proxy exposes an OpenAI-compatible endpoint and authenticates to Bedrock via its own Pod Identity. Agents talk to the gateway over plain HTTP — no AWS credentials in agent pods.
 
-### Option 1: Using LLM Gateway (Recommended)
-
-The LLM Gateway (LiteLLM proxy) provides centralized LLM access with pod identity authentication. The gateway handles authentication to Bedrock, so individual agents don't need AWS credentials.
-
-Benefits:
-- No AWS credentials needed in agent pods
-- Centralized access control and monitoring
-- Simplified agent deployment
-- Support for multiple LLM providers
-
-The agent.cue ComponentDefinition uses LLM Gateway by default:
+The `agent` ComponentDefinition uses LLM Gateway by default:
 
 ```yaml
 modelConfig:
   modelId: claude-sonnet
-  llmGatewayUrl: http://litellm-proxy.agentgateway-system.svc.cluster.local:4000
+  llmGatewayUrl: http://litellm-proxy.litellm.svc.cluster.local:4000
   llmGatewayApiKey: sk-1234
 ```
 
-See `example-agent-simple.yaml` for a complete example.
+See `examples/example-agent-simple.yaml` for a complete Application.
 
-### Option 2: Direct Bedrock Access with Pod Identity
+### Option 2: Direct Bedrock access via Pod Identity
 
-If not using LLM Gateway, create IAM policy and pod identity association for direct Bedrock access:
+For agents that call Bedrock directly:
 
 ```bash
-# Create Bedrock policy
-cat > bedrock-policy.json << EOF
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
-      "Resource": "*"
-    }
-  ]
-}
-EOF
+NAMESPACE=default      # or whatever namespace your agent runs in
+SA=weather-agent-sa
+CLUSTER=<your-cluster-name>
 
 aws iam create-policy \
   --policy-name strands-agents-bedrock-policy \
-  --policy-document file://bedrock-policy.json
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "*"
+    }]
+  }'
 
-# Create pod identity association
 eksctl create podidentityassociation \
-  --cluster your-cluster-name \
-  --namespace kagent \
-  --service-account-name weather-agent-sa \
+  --cluster $CLUSTER \
+  --namespace $NAMESPACE \
+  --service-account-name $SA \
   --permission-policy-arns arn:aws:iam::${AWS_ACCOUNT_ID}:policy/strands-agents-bedrock-policy \
   --role-name eks-strands-weather-agent
 ```
 
-## Deploying an Agent
+## Deploying an agent
 
-### Install the ComponentDefinition
-
-```bash
-kubectl apply -f kagent-rollout-component.yaml
-```
-
-### Deploy a Canary Agent
+Once the `oam-agent-components` chart is installed, ComponentDefinitions are registered and you can apply Applications:
 
 ```bash
-# Update the image in example-strands-agent.yaml to your ECR image
-kubectl apply -f example-strands-agent.yaml
+# Pick an example
+kubectl apply -f examples/example-agent-simple.yaml
+
+# Or deploy your own using the agent ComponentDefinition
 ```
 
-This creates:
-- A Rollout with canary deployment strategy
-- Two services: `weather-agent-stable` and `weather-agent-canary`
-- An agent card ConfigMap for discovery
+Each agent Application creates:
+- Argo Rollout (blue-green by default)
+- Stable + preview Services
+- Agent Card ConfigMap (for A2A discovery)
+- HTTPRoute against `agentgateway-proxy` (when `registerWithGateway: true`)
 
-### Deploy a Blue-Green Agent
+## Monitoring rollouts
 
 ```bash
-kubectl apply -f example-strands-agent-bluegreen.yaml
+NAMESPACE=default      # adjust for your agent
+
+# Watch rollout
+kubectl argo rollouts get rollout <agent-name> -n $NAMESPACE --watch
+
+# Promote a paused canary/blue-green
+kubectl argo rollouts promote <agent-name> -n $NAMESPACE
+
+# Abort
+kubectl argo rollouts abort <agent-name> -n $NAMESPACE
+
+# Restart
+kubectl argo rollouts restart <agent-name> -n $NAMESPACE
 ```
 
-This creates:
-- A Rollout with blue-green deployment strategy
-- Two services: `assistant-agent-stable` and `assistant-agent-preview`
-- Manual promotion control
+## AgentGateway registration
 
-## Monitoring Rollouts
+AgentGateway uses Kubernetes Gateway API to route to agents.
 
-```bash
-# Watch rollout progress
-kubectl argo rollouts get rollout weather-agent -n kagent --watch
+### Automatic registration (default)
 
-# Promote a canary deployment
-kubectl argo rollouts promote weather-agent -n kagent
-
-# Abort a rollout
-kubectl argo rollouts abort weather-agent -n kagent
-
-# Restart a rollout
-kubectl argo rollouts restart weather-agent -n kagent
-```
-
-## Registering Agents with AgentGateway
-
-AgentGateway uses Kubernetes Gateway API to route requests to agents. 
-
-### Automatic Registration (Default)
-
-When using the `agent.cue` ComponentDefinition, agents are automatically registered with AgentGateway by default. The component creates an HTTPRoute that routes traffic from the gateway to your agent's stable service.
+The `agent` ComponentDefinition creates an HTTPRoute by default:
 
 ```yaml
 apiVersion: core.oam.dev/v1beta1
@@ -211,26 +186,24 @@ spec:
         name: assistant
         namespace: agents
         # ... other properties ...
-        
-        # Gateway registration (enabled by default)
-        registerWithGateway: true  # Default: true
+
+        # Gateway registration (default: true)
+        registerWithGateway: true
 ```
 
-This automatically creates:
-- Service with `appProtocol: kgateway.dev/a2a` annotation
-- HTTPRoute pointing to `agentgateway-proxy`
-- Routes all traffic (/) to the agent's stable service
+This creates:
+- Service with `appProtocol: kgateway.dev/a2a`
+- HTTPRoute pointing to `agentgateway-proxy` in `agentgateway-system`
+- Default route from `/` to the stable Service
 
-### Manual Registration
+### Manual / custom registration
 
-To disable automatic registration and create custom routes:
+To disable auto-registration and write your own routes:
 
 ```yaml
 properties:
-  registerWithGateway: false  # Disable auto-registration
+  registerWithGateway: false
 ```
-
-Then create your own HTTPRoute for custom routing (path-based, hostname-based, etc.):
 
 ```yaml
 # Custom HTTPRoute for path-based routing
@@ -245,63 +218,55 @@ spec:
     namespace: agentgateway-system
   rules:
   - matches:
-    - path:
-        type: PathPrefix
-        value: /assistant
+    - path: { type: PathPrefix, value: /assistant }
     filters:
     - type: URLRewrite
       urlRewrite:
-        path:
-          type: ReplacePrefixMatch
-          replacePrefixMatch: /
+        path: { type: ReplacePrefixMatch, replacePrefixMatch: / }
     backendRefs:
-    - name: assistant-agent-stable
+    - name: assistant-stable
       port: 8083
 ```
 
-See `register-agent-with-gateway.yaml` for more custom routing examples.
+See `examples/register-agent-with-gateway.yaml` for more.
 
-### Access Registered Agents
-
-Once registered, agents are accessible through the gateway:
+### Calling registered agents
 
 ```bash
-# Get gateway endpoint
-GATEWAY_URL=$(kubectl get svc -n agentgateway-system agentgateway-proxy -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+GATEWAY_URL=$(kubectl get svc -n agentgateway-system agentgateway-proxy \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 
-# Call agent through gateway (automatic registration)
+# Default registration (root path)
 curl http://${GATEWAY_URL}/.well-known/agent.json
 curl -X POST http://${GATEWAY_URL}/message \
   -H 'Content-Type: application/json' \
   -d '{"text": "Hello, assistant!"}'
 
-# With custom path-based routing
+# Path-based custom routing
 curl http://${GATEWAY_URL}/assistant/.well-known/agent.json
 ```
 
-## Testing the Agent
-
-### Port-forward to test locally
+## Local testing
 
 ```bash
-kubectl port-forward -n kagent svc/weather-agent-stable 8083:8083
-```
+NAMESPACE=default
+AGENT=weather-agent
 
-### Test A2A endpoint
+# Port-forward to the stable service
+kubectl port-forward -n $NAMESPACE svc/${AGENT}-stable 8083:8083
 
-```bash
-# Get agent card
+# In another terminal
 curl http://localhost:8083/.well-known/agent.json
-
-# Send a request (adjust based on your agent's API)
 curl -X POST http://localhost:8083/invoke \
   -H 'Content-Type: application/json' \
   -d '{"prompt": "What is the weather in Seattle?"}'
 ```
 
-## Customizing Deployment Strategies
+## Customizing deployment strategies
 
-### Canary with ALB Traffic Routing
+Default is blue-green. To use canary, override `rolloutStrategy` in your Application properties.
+
+### Canary with ALB traffic routing
 
 ```yaml
 rolloutStrategy:
@@ -335,7 +300,7 @@ rolloutStrategy:
             - primary
 ```
 
-### Blue-Green with Auto-Promotion
+### Blue-green with auto-promotion
 
 ```yaml
 rolloutStrategy:
@@ -346,28 +311,20 @@ rolloutStrategy:
 
 ## Troubleshooting
 
-### Check Rollout status
-
 ```bash
-kubectl describe rollout weather-agent -n kagent
-```
+NAMESPACE=default
 
-### Check pod logs
+# Rollout status
+kubectl describe rollout <agent-name> -n $NAMESPACE
 
-```bash
-kubectl logs -n kagent -l kagent.dev/agent=weather-agent
-```
+# Pod logs
+kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=<agent-name>
 
-### Verify services
+# Services
+kubectl get svc -n $NAMESPACE -l app.kubernetes.io/name=<agent-name>
 
-```bash
-kubectl get svc -n kagent -l kagent.dev/agent=weather-agent
-```
-
-### Check agent card
-
-```bash
-kubectl get configmap -n kagent weather-agent-card -o yaml
+# Agent card
+kubectl get configmap -n $NAMESPACE <agent-name>-card -o yaml
 ```
 
 ## References

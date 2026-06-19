@@ -27,51 +27,12 @@ useValuesFilePrefix: true
 valuesFilePrefix: 'tenants/{{.metadata.labels.tenant}}/'
 
 ########################################
-# KAgent Operator
-########################################
-
-kagent-crds:
-  enabled: false
-  namespace: kagent
-  chartName: kagent-crds
-  defaultVersion: '0.7.9'
-  chartNamespace: kagent-dev/kagent/helm
-  chartRepository: ghcr.io
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '2'
-  selector:
-    matchExpressions:
-      - key: enable_kagent
-        operator: In
-        values: ['true']
-  ignoreDifferences:
-    - group: apiextensions.k8s.io
-      kind: CustomResourceDefinition
-      jsonPointers:
-        - /metadata/annotations
-
-kagent:
-  enabled: false
-  namespace: kagent
-  chartName: kagent
-  defaultVersion: '0.7.9'
-  chartNamespace: kagent-dev/kagent/helm
-  chartRepository: ghcr.io
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '3'
-  selector:
-    matchExpressions:
-      - key: enable_kagent
-        operator: In
-        values: ['true']
-
-########################################
 # Observability — LLM Gateway
 ########################################
 
 litellm:
   enabled: false
-  namespace: kagent
+  namespace: litellm
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/litellm'
   annotationsAppSet:
@@ -163,22 +124,9 @@ otel-collector:
     global:
       awsRegion: '{{.metadata.annotations.aws_region}}'
 
-kagent-monitoring:
-  enabled: false
-  namespace: kagent
-  defaultVersion: '0.2.0'
-  path: 'gitops/addons/charts/kagent-monitoring'
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '6'
-  selector:
-    matchExpressions:
-      - key: enable_kagent_monitoring
-        operator: In
-        values: ['true']
-
 prometheus-operator-crds:
   enabled: false
-  namespace: kagent
+  namespace: monitoring
   chartName: prometheus-operator-crds
   defaultVersion: '28.0.1'
   chartRepository: 'https://prometheus-community.github.io/helm-charts'
@@ -186,7 +134,7 @@ prometheus-operator-crds:
     argocd.argoproj.io/sync-wave: '5'
   selector:
     matchExpressions:
-      - key: enable_kagent_monitoring
+      - key: enable_monitoring
         operator: In
         values: ['true']
   ignoreDifferences:
@@ -194,23 +142,6 @@ prometheus-operator-crds:
       kind: CustomResourceDefinition
       jsonPointers:
         - /metadata/annotations
-
-########################################
-# KAgent Setup (ModelConfig + Bedrock)
-########################################
-
-kagent-setup:
-  enabled: false
-  namespace: kagent
-  defaultVersion: '0.1.0'
-  path: 'gitops/addons/charts/kagent-setup'
-  annotationsAppSet:
-    argocd.argoproj.io/sync-wave: '3'
-  selector:
-    matchExpressions:
-      - key: enable_kagent
-        operator: In
-        values: ['true']
 
 ########################################
 # AgentCore — Crossplane Compositions
@@ -356,3 +287,21 @@ agent-gateway:
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
+
+# OAM Agent Components — KubeVela ComponentDefinitions for agentic workloads
+# (agent, mcp-server, agentcore-memory). Requires KubeVela to be running
+# (provisioned by the platform via appmod-blueprints' kubevela addon at
+# sync-wave 3). Sync-wave 5 here ensures KubeVela CRDs and webhooks are
+# established before these CRs are applied.
+oam-agent-components:
+  enabled: false
+  namespace: vela-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/oam-agent-components'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '5'  # after kubevela (wave 3 on platform side)
+  selector:
+    matchExpressions:
+      - key: enable_oam_components
+        operator: In
+        values: ['true']

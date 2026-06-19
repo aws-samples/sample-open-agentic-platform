@@ -1,15 +1,5 @@
 useSelectors: true
 
-# KAgent Operator
-kagent-crds:
-  enabled: true
-kagent:
-  enabled: true
-
-# KAgent Setup (ModelConfig, Bedrock secret)
-kagent-setup:
-  enabled: true
-
 # AgentCore (Crossplane compositions)
 crossplane-agentcore:
   enabled: true
@@ -22,8 +12,6 @@ langfuse:
 jaeger:
   enabled: true
 otel-collector:
-  enabled: true
-kagent-monitoring:
   enabled: true
 prometheus-operator-crds:
   enabled: true
@@ -40,4 +28,9 @@ agentgateway-crds:
 agentgateway:
   enabled: true
 agent-gateway:
+  enabled: true
+
+# OAM Agent Components (KubeVela ComponentDefinitions for agent, mcp-server, agentcore-memory)
+# KubeVela itself is provisioned by the platform (appmod-blueprints).
+oam-agent-components:
   enabled: true
