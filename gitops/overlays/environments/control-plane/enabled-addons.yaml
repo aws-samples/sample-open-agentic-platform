@@ -46,7 +46,7 @@ enabledAddons:
   multi_acct: false
   platform_manifests: false
   backstage: false
-  kubevela: false
+  kubevela: true
   devlake: false
   gitlab: false
   # ACK controllers

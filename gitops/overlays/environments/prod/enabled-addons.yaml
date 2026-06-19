@@ -15,5 +15,9 @@ enabledAddons:
   kube_state_metrics: true
   prometheus_node_exporter: true
   aws_for_fluentbit: true
+  # Platform
+  crossplane: true
+  crossplane_aws: true
+  kubevela: true
   # Agentic Platform
   agent_platform: true
