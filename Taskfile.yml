@@ -184,30 +184,33 @@ tasks:
   agentic:ensure-kubeconfig:
     desc: Ensure kubectl points to the hub cluster
     cmds:
-      - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}}
+      - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}} --alias {{.HUB_CLUSTER_NAME}}
+      - kubectl --context {{.HUB_CLUSTER_NAME}} cluster-info >/dev/null
+      - printf '✓ kubectl context "{{.HUB_CLUSTER_NAME}}" is reachable\n'
 
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
+    deps: [agentic:ensure-kubeconfig]
     env:
       REPO_URL: "{{.AGENTIC_REPO_URL}}"
       REVISION: "{{.AGENTIC_REPO_REVISION}}"
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
       HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
-      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl --context {{.HUB_CLUSTER_NAME}} apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
 
   # ─── Utilities ──────────────────────────────────────────────────────────────
 
   status:
     desc: Show status of agentic platform ArgoCD applications
+    deps: [agentic:ensure-kubeconfig]
     cmds:
-      - task: agentic:ensure-kubeconfig
-      - kubectl get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl get applications.argoproj.io -n argocd --no-headers | grep -E "litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore"
+      - kubectl --context {{.HUB_CLUSTER_NAME}} get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl --context {{.HUB_CLUSTER_NAME}} get applications.argoproj.io -n argocd --no-headers | grep -E "litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore|oam-agent-components"
 
   destroy:
     desc: Remove agentic platform components (does not destroy the base platform)
+    deps: [agentic:ensure-kubeconfig]
     cmds:
-      - task: agentic:ensure-kubeconfig
-      - kubectl delete application agent-platform-addons -n argocd --ignore-not-found
+      - kubectl --context {{.HUB_CLUSTER_NAME}} delete application agent-platform-addons -n argocd --ignore-not-found
       - printf '\n✓ Agentic platform bootstrap removed. ArgoCD will prune agentic components.\n'
