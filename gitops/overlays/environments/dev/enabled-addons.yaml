@@ -18,5 +18,6 @@ enabledAddons:
   crossplane: true
   crossplane_aws: true
   kubevela: true
+  argo_rollouts: true
   # Agentic Platform
   agent_platform: true

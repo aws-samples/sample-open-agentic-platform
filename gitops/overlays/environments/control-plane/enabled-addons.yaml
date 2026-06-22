@@ -19,7 +19,7 @@ enabledAddons:
   image_prepuller: false
   # GitOps
   argo_events: false
-  argo_rollouts: false
+  argo_rollouts: true
   argo_workflows: true
   kargo: false
   flux: false
