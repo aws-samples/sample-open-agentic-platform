@@ -23,6 +23,8 @@ vars:
     sh: yq -r '.domain' {{.CONFIG_FILE}}
   RESOURCE_PREFIX:
     sh: yq -r '.resourcePrefix' {{.CONFIG_FILE}}
+  INGRESS_NAME:
+    sh: yq -r '.ingressName // ""' {{.CONFIG_FILE}}
   IDC_INSTANCE_ARN:
     sh: yq -r '.identityCenter.instanceArn' {{.CONFIG_FILE}}
   IDC_REGION:
@@ -43,6 +45,7 @@ tasks:
     desc: Install the full agentic platform (base platform + spokes + agentic components)
     cmds:
       - task: platform:install
+      - task: ingress:post-install
       - task: spokes:install
       - task: agentic:install
 
@@ -196,6 +199,96 @@ tasks:
     cmds:
       - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
+
+  # ─── Ingress / Domain Post-Install ───────────────────────────────────────────
+
+  ingress:post-install:
+    desc: Post-install ingress setup — updates CloudFront origin or validates custom domain DNS
+    cmds:
+      - |
+        DOMAIN="{{.DOMAIN}}"
+        if [ -z "$DOMAIN" ] || [ "$DOMAIN" = "null" ]; then
+          printf '⚠ No domain configured in config.local.yaml. Skipping ingress post-install.\n'
+          exit 0
+        fi
+
+        # Derive TLS mode from domain name
+        if echo "$DOMAIN" | grep -q "cloudfront.net"; then
+          TLS_MODE="cloudfront"
+        else
+          TLS_MODE="alb"
+        fi
+
+        # Discover the ALB DNS name (created by LBC from grouped ingresses)
+        printf '▸ Waiting for ALB to be provisioned...\n'
+        ALB_DNS=""
+        for i in $(seq 1 12); do
+          ALB_DNS=$(aws elbv2 describe-load-balancers \
+            --region "{{.AWS_REGION}}" \
+            --query "LoadBalancers[?contains(LoadBalancerName, 'k8s-platform')].DNSName | [0]" \
+            --output text 2>/dev/null || echo "")
+          if [ -n "$ALB_DNS" ] && [ "$ALB_DNS" != "None" ] && [ "$ALB_DNS" != "null" ]; then
+            break
+          fi
+          printf '  [%d/12] ALB not ready yet...\n' "$i"
+          sleep 10
+        done
+
+        if [ -z "$ALB_DNS" ] || [ "$ALB_DNS" = "None" ] || [ "$ALB_DNS" = "null" ]; then
+          printf '⚠ ALB not found yet. Run "task ingress:post-install" after ingresses are reconciled.\n'
+          exit 0
+        fi
+
+        printf '▸ ALB discovered: %s\n' "$ALB_DNS"
+
+        # ── CloudFront mode (domain is *.cloudfront.net) ──
+        if [ "$TLS_MODE" = "cloudfront" ]; then
+          DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='${DOMAIN}'].Id" \
+            --output text)
+
+          if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+            printf '⚠ Could not find CloudFront distribution for %s. Skipping origin update.\n' "$DOMAIN"
+            exit 0
+          fi
+
+          CURRENT_ORIGIN=$(aws cloudfront get-distribution-config --id "$DIST_ID" \
+            --query "DistributionConfig.Origins.Items[0].DomainName" --output text)
+
+          if [ "$CURRENT_ORIGIN" = "$ALB_DNS" ]; then
+            printf '✓ CloudFront origin already points to %s\n' "$ALB_DNS"
+            exit 0
+          fi
+
+          printf '▸ Updating CloudFront %s origin: %s → %s\n' "$DIST_ID" "$CURRENT_ORIGIN" "$ALB_DNS"
+
+          ETAG=$(aws cloudfront get-distribution-config --id "$DIST_ID" --query "ETag" --output text)
+          aws cloudfront get-distribution-config --id "$DIST_ID" --query "DistributionConfig" > /tmp/cf-dist-config.json
+
+          jq --arg domain "$ALB_DNS" '.Origins.Items[0].DomainName = $domain' \
+            /tmp/cf-dist-config.json > /tmp/cf-dist-config-updated.json
+
+          aws cloudfront update-distribution \
+            --id "$DIST_ID" \
+            --if-match "$ETAG" \
+            --distribution-config file:///tmp/cf-dist-config-updated.json > /dev/null
+
+          rm -f /tmp/cf-dist-config.json /tmp/cf-dist-config-updated.json
+          printf '✓ CloudFront origin updated to %s (deployment in progress)\n' "$ALB_DNS"
+
+        # ── ALB mode (custom domain, ACM cert expected) ──
+        else
+          printf '▸ Custom domain: %s\n' "$DOMAIN"
+          printf '  ALB DNS: %s\n' "$ALB_DNS"
+          RESOLVED=$(dig +short "$DOMAIN" 2>/dev/null | head -1 || echo "")
+          if [ -z "$RESOLVED" ]; then
+            printf '⚠ Domain %s does not resolve yet.\n' "$DOMAIN"
+            printf '  Create a DNS record (CNAME or Route53 alias) pointing to:\n'
+            printf '    %s\n' "$ALB_DNS"
+          else
+            printf '✓ Domain %s resolves to %s\n' "$DOMAIN" "$RESOLVED"
+          fi
+        fi
 
   # ─── Utilities ──────────────────────────────────────────────────────────────
 
