@@ -19,6 +19,6 @@ spec:
         # - image: 498530348755.dkr.ecr.us-east-1.amazonaws.com/strands-agent:latest
         # - replicas: 3
         # - modelId: claude-sonnet
-        # - llmGatewayUrl: http://litellm-proxy.agentgateway-system.svc.cluster.local:4000
+        # - llmGatewayUrl: http://bifrost.bifrost.svc.cluster.local:8080/v1
         # - autoPromotionEnabled: true
         # - registerWithGateway: true

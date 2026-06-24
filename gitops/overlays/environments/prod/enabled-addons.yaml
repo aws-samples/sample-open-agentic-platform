@@ -22,3 +22,4 @@ enabledAddons:
   argo_rollouts: true
   # Agentic Platform
   agent_platform: true
+  bifrost: true

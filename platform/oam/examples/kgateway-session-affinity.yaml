@@ -161,7 +161,7 @@ spec:
         - name: AWS_REGION
           value: "us-west-2"
         - name: LLM_GATEWAY_URL
-          value: "http://litellm-proxy.agentgateway-system.svc.cluster.local:4000"
+          value: "http://bifrost.bifrost.svc.cluster.local:8080/v1"
         - name: LLM_GATEWAY_API_KEY
           value: "sk-1234"
         livenessProbe:
