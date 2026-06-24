@@ -15,11 +15,6 @@ podIdentity:
   namespace: bifrost
   serviceAccountName: bifrost
 
-# ── ExternalSecret (encryption key + platform VK) — umbrella chart ──────────
-externalSecret:
-  enabled: true
-  targetSecretName: bifrost-secrets
-
 # ── Upstream maximhq/bifrost subchart ───────────────────────────────────────
 # (doubled `bifrost.bifrost.*` is the upstream chart's own gateway config key)
 bifrost:

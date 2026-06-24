@@ -1,8 +1,7 @@
 # Umbrella chart defaults. The bulk of the gateway configuration lives in the
 # addon value file (gitops/addons/default/addons/bifrost/values.yaml), which is
 # layered on top of these by the addon ApplicationSet. Per-cluster values
-# (clusterName, region, secretManagerKey) are injected via the ApplicationSet
-# valuesObject in gitops/addons/bootstrap/default/addons.yaml.
+# (clusterName, region) are injected via the ApplicationSet valuesObject.
 
 # ── Platform additions (this umbrella chart) ────────────────────────────────
 
@@ -12,23 +11,10 @@ podIdentity:
   enabled: true
   clusterName: ""        # injected per-cluster from the aws_cluster_name annotation
   region: us-west-2      # injected per-cluster from the aws_region annotation
-  namespace: bifrost     # must match the addon destination namespace
-  serviceAccountName: bifrost   # must match bifrost.serviceAccount.name below
-
-# ExternalSecret pulling the encryption key + platform virtual key from
-# AWS Secrets Manager.
-externalSecret:
-  enabled: true
-  secretStoreName: aws-secrets-manager
-  secretManagerKey: ""   # injected per-cluster, e.g. "<cluster>/bifrost"
-  targetSecretName: bifrost-secrets
-  refreshInterval: "5m"
+  namespace: bifrost
+  serviceAccountName: bifrost  # must match bifrost.serviceAccount.name below
 
 # ── Upstream maximhq/bifrost subchart values ────────────────────────────────
-# NOTE: the upstream chart is named "bifrost" and namespaces its own gateway
-# configuration under a top-level `bifrost:` key — hence the doubled
-# `bifrost.bifrost.*` path below. The real values are set in the addon value
-# file; these are only safe defaults.
 bifrost:
   image:
     tag: "v1.5.0"

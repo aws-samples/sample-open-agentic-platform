@@ -201,8 +201,6 @@ bifrost:
     podIdentity:
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
       region: '{{.metadata.annotations.aws_region}}'
-    externalSecret:
-      secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/bifrost'
   ignoreDifferences:
     - group: apps
       kind: StatefulSet

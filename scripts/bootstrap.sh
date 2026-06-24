@@ -133,8 +133,37 @@ EOF
 echo "✅ Cluster secret configured"
 echo ""
 
-# Step 5: Deploy the fleet bootstrap ApplicationSet
-echo "Step 5: Deploying fleet bootstrap..."
+# Step 5: Create Bifrost secrets (encryption key + platform virtual key)
+# These are generated once at bootstrap and written as a plain Kubernetes Secret.
+# The platform virtual key (BIFROST_PLATFORM_VK) is what agents supply via
+# LLM_GATEWAY_API_KEY to authenticate to the Bifrost gateway.
+echo "Step 5: Creating Bifrost secrets..."
+kubectl create namespace bifrost --dry-run=client -o yaml | kubectl apply -f -
+
+if kubectl get secret bifrost-secrets -n bifrost &>/dev/null; then
+    echo "✅ bifrost-secrets already exists — skipping (delete to regenerate)"
+else
+    BIFROST_ENCRYPTION_KEY=$(openssl rand -base64 32)
+    BIFROST_PLATFORM_VK=$(openssl rand -hex 24)
+    kubectl create secret generic bifrost-secrets \
+        --namespace bifrost \
+        --from-literal=BIFROST_ENCRYPTION_KEY="${BIFROST_ENCRYPTION_KEY}" \
+        --from-literal=BIFROST_PLATFORM_VK="${BIFROST_PLATFORM_VK}"
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    echo "  │  Platform Virtual Key (LLM_GATEWAY_API_KEY for agents):     │"
+    echo "  │  ${BIFROST_PLATFORM_VK}  │"
+    echo "  │                                                             │"
+    echo "  │  Pass this as modelConfig.llmGatewayApiKey when deploying  │"
+    echo "  │  an agent via OAM, or set LLM_GATEWAY_API_KEY in the pod.  │"
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "✅ bifrost-secrets created"
+fi
+echo ""
+
+# Step 6: Deploy the fleet bootstrap ApplicationSet
+echo "Step 6: Deploying fleet bootstrap..."
 kubectl apply -f gitops/fleet/bootstrap/addons.yaml
 echo "✅ Fleet bootstrap deployed"
 echo ""
