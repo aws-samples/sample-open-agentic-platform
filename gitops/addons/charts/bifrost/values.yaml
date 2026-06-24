@@ -1,20 +1,20 @@
-# Umbrella chart defaults. The bulk of the gateway configuration lives in the
-# addon value file (gitops/addons/default/addons/bifrost/values.yaml), which is
-# layered on top of these by the addon ApplicationSet. Per-cluster values
-# (clusterName, region) are injected via the ApplicationSet valuesObject.
+# Umbrella chart defaults. Per-cluster values (clusterName, region) are
+# injected via the ApplicationSet valuesObject.
 
-# ── Platform additions (this umbrella chart) ────────────────────────────────
-
-# Crossplane Role + PodIdentityAssociation granting Bedrock access to Bifrost's
-# ServiceAccount (EKS Pod Identity, not IRSA).
 podIdentity:
   enabled: true
-  clusterName: ""        # injected per-cluster from the aws_cluster_name annotation
-  region: us-west-2      # injected per-cluster from the aws_region annotation
+  clusterName: ""
+  region: us-west-2
   namespace: bifrost
-  serviceAccountName: bifrost  # must match bifrost.serviceAccount.name below
+  serviceAccountName: bifrost
 
-# ── Upstream maximhq/bifrost subchart values ────────────────────────────────
+# ExternalSecret reads from the account-level SM secret created by
+# `task agentic:bifrost-secrets` (path: open-agentic-platform/bifrost).
+# Same secret works on hub and all spokes.
+externalSecret:
+  secretStoreName: aws-secrets-manager
+  secretManagerKey: "open-agentic-platform/bifrost"
+
 bifrost:
   image:
     tag: "v1.5.0"

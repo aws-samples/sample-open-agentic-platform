@@ -188,9 +188,39 @@ tasks:
       - kubectl --context {{.HUB_CLUSTER_NAME}} cluster-info >/dev/null
       - printf '✓ kubectl context "{{.HUB_CLUSTER_NAME}}" is reachable\n'
 
+  agentic:bifrost-secrets:
+    desc: Create the Bifrost secrets in AWS Secrets Manager (idempotent, account-level)
+    cmds:
+      - |
+        SECRET_NAME="open-agentic-platform/bifrost"
+        EXISTING=$(aws secretsmanager describe-secret \
+          --secret-id "${SECRET_NAME}" \
+          --region {{.AWS_REGION}} \
+          --profile {{.AWS_PROFILE}} \
+          --query 'ARN' --output text 2>/dev/null || echo "NOT_FOUND")
+        if [ "${EXISTING}" != "NOT_FOUND" ]; then
+          printf '✓ Secrets Manager secret "%s" already exists — skipping.\n' "${SECRET_NAME}"
+          printf '  (Delete it to regenerate: aws secretsmanager delete-secret --secret-id %s --force-delete-without-recovery)\n' "${SECRET_NAME}"
+        else
+          BIFROST_ENCRYPTION_KEY=$(openssl rand -base64 32)
+          BIFROST_PLATFORM_VK=$(openssl rand -hex 24)
+          aws secretsmanager create-secret \
+            --name "${SECRET_NAME}" \
+            --region {{.AWS_REGION}} \
+            --profile {{.AWS_PROFILE}} \
+            --description "Bifrost AI Gateway: encryption key and platform virtual key" \
+            --secret-string "{\"BIFROST_ENCRYPTION_KEY\":\"${BIFROST_ENCRYPTION_KEY}\",\"BIFROST_PLATFORM_VK\":\"${BIFROST_PLATFORM_VK}\"}" \
+            --query 'ARN' --output text
+          printf '\n✓ Created "%s"\n' "${SECRET_NAME}"
+          printf '\n  Platform Virtual Key (pass as LLM_GATEWAY_API_KEY / modelConfig.llmGatewayApiKey):\n'
+          printf '  %s\n\n' "${BIFROST_PLATFORM_VK}"
+          printf '  To retrieve later:\n'
+          printf '  aws secretsmanager get-secret-value --secret-id %s --region {{.AWS_REGION}} --query SecretString --output text | jq -r .BIFROST_PLATFORM_VK\n' "${SECRET_NAME}"
+        fi
+
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
-    deps: [agentic:ensure-kubeconfig]
+    deps: [agentic:ensure-kubeconfig, agentic:bifrost-secrets]
     env:
       REPO_URL: "{{.AGENTIC_REPO_URL}}"
       REVISION: "{{.AGENTIC_REPO_REVISION}}"

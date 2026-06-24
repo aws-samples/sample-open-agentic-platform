@@ -15,6 +15,12 @@ podIdentity:
   namespace: bifrost
   serviceAccountName: bifrost
 
+# ── ExternalSecret — umbrella chart ─────────────────────────────────────────
+# Account-level SM path; no per-cluster override needed.
+externalSecret:
+  secretStoreName: aws-secrets-manager
+  secretManagerKey: "open-agentic-platform/bifrost"
+
 # ── Upstream maximhq/bifrost subchart ───────────────────────────────────────
 # (doubled `bifrost.bifrost.*` is the upstream chart's own gateway config key)
 bifrost:
