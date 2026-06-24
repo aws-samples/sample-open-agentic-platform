@@ -186,9 +186,10 @@ crossplane-agentcore:
 bifrost:
   enabled: false
   namespace: bifrost
-  chartName: bifrost
-  defaultVersion: '2.1.16'
-  chartRepository: 'https://maximhq.github.io/bifrost/helm-charts'
+  defaultVersion: '0.1.0'
+  # Local umbrella chart: wraps upstream maximhq/bifrost and adds the Crossplane
+  # Pod Identity (Bedrock access) + ExternalSecret in the same Application.
+  path: 'gitops/addons/charts/bifrost'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '5'
   selector:
@@ -197,8 +198,11 @@ bifrost:
         operator: In
         values: ['true']
   valuesObject:
-    image:
-      tag: 'v1.5.0'
+    podIdentity:
+      clusterName: '{{.metadata.annotations.aws_cluster_name}}'
+      region: '{{.metadata.annotations.aws_region}}'
+    externalSecret:
+      secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/bifrost'
   ignoreDifferences:
     - group: apps
       kind: StatefulSet

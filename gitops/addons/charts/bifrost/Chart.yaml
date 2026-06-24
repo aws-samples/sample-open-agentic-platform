@@ -1,0 +1,17 @@
+apiVersion: v2
+name: bifrost
+description: >-
+  Umbrella chart for the Bifrost AI Gateway. Wraps the upstream maximhq/bifrost
+  chart as a dependency and adds the platform-specific resources that must ship
+  in the same ArgoCD Application as the gateway: the Crossplane IAM Role +
+  PodIdentityAssociation that grant Bifrost's ServiceAccount access to Amazon
+  Bedrock, and the ExternalSecret that supplies the encryption key and the
+  platform virtual key. Bundling these here (rather than as a separate addon)
+  removes any cross-Application ordering concern — it is one release.
+type: application
+version: 0.1.0
+appVersion: "1.5.0"
+dependencies:
+  - name: bifrost
+    version: 2.1.16
+    repository: https://maximhq.github.io/bifrost/helm-charts

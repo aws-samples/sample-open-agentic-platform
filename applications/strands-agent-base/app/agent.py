@@ -13,7 +13,7 @@ logging.basicConfig(
 
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent
-from strands.models.litellm import LiteLLMModel
+from strands.models.openai import OpenAIModel
 from strands.tools.mcp.mcp_client import MCPClient
 
 from .config import config
@@ -22,19 +22,24 @@ logger = logging.getLogger(__name__)
 
 # ── shared resources (created once) ──────────────────────────────────────
 
-_model: Optional[LiteLLMModel] = None
+_model: Optional[OpenAIModel] = None
 _mcp_tools: list = []
 _mcp_exit_stack: Optional[ExitStack] = None
 
 
-def _get_model() -> LiteLLMModel:
+def _get_model() -> OpenAIModel:
     global _model
     if _model is None:
-        _model = LiteLLMModel(
+        # Bifrost is the LLM gateway, exposed as an OpenAI-compatible endpoint
+        # at <gateway>/v1. Authentication uses a Bifrost virtual key presented
+        # via the `x-bf-vk` header (Bifrost governance). The OpenAI client also
+        # requires a non-empty api_key, so we pass the same value there.
+        vk = config.LLM_GATEWAY_API_KEY
+        _model = OpenAIModel(
             client_args={
-                "api_key": config.LLM_GATEWAY_API_KEY,
-                "api_base": config.LLM_GATEWAY_URL,
-                "use_litellm_proxy": True,
+                "api_key": vk or "not-used",
+                "base_url": config.LLM_GATEWAY_URL,
+                "default_headers": {"x-bf-vk": vk},
             },
             model_id=config.MODEL_ID,
             params={"max_tokens": 1000, "temperature": 0.7, "stream": True},

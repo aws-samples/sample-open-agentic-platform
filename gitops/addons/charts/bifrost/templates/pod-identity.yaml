@@ -1,0 +1,82 @@
+{{/*
+  Bifrost -> Amazon Bedrock access via EKS Pod Identity (NOT IRSA).
+
+  Mirrors the declarative pattern already used by the crossplane-agentcore
+  addon: a Crossplane IAM Role (trusted by the EKS Pod Identity service
+  principal) plus a PodIdentityAssociation binding that role to Bifrost's
+  ServiceAccount.
+
+  Ordering note: these land in the SAME Application as the Bifrost workload,
+  on an earlier sync-wave so they are applied first. Even if the association
+  reconciles after the pod is Running, Pod Identity credentials are vended on
+  demand and Bifrost only calls Bedrock when an inference request arrives, so
+  there is no hard pre-ordering requirement — ArgoCD selfHeal + Crossplane
+  reconcile converge with no manual steps.
+
+  Requires the platform Crossplane AWS providers (provider-family-aws,
+  provider-aws-iam, provider-aws-eks) — the same prerequisite documented for
+  crossplane-agentcore.
+*/}}
+{{- if .Values.podIdentity.enabled }}
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: {{ .Values.podIdentity.clusterName }}-bifrost-bedrock-role
+  labels:
+    platform.gitops.io/role: bifrost-bedrock
+    platform.gitops.io/cluster: {{ .Values.podIdentity.clusterName }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "pods.eks.amazonaws.com"},
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }]
+      }
+    inlinePolicy:
+      - name: BedrockInvoke
+        policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+              ],
+              "Resource": [
+                "arn:aws:bedrock:*::foundation-model/*",
+                "arn:aws:bedrock:*:*:inference-profile/*"
+              ]
+            }]
+          }
+    tags:
+      platform.gitops.io/role: bifrost-bedrock
+      platform.gitops.io/cluster: {{ .Values.podIdentity.clusterName }}
+  providerConfigRef:
+    name: default
+---
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: PodIdentityAssociation
+metadata:
+  name: {{ .Values.podIdentity.clusterName }}-bifrost
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  forProvider:
+    clusterName: {{ .Values.podIdentity.clusterName }}
+    namespace: {{ .Values.podIdentity.namespace }}
+    serviceAccount: {{ .Values.podIdentity.serviceAccountName }}
+    roleArnSelector:
+      matchLabels:
+        platform.gitops.io/role: bifrost-bedrock
+        platform.gitops.io/cluster: {{ .Values.podIdentity.clusterName }}
+    region: {{ .Values.podIdentity.region }}
+  providerConfigRef:
+    name: default
+{{- end }}

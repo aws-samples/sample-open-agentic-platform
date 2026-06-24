@@ -7,8 +7,7 @@ dependencies = [
     "fastapi~=0.115.0",
     "uvicorn[standard]>=0.34.2",
     "pydantic~=2.0",
-    "strands-agents[a2a,litellm]~=1.0",
-    "litellm~=1.0",
+    "strands-agents[a2a,openai]~=1.0",
     "bedrock-agentcore",
 ]
 

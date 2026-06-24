@@ -1,65 +1,142 @@
-# Bifrost AI Gateway - Default values override
+# Bifrost AI Gateway — addon value overrides (layered by the addon ApplicationSet
+# on top of gitops/addons/charts/bifrost/values.yaml).
+#
 # Docs: https://docs.getbifrost.ai/
-# Chart: https://github.com/maximhq/bifrost/tree/dev/helm-charts/bifrost
+# The upstream Helm chart maps every value here directly into the runtime
+# config.json, so this is fully declarative — no UI/API clicks required.
+#
+# Per-cluster values (podIdentity.clusterName/region, externalSecret.secretManagerKey)
+# are injected by the ApplicationSet valuesObject in
+# gitops/addons/bootstrap/default/addons.yaml.
 
-image:
-  tag: 'v1.5.0'
-  pullPolicy: IfNotPresent
+# ── Pod Identity (Bedrock access) — umbrella chart ──────────────────────────
+podIdentity:
+  enabled: true
+  namespace: bifrost
+  serviceAccountName: bifrost
 
-replicaCount: 1
+# ── ExternalSecret (encryption key + platform VK) — umbrella chart ──────────
+externalSecret:
+  enabled: true
+  targetSecretName: bifrost-secrets
 
+# ── Upstream maximhq/bifrost subchart ───────────────────────────────────────
+# (doubled `bifrost.bifrost.*` is the upstream chart's own gateway config key)
 bifrost:
-  port: 8080
-  host: "0.0.0.0"
-  logLevel: info
-  logStyle: json
+  image:
+    tag: "v1.5.0"
+    pullPolicy: IfNotPresent
 
-  # AWS Bedrock provider via Pod Identity (no static keys needed)
-  providers:
-    bedrock:
-      keys:
-        - name: "bedrock-default"
-          value: "pod-identity"
-          weight: 1
+  replicaCount: 1
 
-  # MCP gateway support
-  mcp:
-    enabled: true
-    toolManagerConfig:
-      toolExecutionTimeout: "30s"
-      maxAgentDepth: 10
+  # ServiceAccount that the PodIdentityAssociation binds to the Bedrock role.
+  serviceAccount:
+    create: true
+    name: bifrost
 
-  # Plugins
-  plugins:
-    telemetry:
+  # SQLite is sufficient for the gateway config + governance seed in dev.
+  # For enterprise/HA, switch to storage.mode: postgres + cluster mode.
+  storage:
+    mode: sqlite
+    persistence:
       enabled: true
-    logging:
+      size: 5Gi
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  autoscaling:
+    enabled: false
+
+  # Inject the platform virtual key (and encryption key) from the
+  # ExternalSecret-managed Secret as environment variables, so config.json can
+  # reference them via `env.*` instead of carrying secrets in git.
+  envFrom:
+    - secretRef:
+        name: bifrost-secrets
+
+  # ── Bifrost gateway runtime configuration ──────────────────────────────
+  bifrost:
+    # Encryption key for data at rest (governance store). Sourced from the
+    # ExternalSecret-managed Secret.
+    encryptionKeySecret:
+      name: bifrost-secrets
+      key: BIFROST_ENCRYPTION_KEY
+
+    client:
+      initialPoolSize: 100
+
+    # AWS Bedrock provider via EKS Pod Identity — no static credentials.
+    # Leaving access_key/secret_key/value unset makes Bifrost use the AWS
+    # default credential chain, which resolves the Pod Identity association.
+    providers:
+      bedrock:
+        keys:
+          - name: bedrock-default
+            models: ["*"]
+            weight: 1
+            # Expose Claude Sonnet 4.5 as the friendly name "claude-sonnet".
+            # Cross-region inference profile ID (matches the prior LiteLLM config).
+            aliases:
+              claude-sonnet: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+            bedrock_key_config:
+              # Bedrock endpoint region (static — Bedrock is hosted in us-west-2
+              # for this platform, independent of the calling cluster's region).
+              region: us-west-2
+
+    # MCP gateway support (tool calling through Bifrost).
+    mcp:
       enabled: true
+      toolManagerConfig:
+        toolExecutionTimeout: "30s"
+        maxAgentDepth: 10
 
-  # Client configuration
-  client:
-    initialPoolSize: 100
+    plugins:
+      # Governance plugin enforces virtual keys (auth) + budgets + rate limits.
+      governance:
+        enabled: true
+        config:
+          is_vk_mandatory: true
+      telemetry:
+        enabled: true
+      logging:
+        enabled: true
 
-# Storage - SQLite for simplicity in dev
-storage:
-  mode: sqlite
-  persistence:
-    enabled: true
-    size: 5Gi
-
-# Service configuration
-service:
-  type: ClusterIP
-  port: 8080
-
-# Resource limits
-resources:
-  requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    memory: 512Mi
-
-# Autoscaling disabled by default (single replica for dev)
-autoscaling:
-  enabled: false
+    # ── Governance: budgets, rate limits, and the platform virtual key ──────
+    # Seeded into the governance store at startup. Callers present the VK via
+    # the `x-bf-vk` header. Per-workload VK issuance (one key per agent, with
+    # its own budget/rate-limit + rotation) is the planned follow-up; this is
+    # the shared platform key for the first cut.
+    governance:
+      budgets:
+        - id: budget-platform
+          max_limit: 500          # USD per reset window
+          reset_duration: "1M"
+      rateLimits:
+        - id: rate-limit-standard
+          token_max_limit: 500000
+          token_reset_duration: "1h"
+          request_max_limit: 5000
+          request_reset_duration: "1h"
+      virtualKeys:
+        - id: vk-platform-agents
+          name: "Platform Agents"
+          # Resolved from the BIFROST_PLATFORM_VK env var (injected via envFrom).
+          value: env.BIFROST_PLATFORM_VK
+          is_active: true
+          budget_id: budget-platform
+          rate_limit_id: rate-limit-standard
+          provider_configs:
+            - provider: bedrock
+              weight: 1
+              # Scope to the bedrock provider. Tighten to ["claude-sonnet"]
+              # once alias-vs-resolved-id matching is confirmed on-cluster.
+              allowed_models: ["*"]

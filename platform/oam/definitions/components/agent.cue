@@ -245,10 +245,12 @@ template: {
 		gatewayNamespace:    *"agentgateway-system" | string
 
 		// Model configuration
+		// Gateway is Bifrost (OpenAI-compatible endpoint at /v1). llmGatewayApiKey
+		// is the Bifrost virtual key (presented by the agent via the x-bf-vk header).
 		modelConfig: {
 			modelId:          *"claude-sonnet" | string
-			llmGatewayUrl:    *"http://litellm-proxy.agentgateway-system.svc.cluster.local:4000" | string
-			llmGatewayApiKey: *"sk-1234" | string
+			llmGatewayUrl:    *"http://bifrost.bifrost.svc.cluster.local:8080/v1" | string
+			llmGatewayApiKey: *"" | string
 		}
 
 		// Memory configuration — pluggable providers

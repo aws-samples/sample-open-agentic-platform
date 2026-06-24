@@ -29,13 +29,13 @@ For example, always use the time tool when asked about the current time or date.
     MODEL_ID: str = os.getenv("MODEL_ID", "claude-sonnet")
     AWS_REGION: str = os.getenv("AWS_REGION", "us-west-2")
     
-    # LLM Gateway configuration (LiteLLM proxy)
+    # LLM Gateway configuration (Bifrost, OpenAI-compatible endpoint at /v1)
     LLM_GATEWAY_URL: str = os.getenv(
         "LLM_GATEWAY_URL",
-        "http://litellm-proxy.agentgateway-system.svc.cluster.local:4000"
+        "http://bifrost.bifrost.svc.cluster.local:8080/v1"
     )
-    # Gateway API key (optional - some gateways don't require it)
-    LLM_GATEWAY_API_KEY: str = os.getenv("LLM_GATEWAY_API_KEY", "sk-1234")
+    # Bifrost virtual key — presented to the gateway via the x-bf-vk header.
+    LLM_GATEWAY_API_KEY: str = os.getenv("LLM_GATEWAY_API_KEY", "")
     
     # AgentGateway MCP proxy base URL (internal cluster DNS)
     GATEWAY_URL: str = os.getenv(
