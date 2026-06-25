@@ -20,11 +20,24 @@ bifrost:
     create: true
     name: bifrost
 
+  # Embedded PostgreSQL — Bifrost deploys as a Deployment (not StatefulSet),
+  # making config changes seamless for GitOps. The Postgres StatefulSet spec
+  # is stable and rarely changes after initial deploy.
+  # TODO: migrate to RDS via Crossplane for production (passwordCommand with
+  # aws rds generate-db-auth-token supports Pod Identity — no static password).
   storage:
-    mode: sqlite
-    persistence:
-      enabled: true
-      size: 5Gi
+    mode: postgres
+
+  postgresql:
+    enabled: true
+    auth:
+      username: bifrost
+      password: "bifrost-internal"   # cluster-internal only; not exposed outside
+      database: bifrost
+    primary:
+      persistence:
+        enabled: true
+        size: 10Gi
 
   service:
     type: ClusterIP
