@@ -53,6 +53,12 @@ bifrost:
   autoscaling:
     enabled: false
 
+  # Wait for Postgres to accept connections before starting Bifrost.
+  initContainers:
+    - name: wait-for-postgres
+      image: busybox:1.36
+      command: ['sh', '-c', 'until nc -z bifrost-postgresql 5432; do sleep 2; done']
+
   bifrost:
     client:
       initialPoolSize: 100
