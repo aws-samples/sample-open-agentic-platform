@@ -87,13 +87,6 @@ template: {
 	}
 
 	outputs: {
-		// Namespace — created if it doesn't exist (idempotent via server-side apply)
-		namespace: {
-			apiVersion: "v1"
-			kind:       "Namespace"
-			metadata: name: parameter.namespace
-		}
-
 		// Stable service (active) — used by AgentgatewayBackend
 		stableService: {
 			apiVersion: "v1"

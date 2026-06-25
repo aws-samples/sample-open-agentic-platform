@@ -5,8 +5,18 @@ metadata:
   namespace: default
 spec:
   components:
+    - name: mcp-time-ns
+      type: k8s-objects
+      properties:
+        objects:
+          - apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: mcp-time-server
     - name: mcp-time
       type: mcp-server
+      dependsOn:
+        - mcp-time-ns
       properties:
         name: mcp-time
         namespace: mcp-time-server
@@ -14,13 +24,10 @@ spec:
         image: "929819487611.dkr.ecr.us-west-2.amazonaws.com/mcp-time-server:http"
         containerPort: 8000
         replicas: 1
-
         env:
           - name: LOCAL_TIMEZONE
             value: "UTC"
-
         registerWithGateway: true
-
         autoPromotionEnabled: true
         autoPromotionSeconds: 10
         scaleDownDelaySeconds: 30
