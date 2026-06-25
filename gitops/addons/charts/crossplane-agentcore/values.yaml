@@ -23,3 +23,7 @@ podIdentity:
   # ServiceAccount name used by the bedrockagentcore provider
   serviceAccountName: provider-aws-bedrockagentcore
   namespace: crossplane-system
+  # When true, the chart creates the IAM Role + PodIdentityAssociation itself.
+  # Leave false on spoke clusters: they have no EKS-API Crossplane provider, so
+  # the association is provisioned by the hub via the pod-identities overlay.
+  createViaChart: false

@@ -1,7 +1,16 @@
 {{/*
   IAM Role and Pod Identity Association for the Crossplane BedrockAgentCore provider.
   This gives the provider permissions to create/manage AgentCore resources.
+
+  DISABLED BY DEFAULT (podIdentity.createViaChart: false). On spoke clusters
+  the PodIdentityAssociation cannot be reconciled locally because spokes do
+  not run an EKS-API-capable Crossplane provider (they never provision
+  clusters). Instead, the agentcore provider's Pod Identity is provisioned by
+  the hub's Crossplane via the pod-identities overlay
+  (gitops/overlays/environments/<env>/pod-identities/values.yaml), which
+  targets the spoke cluster from the hub.
 */}}
+{{- if .Values.podIdentity.createViaChart }}
 apiVersion: iam.aws.upbound.io/v1beta1
 kind: Role
 metadata:
@@ -60,3 +69,4 @@ spec:
     region: {{ .Values.global.awsRegion }}
   providerConfigRef:
     name: default
+{{- end }}
