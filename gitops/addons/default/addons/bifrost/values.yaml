@@ -62,6 +62,9 @@ bifrost:
   bifrost:
     client:
       initialPoolSize: 100
+      # TODO(llm-as-a-service): re-enable with VK enforcement once per-workload
+      # VK minting is implemented. See DESIGN.md.
+      enforceAuthOnInference: false
 
     providers:
       bedrock:
