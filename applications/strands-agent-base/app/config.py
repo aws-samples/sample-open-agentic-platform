@@ -40,7 +40,7 @@ For example, always use the time tool when asked about the current time or date.
     # AgentGateway MCP proxy base URL (internal cluster DNS)
     GATEWAY_URL: str = os.getenv(
         "GATEWAY_URL",
-        "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:80"
+        "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080"
     )
 
     # MCP server names to load via the gateway (comma-separated, maps to /mcp/<name>)
