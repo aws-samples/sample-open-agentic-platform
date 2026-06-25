@@ -2,3 +2,4 @@ clusterName: spoke-prod
 labels:
   environment: prod
   tenant: default
+  client_provisioner: keycloak
