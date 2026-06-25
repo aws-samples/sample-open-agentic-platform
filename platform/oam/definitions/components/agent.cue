@@ -229,7 +229,7 @@ template: {
 		systemMessage: string
 
 		// Image
-		image: *"498530348755.dkr.ecr.us-west-2.amazonaws.com/strands-agent:latest" | string
+		image: *"929819487611.dkr.ecr.us-west-2.amazonaws.com/strands-agent:latest" | string
 
 		// Optional fields with defaults
 		replicas:       *3 | int

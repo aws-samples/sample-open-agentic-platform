@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CUE_DIR="${SCRIPT_DIR}/definitions/components"
-YAML_DIR="${SCRIPT_DIR}/../../gitops/addons/charts/kubevela/templates/components"
+YAML_DIR="${SCRIPT_DIR}/../../gitops/addons/charts/oam-agent-components/templates"
 
 if ! command -v vela &>/dev/null; then
   echo "Error: vela CLI not found" >&2

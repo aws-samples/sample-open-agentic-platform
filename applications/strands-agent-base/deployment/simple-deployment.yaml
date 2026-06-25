@@ -39,7 +39,7 @@ spec:
       serviceAccountName: default
       containers:
       - name: agent
-        image: 498530348755.dkr.ecr.us-west-2.amazonaws.com/strands-agent:latest
+        image: 929819487611.dkr.ecr.us-west-2.amazonaws.com/strands-agent:latest
         imagePullPolicy: Always
         ports:
         - name: a2a
