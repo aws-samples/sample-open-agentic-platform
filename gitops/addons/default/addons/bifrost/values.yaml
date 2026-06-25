@@ -101,25 +101,26 @@ bifrost:
         maxAgentDepth: 10
 
     plugins:
-      # Governance plugin enforces virtual keys (auth) + budgets + rate limits.
+      # TODO(llm-as-a-service): Re-enable governance with per-workload VK minting.
+      # VKs must be created dynamically via the Bifrost management API when a workload
+      # is deployed (e.g. KubeVela agent ComponentDefinition workflow step calls
+      # POST /api/governance/virtual-keys, writes the token to a k8s Secret, agent
+      # mounts it as LLM_GATEWAY_API_KEY). Pre-seeding VKs in Helm values does not
+      # scale and env.* references are not resolved for governance VK values.
+      # is_vk_mandatory is disabled until per-workload minting is implemented.
       governance:
         enabled: true
         config:
-          is_vk_mandatory: true
+          is_vk_mandatory: false
       telemetry:
         enabled: true
       logging:
         enabled: true
 
-    # ── Governance: budgets, rate limits, and the platform virtual key ──────
-    # Seeded into the governance store at startup. Callers present the VK via
-    # the `x-bf-vk` header. Per-workload VK issuance (one key per agent, with
-    # its own budget/rate-limit + rotation) is the planned follow-up; this is
-    # the shared platform key for the first cut.
     governance:
       budgets:
         - id: budget-platform
-          max_limit: 500          # USD per reset window
+          max_limit: 500
           reset_duration: "1M"
       rateLimits:
         - id: rate-limit-standard
@@ -127,17 +128,3 @@ bifrost:
           token_reset_duration: "1h"
           request_max_limit: 5000
           request_reset_duration: "1h"
-      virtualKeys:
-        - id: vk-platform-agents
-          name: "Platform Agents"
-          # Resolved from the BIFROST_PLATFORM_VK env var (injected via envFrom).
-          value: env.BIFROST_PLATFORM_VK
-          is_active: true
-          budget_id: budget-platform
-          rate_limit_id: rate-limit-standard
-          provider_configs:
-            - provider: bedrock
-              weight: 1
-              # Scope to the bedrock provider. Tighten to ["claude-sonnet"]
-              # once alias-vs-resolved-id matching is confirmed on-cluster.
-              allowed_models: ["*"]
