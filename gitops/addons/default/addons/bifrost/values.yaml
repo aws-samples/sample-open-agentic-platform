@@ -1,13 +1,6 @@
-# Bifrost AI Gateway — addon value overrides (layered by the addon ApplicationSet
-# on top of gitops/addons/charts/bifrost/values.yaml).
-#
-# Docs: https://docs.getbifrost.ai/
-# The upstream Helm chart maps every value here directly into the runtime
-# config.json, so this is fully declarative — no UI/API clicks required.
-#
-# Per-cluster values (podIdentity.clusterName/region, externalSecret.secretManagerKey)
-# are injected by the ApplicationSet valuesObject in
-# gitops/addons/bootstrap/default/addons.yaml.
+# Bifrost AI Gateway — addon value overrides.
+# Per-cluster values (podIdentity.clusterName/region) are injected by the
+# ApplicationSet valuesObject in gitops/addons/bootstrap/default/addons.yaml.
 
 # ── Pod Identity (Bedrock access) — umbrella chart ──────────────────────────
 podIdentity:
@@ -15,14 +8,7 @@ podIdentity:
   namespace: bifrost
   serviceAccountName: bifrost
 
-# ── ExternalSecret — umbrella chart ─────────────────────────────────────────
-# Account-level SM path; no per-cluster override needed.
-externalSecret:
-  secretStoreName: aws-secrets-manager
-  secretManagerKey: "open-agentic-platform/bifrost"
-
 # ── Upstream maximhq/bifrost subchart ───────────────────────────────────────
-# (doubled `bifrost.bifrost.*` is the upstream chart's own gateway config key)
 bifrost:
   image:
     tag: "v1.5.0"
@@ -30,13 +16,10 @@ bifrost:
 
   replicaCount: 1
 
-  # ServiceAccount that the PodIdentityAssociation binds to the Bedrock role.
   serviceAccount:
     create: true
     name: bifrost
 
-  # SQLite is sufficient for the gateway config + governance seed in dev.
-  # For enterprise/HA, switch to storage.mode: postgres + cluster mode.
   storage:
     mode: sqlite
     persistence:
@@ -57,43 +40,21 @@ bifrost:
   autoscaling:
     enabled: false
 
-  # Inject the platform virtual key (and encryption key) from the
-  # ExternalSecret-managed Secret as environment variables, so config.json can
-  # reference them via `env.*` instead of carrying secrets in git.
-  envFrom:
-    - secretRef:
-        name: bifrost-secrets
-
-  # ── Bifrost gateway runtime configuration ──────────────────────────────
   bifrost:
-    # Encryption key for data at rest (governance store). Sourced from the
-    # ExternalSecret-managed Secret.
-    encryptionKeySecret:
-      name: bifrost-secrets
-      key: BIFROST_ENCRYPTION_KEY
-
     client:
       initialPoolSize: 100
 
-    # AWS Bedrock provider via EKS Pod Identity — no static credentials.
-    # Leaving access_key/secret_key/value unset makes Bifrost use the AWS
-    # default credential chain, which resolves the Pod Identity association.
     providers:
       bedrock:
         keys:
           - name: bedrock-default
             models: ["*"]
             weight: 1
-            # Expose Claude Sonnet 4.5 as the friendly name "claude-sonnet".
-            # Cross-region inference profile ID (matches the prior LiteLLM config).
             aliases:
               claude-sonnet: us.anthropic.claude-sonnet-4-5-20250929-v1:0
             bedrock_key_config:
-              # Bedrock endpoint region (static — Bedrock is hosted in us-west-2
-              # for this platform, independent of the calling cluster's region).
               region: us-west-2
 
-    # MCP gateway support (tool calling through Bifrost).
     mcp:
       enabled: true
       toolManagerConfig:
@@ -102,12 +63,8 @@ bifrost:
 
     plugins:
       # TODO(llm-as-a-service): Re-enable governance with per-workload VK minting.
-      # VKs must be created dynamically via the Bifrost management API when a workload
-      # is deployed (e.g. KubeVela agent ComponentDefinition workflow step calls
-      # POST /api/governance/virtual-keys, writes the token to a k8s Secret, agent
-      # mounts it as LLM_GATEWAY_API_KEY). Pre-seeding VKs in Helm values does not
-      # scale and env.* references are not resolved for governance VK values.
-      # is_vk_mandatory is disabled until per-workload minting is implemented.
+      # See gitops/addons/charts/bifrost/DESIGN.md for the target architecture.
+      # is_vk_mandatory is disabled until per-workload VK minting is implemented.
       governance:
         enabled: true
         config:

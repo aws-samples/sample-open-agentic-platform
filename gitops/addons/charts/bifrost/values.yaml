@@ -1,19 +1,9 @@
-# Umbrella chart defaults. Per-cluster values (clusterName, region) are
-# injected via the ApplicationSet valuesObject.
-
 podIdentity:
   enabled: true
   clusterName: ""
   region: us-west-2
   namespace: bifrost
   serviceAccountName: bifrost
-
-# ExternalSecret reads from the account-level SM secret created by
-# `task agentic:bifrost-secrets` (path: open-agentic-platform/bifrost).
-# Same secret works on hub and all spokes.
-externalSecret:
-  secretStoreName: aws-secrets-manager
-  secretManagerKey: "open-agentic-platform/bifrost"
 
 bifrost:
   image:
