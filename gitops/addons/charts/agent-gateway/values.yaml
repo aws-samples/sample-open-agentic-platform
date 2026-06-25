@@ -23,6 +23,10 @@ ingress:
   enabled: true
   className: platform
   host: ""
+  # Dedicated hostname for agent routes (e.g. agents.peeks.dev.shapirov.people.a2z.com).
+  # Covered by the wildcard ACM cert. ExternalDNS creates the Route53 record automatically.
+  # Defaults to "agents.<host>" if not set.
+  agentHost: ""
 
 # MCP backend targets - the agent-core MCP servers
 mcpBackend:

@@ -286,6 +286,7 @@ agent-gateway:
     ingress:
       enabled: true
       host: '{{index .metadata.annotations "ingress_domain_name"}}'
+      agentHost: '{{default (printf "agents.%s" (index .metadata.annotations "ingress_domain_name")) (index .metadata.annotations "agent_gateway_host")}}'
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
