@@ -48,7 +48,7 @@ jwtAuth:
   # Cache duration for JWKS keys
   cacheDuration: "5m"
   # Authorization - CEL expression for allowed groups
-  allowExpression: 'jwt.groups.exists(g, g == "admin")'
+  allowExpression: 'jwt.realm_access.roles.exists(r, r == "default-roles-platform")'
 
 # MCP authentication configuration
 # Disabled by default — Gateway-level JWT auth (jwt-policy.yaml) handles
