@@ -53,11 +53,6 @@ jwtAuth:
   cacheDuration: "5m"
   # Authorization - CEL expression for allowed groups
   allowExpression: 'jwt.realm_access.roles.exists(r, r == "default-roles-platform")'
-  # TODO(agent-identity): /mcp routes use Permissive JWT (per-MCP-server policy in mcp-server CUE).
-  # Target design: agent identity via Keycloak client_credentials + token exchange (RFC 8693).
-  # See gitops/addons/charts/agent-gateway/values.yaml for full design note.
-  whitelistedRoutes:
-    - /mcp
 
 # MCP authentication configuration
 # Disabled by default — Gateway-level JWT auth (jwt-policy.yaml) handles
