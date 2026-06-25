@@ -178,6 +178,28 @@ spec:
         				}]
         			}
         		}
+
+        		// TODO(agent-identity): Permissive JWT so agents can call MCP without a bearer token.
+        		// Replace with Strict + OAuth2 Token Exchange (RFC 8693) once per-agent Keycloak
+        		// client_credentials flow is implemented. See agent-gateway/values.yaml for design.
+        		mcpAuthPolicy: {
+        			apiVersion: "agentgateway.dev/v1alpha1"
+        			kind:       "AgentgatewayPolicy"
+        			metadata: {
+        				name:      parameter.name + "-mcp-auth"
+        				namespace: parameter.namespace
+        				labels: "app.kubernetes.io/name": parameter.name
+        			}
+        			spec: {
+        				targetRefs: [{
+        					group:     "gateway.networking.k8s.io"
+        					kind:      "HTTPRoute"
+        					name:      parameter.name
+        					namespace: parameter.namespace
+        				}]
+        				traffic: jwtAuthentication: mode: "Permissive"
+        			}
+        		}
         	}
 
         	// Optional: AgentgatewayPolicy for tool-level authorization
