@@ -138,3 +138,14 @@ The `workshop/` directory contains hands-on examples:
 - [Langfuse](https://langfuse.com/docs)
 - [Amazon Bedrock](https://aws.amazon.com/bedrock)
 - [appmod-blueprints](https://github.com/aws-samples/appmod-blueprints) (base platform)
+
+## Design & Architecture
+
+Design documents and open work items — check these before starting a new feature:
+
+| Document | What it covers | Open items |
+|---|---|---|
+| [gitops/addons/charts/bifrost/DESIGN.md](gitops/addons/charts/bifrost/DESIGN.md) | Bifrost AI Gateway architecture, current state (no auth), and **per-workload Virtual Key minting** target design | ⚠️ `is_vk_mandatory` is disabled — implement per-workload VK minting via KubeVela workflow step before enabling |
+| [platform/oam/DESIGN.md](platform/oam/DESIGN.md) | KubeVela OAM `agent` and `mcp-server` ComponentDefinition design decisions | — |
+| [applications/strands-agent-base/ARCHITECTURE.md](applications/strands-agent-base/ARCHITECTURE.md) | Strands agent internals, LLM gateway integration, A2A protocol | References LiteLLM — superseded by Bifrost (`OpenAIModel` + `x-bf-vk`) |
+| [gitops/DEPLOYMENT.md](gitops/DEPLOYMENT.md) | GitOps deployment runbook: ArgoCD bootstrap, addon enablement, Pod Identity setup | LiteLLM Pod Identity step is superseded by declarative Crossplane in bifrost chart |
