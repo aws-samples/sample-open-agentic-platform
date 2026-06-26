@@ -290,6 +290,17 @@ agent-gateway:
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
+    # Secretless workload identity (Shape A): trust the cluster's own EKS OIDC
+    # issuer as a second JWT provider so agent ServiceAccount tokens authenticate
+    # without a secret. Sourced from the eks_oidc_provider cluster-secret
+    # annotation (set automatically by the platform cluster composition for
+    # spokes; set manually on the hub — see gitops/DEPLOYMENT.md). When the
+    # annotation is absent the value is empty and the workload provider is
+    # omitted (humans-only via Keycloak).
+    workloadIdentity:
+      issuer: '{{ index .metadata.annotations "eks_oidc_provider" }}'
+      jwksHost: '{{ with (index .metadata.annotations "eks_oidc_provider") }}oidc.eks.{{ index $.metadata.annotations "aws_region" }}.amazonaws.com{{ end }}'
+      jwksPath: '{{ with (index .metadata.annotations "eks_oidc_provider") }}{{ printf "%s/keys" (trimPrefix (printf "https://oidc.eks.%s.amazonaws.com" (index $.metadata.annotations "aws_region")) .) }}{{ end }}'
 
 # OAM Agent Components — KubeVela ComponentDefinitions for agentic workloads
 # (agent, mcp-server, agentcore-memory). Requires KubeVela to be running

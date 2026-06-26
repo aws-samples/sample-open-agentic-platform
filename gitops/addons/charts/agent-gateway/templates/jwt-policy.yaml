@@ -2,6 +2,11 @@
 {{- $realm := .Values.global.keycloak.realm -}}
 {{- $pathPrefix := .Values.global.keycloak.pathPrefix | default "" -}}
 {{- $jwksPath := printf "%s/realms/%s/protocol/openid-connect/certs" $pathPrefix $realm -}}
+{{- $wi := .Values.workloadIdentity -}}
+{{- $authz := .Values.jwtAuth.allowExpression -}}
+{{- if $wi.issuer -}}
+{{- $authz = printf "(%s) || jwt.sub.startsWith(%q)" .Values.jwtAuth.allowExpression $wi.allowedSubjectPrefix -}}
+{{- end -}}
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -16,6 +21,7 @@ spec:
     jwtAuthentication:
       mode: {{ .Values.jwtAuth.mode }}
       providers:
+      # Human callers — Keycloak
       - issuer: {{ $issuerUrl | quote }}
         jwks:
           remote:
@@ -27,8 +33,23 @@ spec:
               name: {{ .Values.global.keycloak.serviceName }}
               namespace: {{ .Values.global.keycloak.namespace }}
               port: {{ .Values.global.keycloak.servicePort }}
+      {{- if $wi.issuer }}
+      # Workload callers — cluster EKS OIDC (projected ServiceAccount tokens)
+      - issuer: {{ $wi.issuer | quote }}
+        audiences:
+        - {{ $wi.audience | quote }}
+        jwks:
+          remote:
+            jwksPath: {{ required "workloadIdentity.jwksPath is required when workloadIdentity.issuer is set" $wi.jwksPath | quote }}
+            cacheDuration: {{ .Values.jwtAuth.cacheDuration | quote }}
+            backendRef:
+              group: agentgateway.dev
+              kind: AgentgatewayBackend
+              name: eks-oidc-jwks
+              namespace: agentgateway-system
+      {{- end }}
     authorization:
       action: Allow
       policy:
         matchExpressions:
-        - {{ .Values.jwtAuth.allowExpression | quote }}
+        - {{ $authz | quote }}

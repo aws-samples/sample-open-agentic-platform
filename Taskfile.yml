@@ -188,6 +188,23 @@ tasks:
       - kubectl --context {{.HUB_CLUSTER_NAME}} cluster-info >/dev/null
       - printf '✓ kubectl context "{{.HUB_CLUSTER_NAME}}" is reachable\n'
 
+  agentic:hub-oidc-annotation:
+    desc: Annotate the hub cluster secret with its EKS OIDC issuer (enables secretless workload identity for agents running on the hub)
+    deps: [agentic:ensure-kubeconfig]
+    cmds:
+      - |
+        # The hub is singular and bootstrapped from a kind cluster before the
+        # agentic platform exists, so (unlike spokes — which get this annotation
+        # automatically from the platform-cluster Crossplane composition) the hub
+        # is annotated here. Idempotent; re-applied on every install/upgrade.
+        # Customers typically run agents on spokes, not the hub — this exists so
+        # the platform is usable hub-only for evaluation without spokes.
+        ISSUER=$(aws eks describe-cluster --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}} \
+          --query 'cluster.identity.oidc.issuer' --output text)
+        kubectl --context {{.HUB_CLUSTER_NAME}} annotate secret {{.HUB_CLUSTER_NAME}} -n argocd --overwrite \
+          eks_oidc_provider="${ISSUER}"
+        printf '✓ Hub cluster secret annotated: eks_oidc_provider=%s\n' "${ISSUER}"
+
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
     deps: [agentic:ensure-kubeconfig]
@@ -197,6 +214,7 @@ tasks:
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
       HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
+      - task: agentic:hub-oidc-annotation
       - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl --context {{.HUB_CLUSTER_NAME}} apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
 

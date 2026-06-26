@@ -45,14 +45,38 @@ mcpBackend:
       port: 8080
       protocol: StreamableHTTP
 
-# JWT authentication configuration
+# JWT authentication configuration (humans, via Keycloak)
 jwtAuth:
   # Validation mode: Strict requires all claims to be valid
   mode: Strict
   # Cache duration for JWKS keys
   cacheDuration: "5m"
-  # Authorization - CEL expression for allowed groups
-  allowExpression: 'jwt.realm_access.roles.exists(r, r == "default-roles-platform")'
+  # Authorization - CEL expression for allowed human callers.
+  # has() guard keeps this safe when a second (workload) provider is active and
+  # validates tokens that lack realm_access (EKS OIDC ServiceAccount tokens).
+  allowExpression: 'has(jwt.realm_access) && jwt.realm_access.roles.exists(r, r == "default-roles-platform")'
+
+# Workload identity (Shape A): the gateway trusts the cluster's EKS OIDC issuer
+# as a SECOND JWT provider so agent workloads authenticate with their projected
+# ServiceAccount token (no secret, auto-rotated). Keycloak (jwtAuth) stays for
+# humans. Both providers coexist on the same Strict policy.
+#
+# Activation is derived from `issuer`: when empty (the default) the workload
+# provider and its backend are omitted entirely (humans-only). Per-cluster
+# values are wired from the agent-gateway addon valuesObject in
+# gitops/addons/bootstrap/default/addons.yaml.
+workloadIdentity:
+  # Cluster OIDC issuer, e.g. https://oidc.eks.us-west-2.amazonaws.com/id/<ID>.
+  # Empty = workload identity disabled.
+  issuer: ""
+  # Host serving the JWKS (the OIDC issuer host); TLS uses system trusted CAs.
+  jwksHost: ""
+  # JWKS path relative to the host, e.g. /id/<ID>/keys
+  jwksPath: ""
+  # Required audience stamped into the projected SA token and enforced here.
+  audience: "agentgateway"
+  # CEL prefix identifying allowed workload subjects (system:serviceaccount:<ns>:<sa>).
+  allowedSubjectPrefix: "system:serviceaccount:"
 
 # MCP authentication configuration
 # Disabled by default — Gateway-level JWT auth (jwt-policy.yaml) handles
