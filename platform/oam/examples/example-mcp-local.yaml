@@ -21,7 +21,7 @@ spec:
         name: mcp-time
         namespace: mcp-time-server
         description: "MCP server that provides current time tools"
-        image: "929819487611.dkr.ecr.us-west-2.amazonaws.com/mcp-time-server:http"
+        image: "public.ecr.aws/z0a4o2j5/mcp-time-server:latest"
         containerPort: 8000
         replicas: 1
         env:
