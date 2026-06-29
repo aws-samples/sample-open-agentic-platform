@@ -130,10 +130,15 @@ spec:
         - name: wait-for-postgres
           image: busybox:1.36
           command: ['sh', '-c', 'until nc -z langfuse-postgres 5432; do echo "Waiting for postgres..."; sleep 2; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
       containers:
         - name: langfuse
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 3000
           envFrom:
@@ -156,14 +161,16 @@ spec:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 30
-            periodSeconds: 10
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 5
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
 ---
 apiVersion: v1
 kind: Service
