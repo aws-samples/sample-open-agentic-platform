@@ -212,6 +212,7 @@ curl -N http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse
 | LiteLLM "Unable to locate credentials" | Missing Pod Identity | Create Pod Identity association, restart LiteLLM |
 | LiteLLM "model version has reached end of life" | Outdated model IDs | Update to `us.anthropic.*` inference profiles in litellm chart |
 | ApplicationSet "map has no entry" | Cluster secret missing annotations | Use `useSelectors: false` with `globalSelectors` |
+| langfuse ApplicationSet "map has no entry for key \"hub_cluster_name\"" (blocks all agentic addons — parent `agent-platform-addons` app retries forever and never applies later sync-wave ApplicationSets) | langfuse `secretManagerKey` referenced a non-existent `hub_cluster_name` annotation | Template must use `aws_cluster_name` (the per-cluster annotation set by the fleet-secret chart), not `hub_cluster_name`. Fixed in `gitops/addons/bootstrap/default/addons.yaml`. The `<cluster>/keycloak-clients` Secrets Manager secret must also exist. |
 | Gateway API CRDs Job fails | No outbound internet or image pull issue | Verify NAT gateway, check `bitnami/kubectl:latest` availability |
 | AgentGateway proxy not starting | Missing Gateway API CRDs or JWKS fetch failure | Verify CRDs installed, check KeyCloak reachability |
 | JWT validation fails | Wrong issuer URL | Ensure issuer matches `iss` claim (`https://<domain>/keycloak/realms/platform`) |
