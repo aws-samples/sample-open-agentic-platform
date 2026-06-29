@@ -1,6 +1,7 @@
 """FastAPI application with A2A protocol support and per-session agents."""
 
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict
@@ -10,6 +11,28 @@ from strands.multiagent.a2a import A2AServer
 
 from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
+
+# ── OpenTelemetry initialization (when exporter env vars are set) ────────
+if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+        resource = Resource.create({
+            "service.name": os.getenv("OTEL_SERVICE_NAME", config.AGENT_NAME),
+        })
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(
+            endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            insecure=True,
+        )
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+    except ImportError:
+        pass  # OTLP exporter not installed — skip silently
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper()),

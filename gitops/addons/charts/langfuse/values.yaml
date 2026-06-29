@@ -2,7 +2,7 @@ replicas: 1
 
 image:
   repository: langfuse/langfuse
-  tag: "2"
+  tag: "3"
   pullPolicy: IfNotPresent
 
 ingress:
@@ -36,3 +36,42 @@ postgres:
     limits:
       cpu: "1"
       memory: 512Mi
+
+# Seed: auto-creates org, project, and API keys on first deploy
+seed:
+  enabled: true
+  orgId: "org-agent-platform"
+  orgName: "Agent Platform"
+  projectId: "proj-agent-platform"
+  projectName: "agent-platform"
+  apiKey:
+    id: "ak-otel-collector"
+    publicKey: "pk-lf-otel-platform"
+    secretKey: "sk-lf-otel-platform-2026"
+
+# ClickHouse (required for Langfuse v3)
+clickhouse:
+  image:
+    repository: clickhouse/clickhouse-server
+    tag: "24.12"
+  storage: 20Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+# Redis (required for Langfuse v3 queue + cache)
+redis:
+  image:
+    repository: redis
+    tag: "7-alpine"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

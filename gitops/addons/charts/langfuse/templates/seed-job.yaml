@@ -1,0 +1,154 @@
+{{- if .Values.seed.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: langfuse-seed
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: langfuse-seed
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-for-langfuse
+          image: postgres:16-alpine
+          command: ['sh', '-c', 'until pg_isready -h langfuse-postgres -p 5432; do echo "Waiting for Postgres..."; sleep 3; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: seed
+          image: postgres:16-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PGHOST
+              value: langfuse-postgres
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              value: langfuse
+            - name: PGPASSWORD
+              value: langfuse-password
+            - name: PGDATABASE
+              value: langfuse
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+
+              echo "=== Langfuse Seed: Creating org, project, and API keys ==="
+
+              # Idempotent seed — only creates if not exists
+              psql <<'SQL'
+              -- Enable pgcrypto for bcrypt hashing
+              CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+              -- 1. Organization
+              INSERT INTO organizations (id, name)
+              VALUES ('{{ .Values.seed.orgId }}', '{{ .Values.seed.orgName }}')
+              ON CONFLICT (id) DO NOTHING;
+
+              -- 2. Project
+              INSERT INTO projects (id, name, org_id)
+              VALUES ('{{ .Values.seed.projectId }}', '{{ .Values.seed.projectName }}', '{{ .Values.seed.orgId }}')
+              ON CONFLICT (id) DO NOTHING;
+
+              -- 3. API Keys (public/secret pair for OTel collector)
+              INSERT INTO api_keys (id, public_key, hashed_secret_key, fast_hashed_secret_key, display_secret_key, project_id, note)
+              VALUES (
+                '{{ .Values.seed.apiKey.id }}',
+                '{{ .Values.seed.apiKey.publicKey }}',
+                crypt('{{ .Values.seed.apiKey.secretKey }}', gen_salt('bf')),
+                encode(sha256(convert_to('{{ .Values.seed.apiKey.secretKey }}', 'UTF8')), 'hex'),
+                '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...secret',
+                '{{ .Values.seed.projectId }}',
+                'Platform OTel Collector (auto-provisioned)'
+              )
+              ON CONFLICT (id) DO NOTHING;
+
+              -- 4. Auto-assign all existing users as OWNER of the org and project
+              --    (idempotent — skips if membership already exists)
+              INSERT INTO organization_memberships (id, org_id, user_id, role)
+              SELECT 'om-' || id, '{{ .Values.seed.orgId }}', id, 'OWNER'
+              FROM users
+              WHERE id NOT IN (
+                SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}'
+              );
+
+              INSERT INTO project_memberships (project_id, user_id, org_membership_id, role)
+              SELECT '{{ .Values.seed.projectId }}', u.id, om.id, 'OWNER'
+              FROM users u
+              JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
+              WHERE u.id NOT IN (
+                SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}'
+              );
+              SQL
+
+              echo "=== Seed complete ==="
+              echo "  Org:        {{ .Values.seed.orgName }}"
+              echo "  Project:    {{ .Values.seed.projectName }}"
+              echo "  Public Key: {{ .Values.seed.apiKey.publicKey }}"
+              echo "  Secret Key: [stored as hash]"
+
+              # Write keys to a K8s secret so PushSecret can sync to Secrets Manager
+              cat > /tmp/create-secret.sql <<EOSQL
+              -- Store keys in a helper table for reference (not used at runtime)
+              SELECT 1;
+              EOSQL
+              psql < /tmp/create-secret.sql || true
+---
+# Kubernetes Secret holding Langfuse OTEL API keys (for PushSecret → SM)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: langfuse-otel-keys
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  LANGFUSE_PUBLIC_KEY: "{{ .Values.seed.apiKey.publicKey }}"
+  LANGFUSE_SECRET_KEY: "{{ .Values.seed.apiKey.secretKey }}"
+---
+# PushSecret: sync to AWS Secrets Manager so spoke OTel collectors can read via ExternalSecret
+apiVersion: external-secrets.io/v1alpha1
+kind: PushSecret
+metadata:
+  name: langfuse-otel-keys
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretStoreRefs:
+    - name: aws-secrets-manager
+      kind: ClusterSecretStore
+  selector:
+    secret:
+      name: langfuse-otel-keys
+  data:
+    - conversionStrategy: None
+      match:
+        secretKey: LANGFUSE_PUBLIC_KEY
+        remoteRef:
+          remoteKey: hub/langfuse-otel-keys
+          property: LANGFUSE_PUBLIC_KEY
+    - conversionStrategy: None
+      match:
+        secretKey: LANGFUSE_SECRET_KEY
+        remoteRef:
+          remoteKey: hub/langfuse-otel-keys
+          property: LANGFUSE_SECRET_KEY
+{{- end }}

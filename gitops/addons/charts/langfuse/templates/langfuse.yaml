@@ -26,6 +26,14 @@ data:
   AUTH_KEYCLOAK_ISSUER: "{{ .Values.keycloak.issuerUrl }}"
   AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING: "true"
   AUTH_DISABLE_SIGNUP: "{{ .Values.keycloak.disableSignup | default "false" }}"
+  # ClickHouse (required for Langfuse v3)
+  CLICKHOUSE_URL: "http://langfuse-clickhouse:8123"
+  CLICKHOUSE_MIGRATION_URL: "clickhouse://langfuse-clickhouse:9000"
+  CLICKHOUSE_USER: "default"
+  CLICKHOUSE_PASSWORD: "clickhouse"
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  # Redis (required for Langfuse v3)
+  REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -126,19 +134,34 @@ spec:
       labels:
         app: langfuse
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.36
           command: ['sh', '-c', 'until nc -z langfuse-postgres 5432; do echo "Waiting for postgres..."; sleep 2; done']
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65534
             readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
       containers:
         - name: langfuse
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - containerPort: 3000
           envFrom:
@@ -161,16 +184,21 @@ spec:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 90
             periodSeconds: 15
-            failureThreshold: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 30
             periodSeconds: 10
-            failureThreshold: 12
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
 ---
 apiVersion: v1
 kind: Service
@@ -203,3 +231,127 @@ spec:
       remoteRef:
         key: {{ .Values.keycloak.secretManagerKey }}
         property: LANGFUSE_CLIENT_SECRET
+
+---
+# ClickHouse (required for Langfuse v3 — OLAP storage for traces)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: langfuse-clickhouse
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: langfuse-clickhouse
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  revisionHistoryLimit: 10
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app: langfuse-clickhouse
+  template:
+    metadata:
+      labels:
+        app: langfuse-clickhouse
+    spec:
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      securityContext: {}
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
+          imagePullPolicy: IfNotPresent
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          ports:
+            - containerPort: 8123
+              name: http
+              protocol: TCP
+            - containerPort: 9000
+              name: native
+              protocol: TCP
+          env:
+            - name: CLICKHOUSE_DB
+              value: default
+            - name: CLICKHOUSE_USER
+              value: default
+            - name: CLICKHOUSE_PASSWORD
+              value: clickhouse
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: clickhouse-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: {{ .Values.clickhouse.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-clickhouse
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+  type: ClusterIP
+---
+# Redis (required for Langfuse v3 — queue + cache)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-redis
+  template:
+    metadata:
+      labels:
+        app: langfuse-redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
+          args: ["--maxmemory-policy", "noeviction"]
+          ports:
+            - containerPort: 6379
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP
