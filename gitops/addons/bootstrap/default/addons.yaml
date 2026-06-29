@@ -68,7 +68,7 @@ langfuse:
       host: '{{.metadata.annotations.ingress_domain_name}}'
     keycloak:
       issuerUrl: '{{default (printf "https://%s/keycloak/realms/platform" .metadata.annotations.ingress_domain_name) (index .metadata.annotations "keycloak_issuer_url")}}'
-      secretManagerKey: '{{.metadata.annotations.hub_cluster_name}}/keycloak-clients'
+      secretManagerKey: '{{default (index .metadata.annotations "aws_cluster_name") (index .metadata.annotations "hub_cluster_name")}}/keycloak-clients'
   ignoreDifferences:
     - group: external-secrets.io
       kind: ExternalSecret
