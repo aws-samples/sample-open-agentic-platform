@@ -1,6 +1,8 @@
 # Open Agentic Platform on Amazon EKS
 
-A production-ready AI agent platform built on Amazon EKS, featuring KAgent, LiteLLM gateway, Langfuse observability, AgentGateway (MCP auth), and multi-agent orchestration.
+An AI agent platform built on Amazon EKS, featuring Bifrost LLM gateway, Langfuse observability, AgentGateway (A2A MCP auth), and multi-agent orchestration.
+
+> **Solution Support:** This solution is provided with best-effort support. Before deploying to production, follow your organization's standard SDLC process and validate the solution in a pre-production environment first.
 
 ## Quick Start
 
