@@ -52,6 +52,10 @@ data:
       awsxray:
         region: {{ .Values.global.awsRegion }}
       {{- end }}
+      {{- if .Values.bifrost.enabled }}
+      debug:
+        verbosity: basic
+      {{- end }}
       {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
       # Consolidated trace trees to Langfuse v3
       otlphttp/langfuse:
@@ -85,9 +89,7 @@ data:
           receivers: [prometheus]
           processors: [batch]
           exporters:
-            {{- if .Values.xray.enabled }}
-            - awsxray
-            {{- end }}
+            - debug
         {{- end }}
       telemetry:
         logs:
