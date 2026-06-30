@@ -34,7 +34,9 @@ data:
   CLICKHOUSE_CLUSTER_ENABLED: "false"
   # Redis (required for Langfuse v3)
   REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
-  # Blob storage — disable S3 event upload (not needed for basic tracing)
+  # Blob storage — set bucket name (required by v3 Zod schema validation)
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse-events-placeholder"
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: "{{ .Values.global.awsRegion | default "us-east-1" }}"
   LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "false"
 ---
 apiVersion: apps/v1
