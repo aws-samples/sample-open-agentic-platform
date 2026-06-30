@@ -1,4 +1,10 @@
 {{- if .Values.seed.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: langfuse-seed
+  namespace: {{ .Release.Namespace }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -15,7 +21,7 @@ spec:
         app: langfuse-seed
     spec:
       restartPolicy: OnFailure
-      serviceAccountName: default
+      serviceAccountName: langfuse-seed
       securityContext:
         runAsNonRoot: true
         seccompProfile:
