@@ -34,6 +34,8 @@ data:
   CLICKHOUSE_CLUSTER_ENABLED: "false"
   # Redis (required for Langfuse v3)
   REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
+  # Blob storage — disable S3 event upload (not needed for basic tracing)
+  LANGFUSE_S3_EVENT_UPLOAD_ENABLED: "false"
 ---
 apiVersion: apps/v1
 kind: StatefulSet

@@ -20,9 +20,3 @@ jaeger:
 # X-Ray export (uses Pod Identity for auth)
 xray:
   enabled: true
-
-# Langfuse OTLP export (LLM trace observability on hub)
-langfuse:
-  enabled: true
-  endpoint: ""  # Set dynamically by ApplicationSet (e.g., https://<ingress_domain>)
-  secretManagerKey: ""  # Set dynamically: <cluster_name>/langfuse-otel-keys

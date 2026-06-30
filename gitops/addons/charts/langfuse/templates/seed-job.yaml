@@ -106,49 +106,4 @@ spec:
               echo "  Project:    {{ .Values.seed.projectName }}"
               echo "  Public Key: {{ .Values.seed.apiKey.publicKey }}"
               echo "  Secret Key: [stored as hash]"
-
-              # Write keys to a K8s secret so PushSecret can sync to Secrets Manager
-              cat > /tmp/create-secret.sql <<EOSQL
-              -- Store keys in a helper table for reference (not used at runtime)
-              SELECT 1;
-              EOSQL
-              psql < /tmp/create-secret.sql || true
----
-# Kubernetes Secret holding Langfuse OTEL API keys (for PushSecret → SM)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: langfuse-otel-keys
-  namespace: {{ .Release.Namespace }}
-type: Opaque
-stringData:
-  LANGFUSE_PUBLIC_KEY: "{{ .Values.seed.apiKey.publicKey }}"
-  LANGFUSE_SECRET_KEY: "{{ .Values.seed.apiKey.secretKey }}"
----
-# PushSecret: sync to AWS Secrets Manager so spoke OTel collectors can read via ExternalSecret
-apiVersion: external-secrets.io/v1alpha1
-kind: PushSecret
-metadata:
-  name: langfuse-otel-keys
-  namespace: {{ .Release.Namespace }}
-spec:
-  secretStoreRefs:
-    - name: aws-secrets-manager
-      kind: ClusterSecretStore
-  selector:
-    secret:
-      name: langfuse-otel-keys
-  data:
-    - conversionStrategy: None
-      match:
-        secretKey: LANGFUSE_PUBLIC_KEY
-        remoteRef:
-          remoteKey: hub/langfuse-otel-keys
-          property: LANGFUSE_PUBLIC_KEY
-    - conversionStrategy: None
-      match:
-        secretKey: LANGFUSE_SECRET_KEY
-        remoteRef:
-          remoteKey: hub/langfuse-otel-keys
-          property: LANGFUSE_SECRET_KEY
 {{- end }}

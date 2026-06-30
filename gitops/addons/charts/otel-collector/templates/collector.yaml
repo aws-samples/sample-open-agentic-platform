@@ -43,13 +43,6 @@ data:
         tls:
           insecure: true
       {{- end }}
-      {{- if .Values.langfuse.enabled }}
-      otlphttp/langfuse:
-        endpoint: {{ .Values.langfuse.endpoint }}/api/public/otel
-        headers:
-          Authorization: "Basic ${LANGFUSE_OTEL_AUTH}"
-          x-langfuse-ingestion-version: "4"
-      {{- end }}
 
     service:
       extensions: [health_check]
@@ -63,9 +56,6 @@ data:
             {{- end }}
             {{- if .Values.jaeger.enabled }}
             - otlp/jaeger
-            {{- end }}
-            {{- if .Values.langfuse.enabled }}
-            - otlphttp/langfuse
             {{- end }}
 ---
 apiVersion: apps/v1
@@ -101,14 +91,6 @@ spec:
           env:
             - name: AWS_REGION
               value: {{ .Values.global.awsRegion }}
-            {{- if .Values.langfuse.enabled }}
-            - name: LANGFUSE_OTEL_AUTH
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-otel-keys
-                  key: LANGFUSE_OTEL_AUTH
-                  optional: true
-            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /conf

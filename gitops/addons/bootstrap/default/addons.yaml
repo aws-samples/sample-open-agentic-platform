@@ -123,10 +123,6 @@ otel-collector:
   valuesObject:
     global:
       awsRegion: '{{.metadata.annotations.aws_region}}'
-    langfuse:
-      enabled: true
-      endpoint: 'https://{{.metadata.annotations.ingress_domain_name}}'
-      secretManagerKey: 'hub/langfuse-otel-keys'
 
 prometheus-operator-crds:
   enabled: false

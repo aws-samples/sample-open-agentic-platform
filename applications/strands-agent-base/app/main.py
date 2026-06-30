@@ -13,26 +13,21 @@ from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
 # ── OpenTelemetry initialization (when exporter env vars are set) ────────
-if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+if os.getenv("LANGFUSE_BASE_URL"):
     try:
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        import base64
+        from strands.telemetry import StrandsTelemetry
 
-        resource = Resource.create({
-            "service.name": os.getenv("OTEL_SERVICE_NAME", config.AGENT_NAME),
-        })
-        provider = TracerProvider(resource=resource)
-        exporter = OTLPSpanExporter(
-            endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
-            insecure=True,
-        )
-        provider.add_span_processor(BatchSpanProcessor(exporter))
-        trace.set_tracer_provider(provider)
+        # Strands uses standard OTel env vars — construct the OTLP auth header
+        auth_str = f"{os.getenv('LANGFUSE_PUBLIC_KEY', '')}:{os.getenv('LANGFUSE_SECRET_KEY', '')}"
+        auth_bytes = base64.b64encode(auth_str.encode()).decode()
+
+        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = os.getenv("LANGFUSE_BASE_URL") + "/api/public/otel"
+        os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth_bytes},x-langfuse-ingestion-version=4"
+
+        strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
     except ImportError:
-        pass  # OTLP exporter not installed — skip silently
+        pass  # StrandsTelemetry not available — skip
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper()),
