@@ -60,7 +60,7 @@ Traces are authenticated via HTTP Basic Auth:
 The `agent` OAM component injects these env vars:
 
 ```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel.svc.cluster.local:4317
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel.svc.cluster.local:4318
 OTEL_SERVICE_NAME=<agent-name>
 LANGFUSE_PUBLIC_KEY=<from OAM Application properties>
 LANGFUSE_SECRET_KEY=<from OAM Application properties>
@@ -117,7 +117,7 @@ Runs every 5 minutes (idempotent):
 Deployed on every spoke cluster (namespace: `otel`).
 
 Two pipelines:
-- **Traces:** OTLP receivers (gRPC:4317, HTTP:4318) → X-Ray exporter
+- **Traces:** OTLP receiver (HTTP:4318) → otlphttp/langfuse exporter
 - **Metrics:** Prometheus scraper (Bifrost) → AMP remote write
 
 The Langfuse trace export happens directly from the agent SDK, not through the collector. The collector handles infrastructure-level traces (X-Ray service maps) and Bifrost metrics only.
