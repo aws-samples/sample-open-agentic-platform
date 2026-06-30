@@ -57,6 +57,8 @@ langfuse:
   path: 'gitops/addons/charts/langfuse'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '5'
+  selectorMatchLabels:
+    enable_langfuse: "true"
   selector:
     matchExpressions:
       - key: enable_langfuse
