@@ -1,5 +1,5 @@
 global:
-  awsRegion: us-east-1
+  awsRegion: ""
 
 clusterName: ""
 
