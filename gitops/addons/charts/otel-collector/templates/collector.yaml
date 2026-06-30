@@ -12,17 +12,33 @@ metadata:
 data:
   config.yaml: |
     receivers:
+      # Accepts OTLP traces from agents and Bifrost
       otlp:
         protocols:
           grpc:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+      {{- if .Values.bifrost.enabled }}
+      # Scrapes Prometheus metrics from Bifrost proxy
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: bifrost
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["{{ .Values.bifrost.scrapeEndpoint }}"]
+      {{- end }}
 
     processors:
+      # 100% sampling — never drop agent or LLM spans
+      probabilistic_sampler:
+        sampling_percentage: 100.0
+      # Batch for efficient export
       batch:
-        timeout: 30s
-        send_batch_size: 8192
+        send_batch_size: 256
+        timeout: 1s
+        send_batch_max_size: 512
       memory_limiter:
         check_interval: 5s
         limit_mib: 400
@@ -37,11 +53,20 @@ data:
       awsxray:
         region: {{ .Values.global.awsRegion }}
       {{- end }}
-      {{- if .Values.jaeger.enabled }}
-      otlp/jaeger:
-        endpoint: {{ .Values.jaeger.endpoint }}
-        tls:
-          insecure: true
+      {{- if .Values.langfuse.enabled }}
+      # Pushes unified trace tree (agent + Bifrost spans) to Langfuse
+      otlphttp/langfuse:
+        endpoint: "{{ .Values.langfuse.endpoint }}"
+        headers:
+          Authorization: "Basic ${LANGFUSE_OTEL_AUTH}"
+          x-langfuse-ingestion-version: "4"
+      {{- end }}
+      {{- if .Values.bifrost.enabled }}
+      # Forwards Bifrost metrics to AMP via remote write
+      prometheusremotewrite:
+        endpoint: "${AMP_REMOTE_WRITE_ENDPOINT}"
+        auth:
+          authenticator: sigv4auth
       {{- end }}
 
     service:
@@ -49,14 +74,25 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [probabilistic_sampler, memory_limiter, batch]
           exporters:
             {{- if .Values.xray.enabled }}
             - awsxray
             {{- end }}
-            {{- if .Values.jaeger.enabled }}
-            - otlp/jaeger
+            {{- if .Values.langfuse.enabled }}
+            - otlphttp/langfuse
             {{- end }}
+        {{- if .Values.bifrost.enabled }}
+        metrics:
+          receivers: [prometheus]
+          processors: [memory_limiter, batch]
+          exporters:
+            - prometheusremotewrite
+        {{- end }}
+
+      telemetry:
+        logs:
+          level: "info"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -91,6 +127,16 @@ spec:
           env:
             - name: AWS_REGION
               value: {{ .Values.global.awsRegion }}
+            {{- if .Values.langfuse.enabled }}
+            - name: LANGFUSE_OTEL_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-otel-auth
+                  key: LANGFUSE_OTEL_AUTH
+                  optional: true
+            {{- end }}
+            - name: AMP_REMOTE_WRITE_ENDPOINT
+              value: ""
           volumeMounts:
             - name: config
               mountPath: /conf

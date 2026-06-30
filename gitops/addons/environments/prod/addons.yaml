@@ -1,3 +1,0 @@
-# Spoke-prod: disable hub-only components
-langfuse:
-  enabled: false

@@ -15,6 +15,7 @@ spec:
         app: langfuse-seed
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: langfuse-seed
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -30,13 +31,21 @@ spec:
               drop: ["ALL"]
       containers:
         - name: seed
-          image: postgres:16-alpine
+          image: amazon/aws-cli:latest
           securityContext:
             allowPrivilegeEscalation: false
-            runAsUser: 70
+            runAsUser: 1000
             capabilities:
               drop: ["ALL"]
           env:
+            - name: AWS_REGION
+              value: "{{ .Values.global.awsRegion | default "us-east-1" }}"
+            - name: SECRET_NAME
+              value: "{{ .Values.seed.secretManagerPath }}"
+            - name: LANGFUSE_PUBLIC_KEY
+              value: "{{ .Values.seed.apiKey.publicKey }}"
+            - name: LANGFUSE_SECRET_KEY
+              value: "{{ .Values.seed.apiKey.secretKey }}"
             - name: PGHOST
               value: langfuse-postgres
             - name: PGPORT
@@ -44,7 +53,10 @@ spec:
             - name: PGUSER
               value: langfuse
             - name: PGPASSWORD
-              value: langfuse-password
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-db-credentials
+                  key: password
             - name: PGDATABASE
               value: langfuse
           command:
@@ -53,57 +65,64 @@ spec:
             - |
               set -e
 
-              echo "=== Langfuse Seed: Creating org, project, and API keys ==="
+              # Install psql
+              yum install -y postgresql15 >/dev/null 2>&1 || dnf install -y postgresql15 >/dev/null 2>&1 || true
 
-              # Idempotent seed — only creates if not exists
+              echo "=== Langfuse Seed: Creating org, project, API keys ==="
+
               psql <<'SQL'
-              -- Enable pgcrypto for bcrypt hashing
               CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-              -- 1. Organization
               INSERT INTO organizations (id, name)
               VALUES ('{{ .Values.seed.orgId }}', '{{ .Values.seed.orgName }}')
               ON CONFLICT (id) DO NOTHING;
 
-              -- 2. Project
               INSERT INTO projects (id, name, org_id)
               VALUES ('{{ .Values.seed.projectId }}', '{{ .Values.seed.projectName }}', '{{ .Values.seed.orgId }}')
               ON CONFLICT (id) DO NOTHING;
 
-              -- 3. API Keys (public/secret pair for OTel collector)
               INSERT INTO api_keys (id, public_key, hashed_secret_key, fast_hashed_secret_key, display_secret_key, project_id, note)
               VALUES (
                 '{{ .Values.seed.apiKey.id }}',
                 '{{ .Values.seed.apiKey.publicKey }}',
                 crypt('{{ .Values.seed.apiKey.secretKey }}', gen_salt('bf')),
                 encode(sha256(convert_to('{{ .Values.seed.apiKey.secretKey }}', 'UTF8')), 'hex'),
-                '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...secret',
+                '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...',
                 '{{ .Values.seed.projectId }}',
-                'Platform OTel Collector (auto-provisioned)'
+                'Platform OTEL (auto-provisioned)'
               )
               ON CONFLICT (id) DO NOTHING;
 
-              -- 4. Auto-assign all existing users as OWNER of the org and project
-              --    (idempotent — skips if membership already exists)
+              -- Auto-assign existing users to org + project
               INSERT INTO organization_memberships (id, org_id, user_id, role)
               SELECT 'om-' || id, '{{ .Values.seed.orgId }}', id, 'OWNER'
               FROM users
-              WHERE id NOT IN (
-                SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}'
-              );
+              WHERE id NOT IN (SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}');
 
               INSERT INTO project_memberships (project_id, user_id, org_membership_id, role)
               SELECT '{{ .Values.seed.projectId }}', u.id, om.id, 'OWNER'
               FROM users u
               JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
-              WHERE u.id NOT IN (
-                SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}'
-              );
+              WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
               SQL
 
+              echo "=== Writing Langfuse OTEL keys to Secrets Manager ==="
+
+              SECRET_VALUE="{\"LANGFUSE_PUBLIC_KEY\":\"${LANGFUSE_PUBLIC_KEY}\",\"LANGFUSE_SECRET_KEY\":\"${LANGFUSE_SECRET_KEY}\"}"
+
+              if aws secretsmanager describe-secret --secret-id "${SECRET_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+                aws secretsmanager put-secret-value \
+                  --secret-id "${SECRET_NAME}" \
+                  --secret-string "${SECRET_VALUE}" \
+                  --region "${AWS_REGION}"
+                echo "  Updated ${SECRET_NAME}"
+              else
+                aws secretsmanager create-secret \
+                  --name "${SECRET_NAME}" \
+                  --secret-string "${SECRET_VALUE}" \
+                  --region "${AWS_REGION}"
+                echo "  Created ${SECRET_NAME}"
+              fi
+
               echo "=== Seed complete ==="
-              echo "  Org:        {{ .Values.seed.orgName }}"
-              echo "  Project:    {{ .Values.seed.projectName }}"
-              echo "  Public Key: {{ .Values.seed.apiKey.publicKey }}"
-              echo "  Secret Key: [stored as hash]"
 {{- end }}

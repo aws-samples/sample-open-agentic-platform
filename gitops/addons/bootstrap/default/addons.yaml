@@ -123,6 +123,13 @@ otel-collector:
   valuesObject:
     global:
       awsRegion: '{{.metadata.annotations.aws_region}}'
+    langfuse:
+      enabled: true
+      endpoint: 'https://{{.metadata.annotations.ingress_domain_name}}/api/public/otel'
+      secretManagerKey: '{{.metadata.annotations.hub_cluster_name}}/langfuse-otel'
+    bifrost:
+      enabled: true
+      scrapeEndpoint: 'bifrost.bifrost.svc.cluster.local:8080'
 
 prometheus-operator-crds:
   enabled: false

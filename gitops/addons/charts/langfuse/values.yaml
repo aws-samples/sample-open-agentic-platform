@@ -1,9 +1,25 @@
+global:
+  awsRegion: us-east-1
+
 replicas: 1
 
 image:
   repository: langfuse/langfuse
   tag: "3"
   pullPolicy: IfNotPresent
+
+worker:
+  image:
+    repository: langfuse/langfuse-worker
+    tag: "3"
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
 
 ingress:
   enabled: false
@@ -14,7 +30,7 @@ keycloak:
   clientSecret: ""
   issuerUrl: ""
   disableSignup: "false"
-  secretManagerKey: ""  # Set dynamically by ApplicationSet: <cluster-name>/keycloak-clients
+  secretManagerKey: ""  # Set dynamically: <cluster>/keycloak-clients
 
 resources:
   requests:
@@ -37,19 +53,7 @@ postgres:
       cpu: "1"
       memory: 512Mi
 
-# Seed: auto-creates org, project, and API keys on first deploy
-seed:
-  enabled: true
-  orgId: "org-agent-platform"
-  orgName: "Agent Platform"
-  projectId: "proj-agent-platform"
-  projectName: "agent-platform"
-  apiKey:
-    id: "ak-otel-collector"
-    publicKey: "pk-lf-otel-platform"
-    secretKey: "sk-lf-otel-platform-2026"
-
-# ClickHouse (required for Langfuse v3)
+# ClickHouse (required for Langfuse v3 — OLAP trace storage)
 clickhouse:
   image:
     repository: clickhouse/clickhouse-server
@@ -63,7 +67,7 @@ clickhouse:
       cpu: "2"
       memory: 4Gi
 
-# Redis (required for Langfuse v3 queue + cache)
+# Redis (required for Langfuse v3 — async queue + cache)
 redis:
   image:
     repository: redis
@@ -75,3 +79,36 @@ redis:
     limits:
       cpu: 500m
       memory: 256Mi
+
+# MinIO (S3-compatible blob storage for Langfuse v3 event upload)
+minio:
+  image:
+    repository: minio/minio
+    tag: "latest"
+  storage: 10Gi
+  rootUser: minio
+  rootPassword: miniosecret
+  bucket: langfuse
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Seed: auto-creates org, project, API keys on first deploy
+# Also writes LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY to Secrets Manager
+# so spoke OTel collectors can read them via ExternalSecret.
+seed:
+  enabled: true
+  orgId: "org-agent-platform"
+  orgName: "Agent Platform"
+  projectId: "proj-agent-platform"
+  projectName: "agent-platform"
+  # Secrets Manager path where OTEL keys are stored
+  secretManagerPath: "hub/langfuse-otel"
+  apiKey:
+    id: "ak-otel-collector"
+    publicKey: "pk-lf-otel-platform"
+    secretKey: "sk-lf-otel-platform-2026"
