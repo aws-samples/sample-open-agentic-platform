@@ -43,6 +43,10 @@ data:
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
+      {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+      sigv4auth:
+        region: {{ .Values.global.awsRegion }}
+      {{- end }}
 
     exporters:
       {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
@@ -70,7 +74,11 @@ data:
       {{- end }}
 
     service:
-      extensions: [health_check]
+      extensions:
+        - health_check
+        {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+        - sigv4auth
+        {{- end }}
       pipelines:
         traces:
           receivers: [otlp]

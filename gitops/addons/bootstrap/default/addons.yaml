@@ -130,6 +130,10 @@ otel-collector:
     bifrost:
       enabled: true
       scrapeEndpoint: 'bifrost.bifrost.svc.cluster.local:8080'
+    amp:
+      enabled: true
+      remoteWriteEndpoint: 'https://aps-workspaces.{{.metadata.annotations.aws_region}}.amazonaws.com/workspaces/ws-1d91195d-cb39-470d-827a-9625b3574df4/'
+      clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
 prometheus-operator-crds:
   enabled: false
