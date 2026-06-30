@@ -12,13 +12,15 @@ from strands.multiagent.a2a import A2AServer
 from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
-# ── OpenTelemetry initialization (when exporter env vars are set) ────────
+# ── OpenTelemetry initialization ─────────────────────────────────────────
+# Two modes:
+# 1. Direct to Langfuse (LANGFUSE_BASE_URL set) — agent sends OTLP directly
+# 2. Via Collector (OTEL_EXPORTER_OTLP_ENDPOINT set) — agent sends to local collector
 if os.getenv("LANGFUSE_BASE_URL"):
     try:
         import base64
         from strands.telemetry import StrandsTelemetry
 
-        # Strands uses standard OTel env vars — construct the OTLP auth header
         auth_str = f"{os.getenv('LANGFUSE_PUBLIC_KEY', '')}:{os.getenv('LANGFUSE_SECRET_KEY', '')}"
         auth_bytes = base64.b64encode(auth_str.encode()).decode()
 
@@ -27,7 +29,13 @@ if os.getenv("LANGFUSE_BASE_URL"):
 
         strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
     except ImportError:
-        pass  # StrandsTelemetry not available — skip
+        pass
+elif os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    try:
+        from strands.telemetry import StrandsTelemetry
+        strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
+    except ImportError:
+        pass
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper()),
