@@ -82,6 +82,9 @@ template: {
 							{name: "PORT", value: "8083"},
 							{name: "LLM_GATEWAY_URL", value: parameter.modelConfig.llmGatewayUrl},
 							{name: "LLM_GATEWAY_API_KEY", value: parameter.modelConfig.llmGatewayApiKey},
+							{name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "http://otel-collector.otel.svc.cluster.local:4317"},
+							{name: "OTEL_SERVICE_NAME", value: parameter.name},
+							{name: "OTEL_TRACES_EXPORTER", value: "otlp"},
 						] + _memoryEnv + [
 							if len(parameter.mcpServers) > 0 {
 								{
