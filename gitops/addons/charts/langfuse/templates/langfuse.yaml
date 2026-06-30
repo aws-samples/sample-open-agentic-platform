@@ -2,6 +2,13 @@
 # Langfuse v3 — Full stack: Web + Worker + Postgres + ClickHouse + Redis + MinIO
 ##########################################################################
 
+# ─── Service Account for seed job ──────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: langfuse-seed
+  namespace: {{ .Release.Namespace }}
+---
 # ─── Shared ConfigMap (non-secret configuration only) ─────────────────────
 apiVersion: v1
 kind: ConfigMap

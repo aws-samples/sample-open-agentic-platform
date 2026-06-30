@@ -15,7 +15,7 @@ spec:
         app: langfuse-seed
     spec:
       restartPolicy: OnFailure
-      serviceAccountName: default
+      serviceAccountName: langfuse-seed
       securityContext:
         runAsNonRoot: true
         seccompProfile:
