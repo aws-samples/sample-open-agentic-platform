@@ -9,7 +9,6 @@ metadata:
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/healthcheck-path: /api/public/health
-    alb.ingress.kubernetes.io/order: "100"
     argocd.argoproj.io/sync-wave: "10"
 spec:
   ingressClassName: {{ .Values.ingress.className | default "platform" }}
