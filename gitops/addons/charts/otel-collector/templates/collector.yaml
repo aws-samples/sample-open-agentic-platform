@@ -18,20 +18,30 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+      {{- if .Values.bifrost.enabled }}
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: bifrost-llm-gateway
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["{{ .Values.bifrost.scrapeEndpoint }}"]
+      {{- end }}
 
     processors:
-      # 100% sampling — never drop agent or LLM spans
+      # 100% trace preservation — never drop agent or LLM spans
       probabilistic_sampler:
         sampling_percentage: 100.0
-      # Batch for efficient export
-      batch:
-        send_batch_size: 256
-        timeout: 1s
-        send_batch_max_size: 512
+      # Memory safeguard — prevents OOM kernel termination
       memory_limiter:
-        check_interval: 5s
-        limit_mib: 400
-        spike_limit_mib: 100
+        check_interval: 1s
+        limit_percentage: 85
+        spike_limit_percentage: 10
+      # Batch processing — compresses payloads before export
+      batch:
+        send_batch_size: 1024
+        timeout: 500ms
+        send_batch_max_size: 2048
 
     extensions:
       health_check:
@@ -43,9 +53,15 @@ data:
         region: {{ .Values.global.awsRegion }}
       {{- end }}
       {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
-      # Pushes unified trace tree (agent + Bifrost spans) to Langfuse
+      # Consolidated trace trees to Langfuse v3
       otlphttp/langfuse:
         endpoint: "{{ .Values.langfuse.endpoint }}"
+        timeout: 30s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 5m
         headers:
           Authorization: "Basic ${LANGFUSE_OTEL_AUTH}"
           x-langfuse-ingestion-version: "4"
@@ -56,7 +72,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [probabilistic_sampler, memory_limiter, batch]
+          processors: [memory_limiter, probabilistic_sampler, batch]
           exporters:
             {{- if .Values.xray.enabled }}
             - awsxray
@@ -64,7 +80,15 @@ data:
             {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
             - otlphttp/langfuse
             {{- end }}
-
+        {{- if .Values.bifrost.enabled }}
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters:
+            {{- if .Values.xray.enabled }}
+            - awsxray
+            {{- end }}
+        {{- end }}
       telemetry:
         logs:
           level: "info"
