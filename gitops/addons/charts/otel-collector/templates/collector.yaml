@@ -119,6 +119,7 @@ spec:
       labels:
         app: otel-collector
       annotations:
+        checksum/config: {{ printf "%s-%s-%s-%s" (.Values.langfuse.endpoint | default "") (.Values.bifrost.scrapeEndpoint | default "") (.Values.amp.remoteWriteEndpoint | default "") (.Values.amp.enabled | toString) | sha256sum | trunc 32 }}
         checksum/langfuse-auth: {{ .Values.langfuse.secretManagerKey | default "none" | sha256sum | trunc 8 }}
     spec:
       serviceAccountName: otel-collector
