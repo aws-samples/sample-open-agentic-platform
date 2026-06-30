@@ -29,15 +29,12 @@ data:
       {{- end }}
 
     processors:
-      # 100% trace preservation — never drop agent or LLM spans
       probabilistic_sampler:
         sampling_percentage: 100.0
-      # Memory safeguard — prevents OOM kernel termination
       memory_limiter:
         check_interval: 1s
         limit_percentage: 85
         spike_limit_percentage: 10
-      # Batch processing — compresses payloads before export
       batch:
         send_batch_size: 1024
         timeout: 500ms
@@ -48,16 +45,7 @@ data:
         endpoint: 0.0.0.0:13133
 
     exporters:
-      {{- if .Values.xray.enabled }}
-      awsxray:
-        region: {{ .Values.global.awsRegion }}
-      {{- end }}
-      {{- if .Values.bifrost.enabled }}
-      debug:
-        verbosity: basic
-      {{- end }}
       {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
-      # Consolidated trace trees to Langfuse v3
       otlphttp/langfuse:
         endpoint: "{{ .Values.langfuse.endpoint }}"
         timeout: 30s
@@ -70,6 +58,10 @@ data:
           Authorization: "Basic ${LANGFUSE_OTEL_AUTH}"
           x-langfuse-ingestion-version: "4"
       {{- end }}
+      {{- if .Values.bifrost.enabled }}
+      debug:
+        verbosity: basic
+      {{- end }}
 
     service:
       extensions: [health_check]
@@ -78,9 +70,6 @@ data:
           receivers: [otlp]
           processors: [memory_limiter, probabilistic_sampler, batch]
           exporters:
-            {{- if .Values.xray.enabled }}
-            - awsxray
-            {{- end }}
             {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
             - otlphttp/langfuse
             {{- end }}
