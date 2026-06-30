@@ -126,7 +126,7 @@ otel-collector:
     langfuse:
       enabled: true
       endpoint: 'https://{{.metadata.annotations.ingress_domain_name}}/api/public/otel'
-      secretManagerKey: '{{default "hub" .metadata.annotations.hub_cluster_name}}/langfuse-otel'
+      secretManagerKey: '{{index .metadata.annotations "hub_cluster_name" | default "hub"}}/langfuse-otel'
     bifrost:
       enabled: true
       scrapeEndpoint: 'bifrost.bifrost.svc.cluster.local:8080'
