@@ -111,6 +111,8 @@ spec:
     metadata:
       labels:
         app: otel-collector
+      annotations:
+        checksum/langfuse-auth: {{ .Values.langfuse.secretManagerKey | default "none" | sha256sum | trunc 8 }}
     spec:
       serviceAccountName: otel-collector
       containers:
