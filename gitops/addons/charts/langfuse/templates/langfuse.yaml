@@ -2,7 +2,7 @@
 # Langfuse v3 — Full stack: Web + Worker + Postgres + ClickHouse + Redis + MinIO
 ##########################################################################
 
-# ─── Shared ConfigMap (non-secret configuration) ───────────────────────────
+# ─── Shared ConfigMap (non-secret configuration only) ─────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,30 +12,36 @@ data:
   NEXTAUTH_URL: "https://{{ .Values.ingress.host }}"
   TELEMETRY_ENABLED: "false"
   NODE_ENV: "production"
-  # Keycloak OIDC
   AUTH_KEYCLOAK_CLIENT_ID: "langfuse"
   AUTH_KEYCLOAK_ISSUER: "{{ .Values.keycloak.issuerUrl }}"
   AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING: "true"
   AUTH_DISABLE_SIGNUP: "{{ .Values.keycloak.disableSignup | default "false" }}"
-  # ClickHouse
   CLICKHOUSE_URL: "http://langfuse-clickhouse:8123"
   CLICKHOUSE_MIGRATION_URL: "clickhouse://langfuse-clickhouse:9000"
   CLICKHOUSE_USER: "default"
-  CLICKHOUSE_PASSWORD: "clickhouse"
   CLICKHOUSE_CLUSTER_ENABLED: "false"
-  # Redis
   REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
-  # MinIO (S3-compatible blob storage — MANDATORY for v3 event upload)
   LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "{{ .Values.minio.bucket }}"
   LANGFUSE_S3_EVENT_UPLOAD_REGION: "{{ .Values.global.awsRegion }}"
   LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "http://langfuse-minio:9000"
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+---
+# ─── Secret (credentials — overridable via values) ────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: langfuse-secrets
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@langfuse-postgres:5432/langfuse"
+  POSTGRES_PASSWORD: "{{ .Values.postgres.password }}"
+  NEXTAUTH_SECRET: "{{ .Values.nextauthSecret }}"
+  SALT: "{{ .Values.salt }}"
+  CLICKHOUSE_PASSWORD: "{{ .Values.clickhouse.password }}"
   LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "{{ .Values.minio.rootUser }}"
   LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "{{ .Values.minio.rootPassword }}"
-  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
-  # Database
-  DATABASE_URL: "postgresql://langfuse:langfuse-password@langfuse-postgres:5432/langfuse"
-  NEXTAUTH_SECRET: "changeme-generate-random-secret"
-  SALT: "changeme-generate-salt"
+  MINIO_ROOT_PASSWORD: "{{ .Values.minio.rootPassword }}"
 
 ---
 # ─── Langfuse Web Deployment ──────────────────────────────────────────────
@@ -82,6 +88,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: langfuse-config
+            - secretRef:
+                name: langfuse-secrets
           env:
             - name: HOSTNAME
               value: "0.0.0.0"
@@ -158,6 +166,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: langfuse-config
+            - secretRef:
+                name: langfuse-secrets
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
 
@@ -198,9 +208,12 @@ spec:
             - name: POSTGRES_DB
               value: langfuse
             - name: POSTGRES_USER
-              value: langfuse
+              value: "{{ .Values.postgres.user }}"
             - name: POSTGRES_PASSWORD
-              value: langfuse-password
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-secrets
+                  key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -271,7 +284,7 @@ spec:
             - name: CLICKHOUSE_USER
               value: default
             - name: CLICKHOUSE_PASSWORD
-              value: clickhouse
+              value: "{{ .Values.clickhouse.password }}"
           volumeMounts:
             - name: clickhouse-data
               mountPath: /var/lib/clickhouse
@@ -376,7 +389,10 @@ spec:
             - name: MINIO_ROOT_USER
               value: "{{ .Values.minio.rootUser }}"
             - name: MINIO_ROOT_PASSWORD
-              value: "{{ .Values.minio.rootPassword }}"
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-secrets
+                  key: MINIO_ROOT_PASSWORD
           ports:
             - containerPort: 9000
             - containerPort: 9001

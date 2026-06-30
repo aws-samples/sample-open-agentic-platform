@@ -32,6 +32,10 @@ keycloak:
   disableSignup: "false"
   secretManagerKey: ""  # Set dynamically: <cluster>/keycloak-clients
 
+# Application secrets (override for production)
+nextauthSecret: "changeme-generate-random-secret"
+salt: "changeme-generate-salt"
+
 resources:
   requests:
     cpu: 500m
@@ -44,6 +48,8 @@ postgres:
   image:
     repository: postgres
     tag: "16-alpine"
+  user: langfuse
+  password: langfuse-password
   storage: 10Gi
   resources:
     requests:
@@ -58,6 +64,7 @@ clickhouse:
   image:
     repository: clickhouse/clickhouse-server
     tag: "24.12"
+  password: clickhouse
   storage: 20Gi
   resources:
     requests:
