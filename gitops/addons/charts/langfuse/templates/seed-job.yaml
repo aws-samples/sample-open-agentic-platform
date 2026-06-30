@@ -15,7 +15,7 @@ spec:
         app: langfuse-seed
     spec:
       restartPolicy: OnFailure
-      serviceAccountName: langfuse-seed
+      serviceAccountName: default
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -31,10 +31,10 @@ spec:
               drop: ["ALL"]
       containers:
         - name: seed
-          image: amazon/aws-cli:latest
+          image: postgres:16-alpine
           securityContext:
             allowPrivilegeEscalation: false
-            runAsUser: 1000
+            runAsUser: 70
             capabilities:
               drop: ["ALL"]
           env:
@@ -55,8 +55,8 @@ spec:
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: langfuse-db-credentials
-                  key: password
+                  name: langfuse-secrets
+                  key: POSTGRES_PASSWORD
             - name: PGDATABASE
               value: langfuse
           command:
@@ -64,9 +64,6 @@ spec:
             - -c
             - |
               set -e
-
-              # Install psql
-              yum install -y postgresql15 >/dev/null 2>&1 || dnf install -y postgresql15 >/dev/null 2>&1 || true
 
               echo "=== Langfuse Seed: Creating org, project, API keys ==="
 
@@ -105,24 +102,6 @@ spec:
               JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
               WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
               SQL
-
-              echo "=== Writing Langfuse OTEL keys to Secrets Manager ==="
-
-              SECRET_VALUE="{\"LANGFUSE_PUBLIC_KEY\":\"${LANGFUSE_PUBLIC_KEY}\",\"LANGFUSE_SECRET_KEY\":\"${LANGFUSE_SECRET_KEY}\"}"
-
-              if aws secretsmanager describe-secret --secret-id "${SECRET_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-                aws secretsmanager put-secret-value \
-                  --secret-id "${SECRET_NAME}" \
-                  --secret-string "${SECRET_VALUE}" \
-                  --region "${AWS_REGION}"
-                echo "  Updated ${SECRET_NAME}"
-              else
-                aws secretsmanager create-secret \
-                  --name "${SECRET_NAME}" \
-                  --secret-string "${SECRET_VALUE}" \
-                  --region "${AWS_REGION}"
-                echo "  Created ${SECRET_NAME}"
-              fi
 
               echo "=== Seed complete ==="
 {{- end }}
