@@ -96,5 +96,15 @@ spec:
                   WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
                   SQL
 
+                  # 5. Register model pricing for Bifrost aliases (idempotent via API)
+                  # Wait for Langfuse web to be ready
+                  until wget -qO- http://langfuse.langfuse.svc.cluster.local:3000/api/public/health >/dev/null 2>&1; do sleep 5; done
+
+                  # Create claude-sonnet model pricing (Bifrost alias → Sonnet 4 pricing)
+                  wget -qO- --post-data='{"modelName":"claude-sonnet","matchPattern":"(?i)^(claude-sonnet|us\\.anthropic\\.claude-sonnet.*)$","unit":"TOKENS","inputPrice":0.000003,"outputPrice":0.000015,"tokenizerId":"claude","tokenizerConfig":{"tokenizerModel":"claude"}}' \
+                    --header="Content-Type: application/json" \
+                    --header="Authorization: Basic '$(echo -n {{ .Values.seed.apiKey.publicKey }}:{{ .Values.seed.apiKey.secretKey }} | base64)'" \
+                    "http://langfuse.langfuse.svc.cluster.local:3000/api/public/models" || true
+
                   echo "Seed complete"
 {{- end }}

@@ -62,6 +62,12 @@ data:
       debug:
         verbosity: basic
       {{- end }}
+      {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+      prometheusremotewrite/amp:
+        endpoint: "{{ .Values.amp.remoteWriteEndpoint }}api/v1/remote_write"
+        auth:
+          authenticator: sigv4auth
+      {{- end }}
 
     service:
       extensions: [health_check]
@@ -78,7 +84,11 @@ data:
           receivers: [prometheus]
           processors: [batch]
           exporters:
+            {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+            - prometheusremotewrite/amp
+            {{- else }}
             - debug
+            {{- end }}
         {{- end }}
       telemetry:
         logs:

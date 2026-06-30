@@ -24,3 +24,8 @@ langfuse:
 bifrost:
   enabled: true
   scrapeEndpoint: "bifrost.bifrost.svc.cluster.local:8080"
+
+# AMP remote write for Grafana dashboards (requires Pod Identity with AMP write permissions)
+amp:
+  enabled: false
+  remoteWriteEndpoint: ""
