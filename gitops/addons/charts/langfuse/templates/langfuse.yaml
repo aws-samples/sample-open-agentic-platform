@@ -192,6 +192,7 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -263,6 +264,7 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        fsGroup: 101
         seccompProfile:
           type: RuntimeDefault
       containers:
