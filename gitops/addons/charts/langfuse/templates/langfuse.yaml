@@ -68,7 +68,10 @@ spec:
       restartPolicy: Always
       schedulerName: default-scheduler
       terminationGracePeriodSeconds: 30
-      securityContext: {}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
@@ -76,6 +79,11 @@ spec:
           # Pin defaulted container fields too.
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 5432
               protocol: TCP
@@ -158,6 +166,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            runAsUser: 1001
             capabilities:
               drop: ["ALL"]
             seccompProfile:
@@ -263,13 +272,21 @@ spec:
       restartPolicy: Always
       schedulerName: default-scheduler
       terminationGracePeriodSeconds: 30
-      securityContext: {}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: clickhouse
           image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
           imagePullPolicy: IfNotPresent
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 101
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8123
               name: http
@@ -338,6 +355,14 @@ spec:
         - name: redis
           image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
           args: ["--maxmemory-policy", "noeviction"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - containerPort: 6379
           resources:
