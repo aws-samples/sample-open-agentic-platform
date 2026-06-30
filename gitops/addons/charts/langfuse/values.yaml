@@ -1,6 +1,8 @@
 global:
   awsRegion: us-east-1
 
+clusterName: ""
+
 replicas: 1
 
 image:

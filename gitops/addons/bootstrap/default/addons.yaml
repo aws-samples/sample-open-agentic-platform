@@ -63,6 +63,7 @@ langfuse:
         operator: In
         values: ['true']
   valuesObject:
+    clusterName: '{{.metadata.annotations.aws_cluster_name}}'
     ingress:
       enabled: true
       host: '{{.metadata.annotations.ingress_domain_name}}'
@@ -132,7 +133,7 @@ otel-collector:
       scrapeEndpoint: 'bifrost.bifrost.svc.cluster.local:8080'
     amp:
       enabled: true
-      remoteWriteEndpoint: 'https://aps-workspaces.{{.metadata.annotations.aws_region}}.amazonaws.com/workspaces/ws-1d91195d-cb39-470d-827a-9625b3574df4/'
+      remoteWriteEndpoint: '{{default "" (index .metadata.annotations "amp_remote_write_endpoint")}}'
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
 prometheus-operator-crds:

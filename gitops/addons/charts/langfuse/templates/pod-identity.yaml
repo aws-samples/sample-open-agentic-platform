@@ -44,7 +44,7 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   forProvider:
-    clusterName: hub
+    clusterName: {{ .Values.clusterName | default "hub" }}
     namespace: {{ .Release.Namespace }}
     region: {{ .Values.global.awsRegion | default "us-east-1" }}
     roleArnRef:
