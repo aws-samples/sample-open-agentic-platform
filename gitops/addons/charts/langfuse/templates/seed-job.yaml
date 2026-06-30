@@ -1,107 +1,100 @@
 {{- if .Values.seed.enabled }}
+# CronJob runs every 5 minutes to:
+# 1. Create org/project/API keys (idempotent, first run only)
+# 2. Auto-assign any new SSO users to the org/project (picks up users who logged in after initial deploy)
 apiVersion: batch/v1
-kind: Job
+kind: CronJob
 metadata:
   name: langfuse-seed
   namespace: {{ .Release.Namespace }}
-  annotations:
-    argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
-  backoffLimit: 5
-  template:
-    metadata:
-      labels:
-        app: langfuse-seed
+  schedule: "*/5 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
     spec:
-      restartPolicy: OnFailure
-      serviceAccountName: langfuse-seed
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-      initContainers:
-        - name: wait-for-langfuse
-          image: postgres:16-alpine
-          command: ['sh', '-c', 'until pg_isready -h langfuse-postgres -p 5432; do echo "Waiting for Postgres..."; sleep 3; done']
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app: langfuse-seed
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: langfuse-seed
           securityContext:
-            allowPrivilegeEscalation: false
-            runAsUser: 70
-            capabilities:
-              drop: ["ALL"]
-      containers:
-        - name: seed
-          image: postgres:16-alpine
-          securityContext:
-            allowPrivilegeEscalation: false
-            runAsUser: 70
-            capabilities:
-              drop: ["ALL"]
-          env:
-            - name: AWS_REGION
-              value: "{{ .Values.global.awsRegion | default "us-east-1" }}"
-            - name: SECRET_NAME
-              value: "{{ .Values.seed.secretManagerPath }}"
-            - name: LANGFUSE_PUBLIC_KEY
-              value: "{{ .Values.seed.apiKey.publicKey }}"
-            - name: LANGFUSE_SECRET_KEY
-              value: "{{ .Values.seed.apiKey.secretKey }}"
-            - name: PGHOST
-              value: langfuse-postgres
-            - name: PGPORT
-              value: "5432"
-            - name: PGUSER
-              value: langfuse
-            - name: PGPASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-secrets
-                  key: POSTGRES_PASSWORD
-            - name: PGDATABASE
-              value: langfuse
-          command:
-            - sh
-            - -c
-            - |
-              set -e
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: seed
+              image: postgres:16-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsUser: 70
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGHOST
+                  value: langfuse-postgres
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: langfuse
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: langfuse-secrets
+                      key: POSTGRES_PASSWORD
+                - name: PGDATABASE
+                  value: langfuse
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
 
-              echo "=== Langfuse Seed: Creating org, project, API keys ==="
+                  # Wait for postgres to be ready
+                  until pg_isready -h $PGHOST -p $PGPORT; do sleep 2; done
 
-              psql <<'SQL'
-              CREATE EXTENSION IF NOT EXISTS pgcrypto;
+                  psql <<'SQL'
+                  CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-              INSERT INTO organizations (id, name)
-              VALUES ('{{ .Values.seed.orgId }}', '{{ .Values.seed.orgName }}')
-              ON CONFLICT (id) DO NOTHING;
+                  -- 1. Organization
+                  INSERT INTO organizations (id, name)
+                  VALUES ('{{ .Values.seed.orgId }}', '{{ .Values.seed.orgName }}')
+                  ON CONFLICT (id) DO NOTHING;
 
-              INSERT INTO projects (id, name, org_id)
-              VALUES ('{{ .Values.seed.projectId }}', '{{ .Values.seed.projectName }}', '{{ .Values.seed.orgId }}')
-              ON CONFLICT (id) DO NOTHING;
+                  -- 2. Project
+                  INSERT INTO projects (id, name, org_id)
+                  VALUES ('{{ .Values.seed.projectId }}', '{{ .Values.seed.projectName }}', '{{ .Values.seed.orgId }}')
+                  ON CONFLICT (id) DO NOTHING;
 
-              INSERT INTO api_keys (id, public_key, hashed_secret_key, fast_hashed_secret_key, display_secret_key, project_id, note)
-              VALUES (
-                '{{ .Values.seed.apiKey.id }}',
-                '{{ .Values.seed.apiKey.publicKey }}',
-                crypt('{{ .Values.seed.apiKey.secretKey }}', gen_salt('bf')),
-                encode(sha256(convert_to('{{ .Values.seed.apiKey.secretKey }}', 'UTF8')), 'hex'),
-                '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...',
-                '{{ .Values.seed.projectId }}',
-                'Platform OTEL (auto-provisioned)'
-              )
-              ON CONFLICT (id) DO NOTHING;
+                  -- 3. API Keys
+                  INSERT INTO api_keys (id, public_key, hashed_secret_key, fast_hashed_secret_key, display_secret_key, project_id, note)
+                  VALUES (
+                    '{{ .Values.seed.apiKey.id }}',
+                    '{{ .Values.seed.apiKey.publicKey }}',
+                    crypt('{{ .Values.seed.apiKey.secretKey }}', gen_salt('bf')),
+                    encode(sha256(convert_to('{{ .Values.seed.apiKey.secretKey }}', 'UTF8')), 'hex'),
+                    '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...',
+                    '{{ .Values.seed.projectId }}',
+                    'Platform OTEL (auto-provisioned)'
+                  )
+                  ON CONFLICT (id) DO NOTHING;
 
-              -- Auto-assign existing users to org + project
-              INSERT INTO organization_memberships (id, org_id, user_id, role)
-              SELECT 'om-' || id, '{{ .Values.seed.orgId }}', id, 'OWNER'
-              FROM users
-              WHERE id NOT IN (SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}');
+                  -- 4. Auto-assign all SSO users as OWNER (picks up new logins)
+                  INSERT INTO organization_memberships (id, org_id, user_id, role)
+                  SELECT 'om-' || id, '{{ .Values.seed.orgId }}', id, 'OWNER'
+                  FROM users
+                  WHERE id NOT IN (SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}');
 
-              INSERT INTO project_memberships (project_id, user_id, org_membership_id, role)
-              SELECT '{{ .Values.seed.projectId }}', u.id, om.id, 'OWNER'
-              FROM users u
-              JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
-              WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
-              SQL
+                  INSERT INTO project_memberships (project_id, user_id, org_membership_id, role)
+                  SELECT '{{ .Values.seed.projectId }}', u.id, om.id, 'OWNER'
+                  FROM users u
+                  JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
+                  WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
+                  SQL
 
-              echo "=== Seed complete ==="
+                  echo "Seed complete"
 {{- end }}
