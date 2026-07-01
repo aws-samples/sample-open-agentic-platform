@@ -51,7 +51,7 @@ litellm:
 ########################################
 
 langfuse:
-  enabled: false
+  enabled: true
   namespace: langfuse
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/langfuse'
@@ -114,7 +114,7 @@ jaeger:
       enabled: false
 
 otel-collector:
-  enabled: false
+  enabled: true
   namespace: otel
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/otel-collector'
@@ -141,7 +141,7 @@ otel-collector:
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
 prometheus-operator-crds:
-  enabled: false
+  enabled: true
   namespace: monitoring
   chartName: prometheus-operator-crds
   defaultVersion: '28.0.1'
@@ -164,7 +164,7 @@ prometheus-operator-crds:
 ########################################
 
 crossplane-agentcore:
-  enabled: false
+  enabled: true
   namespace: crossplane-system
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/crossplane-agentcore'
@@ -200,7 +200,7 @@ crossplane-agentcore:
 ########################################
 
 bifrost:
-  enabled: false
+  enabled: true
   namespace: bifrost
   defaultVersion: '0.1.0'
   # Local umbrella chart: wraps upstream maximhq/bifrost and adds the Crossplane
@@ -228,7 +228,7 @@ bifrost:
 ########################################
 
 gateway-api-crds:
-  enabled: false
+  enabled: true
   namespace: agentgateway-system
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/gateway-api-crds'
@@ -243,7 +243,7 @@ gateway-api-crds:
     gatewayApiVersion: "1.5.0"
 
 agentgateway-crds:
-  enabled: false
+  enabled: true
   namespace: agentgateway-system
   chartName: agentgateway-crds
   defaultVersion: 'v1.1.0'
@@ -263,7 +263,7 @@ agentgateway-crds:
         - /metadata/annotations
 
 agentgateway:
-  enabled: false
+  enabled: true
   namespace: agentgateway-system
   chartName: agentgateway
   defaultVersion: 'v1.1.0'
@@ -282,7 +282,7 @@ agentgateway:
         KGW_ENABLE_GATEWAY_API_EXPERIMENTAL_FEATURES: "true"
 
 agent-gateway:
-  enabled: false
+  enabled: true
   namespace: agent-core-infra
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/agent-gateway'
@@ -324,7 +324,7 @@ agent-gateway:
 # sync-wave 3). Sync-wave 5 here ensures KubeVela CRDs and webhooks are
 # established before these CRs are applied.
 oam-agent-components:
-  enabled: false
+  enabled: true
   namespace: vela-system
   defaultVersion: '0.1.0'
   path: 'gitops/addons/charts/oam-agent-components'
