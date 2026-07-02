@@ -43,6 +43,9 @@ spec:
             {{- if $globalSelectors }}
             {{- toYaml $globalSelectors | nindent 12 }}
             {{- end }}
+            {{- if $chartConfig.selectorMatchLabels }}
+            {{- toYaml $chartConfig.selectorMatchLabels | nindent 12 }}
+            {{- end }}
           {{- if and $chartConfig.selector $useSelectors }}
           {{- toYaml $chartConfig.selector | nindent 10 }}
           {{- end }}
