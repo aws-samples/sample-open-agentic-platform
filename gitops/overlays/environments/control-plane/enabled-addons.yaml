@@ -71,3 +71,4 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  langfuse: true

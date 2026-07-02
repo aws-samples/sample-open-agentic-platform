@@ -46,7 +46,7 @@ spec:
   forProvider:
     clusterName: {{ .Values.clusterName | default "hub" }}
     namespace: {{ .Release.Namespace }}
-    region: {{ .Values.global.awsRegion | default "us-east-1" }}
+    region: {{ .Values.global.awsRegion | default "us-west-2" }}
     roleArnRef:
       name: hub-langfuse-seed-role
     serviceAccount: langfuse-seed
