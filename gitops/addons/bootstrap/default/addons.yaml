@@ -137,7 +137,7 @@ otel-collector:
       scrapeEndpoint: 'bifrost.bifrost.svc.cluster.local:8080'
     amp:
       enabled: true
-      remoteWriteEndpoint: '{{with (index .metadata.annotations "amp_endpoint_url")}}{{.}}api/v1/remote_write{{end}}'
+      remoteWriteEndpoint: '{{with (index .metadata.annotations "amp_endpoint_url")}}{{.}}{{end}}'
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
 prometheus-operator-crds:
