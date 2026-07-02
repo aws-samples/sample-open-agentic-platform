@@ -5,12 +5,10 @@ crossplane-agentcore:
   enabled: true
 
 # Observability
-litellm:
-  enabled: true
 langfuse:
   enabled: true
 jaeger:
-  enabled: true
+  enabled: false
 otel-collector:
   enabled: true
 prometheus-operator-crds:
