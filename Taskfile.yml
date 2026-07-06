@@ -164,9 +164,29 @@ tasks:
     desc: Delete spoke clusters
     cmds:
       - task: agentic:ensure-kubeconfig
+      # The PlatformCluster claims are GitOps-managed: the fleet `clusters`
+      # ApplicationSet generates `clusters-<env>` Application(s) that own the claims
+      # with automated prune. Deleting a claim directly makes ArgoCD immediately
+      # re-sync and recreate it, spinning up a fresh spoke EKS + VPC while the old
+      # one is still deleting. Stop the generator first, then delete the claims so
+      # they stay deleted and Crossplane can drain the spokes cleanly.
       - |
+        CTX={{.HUB_CLUSTER_NAME}}
+        # Pause the ApplicationSet so it stops regenerating the clusters Application(s).
+        if kubectl --context "$CTX" get applicationset clusters -n argocd >/dev/null 2>&1; then
+          kubectl --context "$CTX" patch applicationset clusters -n argocd --type merge \
+            -p '{"spec":{"syncPolicy":{"preserveResourcesOnDeletion":true}}}' 2>/dev/null || true
+          kubectl --context "$CTX" delete applicationset clusters -n argocd --timeout=60s 2>/dev/null || true
+        fi
+        # Disable self-heal on the generated Application(s) so deleting the claim below
+        # is not immediately reverted, then delete the claims.
+        for APP in $(kubectl --context "$CTX" get applications -n argocd \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^clusters(-|$)'); do
+          kubectl --context "$CTX" patch application "$APP" -n argocd --type merge \
+            -p '{"spec":{"syncPolicy":{"automated":null}}}' 2>/dev/null || true
+        done
         for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
-          kubectl delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
+          kubectl --context "$CTX" delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
           printf "✓ PlatformCluster claim deleted: %s\n" "$SPOKE"
         done
 
