@@ -27,8 +27,12 @@ metadata:
   namespace: agentgateway-system
   annotations:
     alb.ingress.kubernetes.io/target-type: ip
+    {{- if contains "cloudfront.net" .Values.ingress.host }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    {{- else }}
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+    {{- end }}
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
     argocd.argoproj.io/sync-wave: "10"
 spec:

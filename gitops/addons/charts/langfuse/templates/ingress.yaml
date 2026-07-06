@@ -6,8 +6,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     alb.ingress.kubernetes.io/target-type: ip
+    {{- if contains "cloudfront.net" .Values.ingress.host }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    {{- else }}
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+    {{- end }}
     alb.ingress.kubernetes.io/healthcheck-path: /api/public/health
     argocd.argoproj.io/sync-wave: "10"
 spec:
