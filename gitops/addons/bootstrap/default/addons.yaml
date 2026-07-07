@@ -302,7 +302,15 @@ agent-gateway:
     ingress:
       enabled: true
       host: '{{index .metadata.annotations "ingress_domain_name"}}'
-      agentHost: '{{default (printf "agents.%s" (index .metadata.annotations "ingress_domain_name")) (index .metadata.annotations "agent_gateway_host")}}'
+      # Agents get a dedicated hostname that is a SIBLING of the main ingress host
+      # (same parent domain), so a single wildcard ACM cert covers both. For host
+      # "idp.elamaras.people.aws.dev" the agents host is "agents.elamaras.people.aws.dev"
+      # — both matched by "*.elamaras.people.aws.dev". (The old "agents.<full-host>"
+      # default produced "agents.idp.elamaras..." which a single-level wildcard does
+      # NOT cover, so the ALB never provisioned: "no certificate found for host".)
+      # If the domain has no parent (bare apex), fall back to "agents.<host>".
+      # The agent_gateway_host annotation, when set, overrides this entirely.
+      agentHost: '{{ $d := index .metadata.annotations "ingress_domain_name" }}{{ $parent := splitList "." $d | rest | join "." }}{{ $auto := ternary (printf "agents.%s" $parent) (printf "agents.%s" $d) (gt (len (splitList "." $d)) 2) }}{{ default $auto (index .metadata.annotations "agent_gateway_host") }}'
     mcpAuth:
       resourceMetadata:
         resource: '{{default "http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse" (index .metadata.annotations "agent_gateway_resource_url")}}'
