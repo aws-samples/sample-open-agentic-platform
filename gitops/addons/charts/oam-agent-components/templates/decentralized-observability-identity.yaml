@@ -51,9 +51,9 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   forProvider:
-    clusterName: {{ .Values.global.clusterName }}
+    clusterName: "{{ .Values.global.clusterName }}"
     namespace: {{ .Values.decentralizedObservability.namespace }}
-    region: {{ .Values.global.awsRegion | default "us-west-2" }}
+    region: "{{ .Values.global.awsRegion | default "us-west-2" }}"
     roleArnRef:
       name: {{ .Values.decentralizedObservability.roleName }}
     serviceAccount: {{ .Values.decentralizedObservability.serviceAccount }}
