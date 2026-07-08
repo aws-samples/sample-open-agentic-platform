@@ -343,3 +343,7 @@ oam-agent-components:
       - key: enable_oam_components
         operator: In
         values: ['true']
+  valuesObject:
+    global:
+      awsRegion: '{{.metadata.annotations.aws_region}}'
+      clusterName: '{{.metadata.annotations.aws_cluster_name}}'

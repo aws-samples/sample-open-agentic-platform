@@ -13,10 +13,17 @@ from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
 # ── OpenTelemetry initialization ─────────────────────────────────────────
-# Two modes:
-# 1. Direct to Langfuse (LANGFUSE_BASE_URL set) — agent sends OTLP directly
-# 2. Via Collector (OTEL_EXPORTER_OTLP_ENDPOINT set) — agent sends to local collector
-if os.getenv("LANGFUSE_BASE_URL"):
+# Three modes (mutually exclusive, checked in order):
+# 1. Decentralized (OTEL_PYTHON_DISTRO=aws_distro) — ADOT handles everything,
+#    agent exports directly to CloudWatch. No manual init needed.
+# 2. Direct to Langfuse (LANGFUSE_BASE_URL set) — agent sends OTLP directly
+# 3. Via Collector (OTEL_EXPORTER_OTLP_ENDPOINT set) — agent sends to local collector
+if os.getenv("OTEL_PYTHON_DISTRO") == "aws_distro":
+    # Decentralized mode: ADOT auto-instrumentation handles telemetry.
+    # No manual StrandsTelemetry init — the aws_distro entry point
+    # configures exporters via env vars (CW Logs, X-Ray, CW Metrics).
+    pass
+elif os.getenv("LANGFUSE_BASE_URL"):
     try:
         import base64
         from strands.telemetry import StrandsTelemetry

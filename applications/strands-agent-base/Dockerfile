@@ -7,7 +7,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 
 # Install dependencies using uv (much faster than pip)
-RUN uv pip install --system --no-cache .
+RUN uv pip install --system --no-cache --prerelease=allow .
 
 # Final stage
 FROM python:3.13-slim-bookworm

@@ -103,7 +103,7 @@ spec:
                   # Create claude-sonnet model pricing (Bifrost alias → Sonnet 4 pricing)
                   wget -qO- --post-data='{"modelName":"claude-sonnet","matchPattern":"(?i)^(claude-sonnet|us\\.anthropic\\.claude-sonnet.*)$","unit":"TOKENS","inputPrice":0.000003,"outputPrice":0.000015,"tokenizerId":"claude","tokenizerConfig":{"tokenizerModel":"claude"}}' \
                     --header="Content-Type: application/json" \
-                    --header="Authorization: Basic '$(echo -n {{ .Values.seed.apiKey.publicKey }}:{{ .Values.seed.apiKey.secretKey }} | base64)'" \
+                    --header="Authorization: Basic $(echo -n {{ .Values.seed.apiKey.publicKey }}:{{ .Values.seed.apiKey.secretKey }} | base64)" \
                     "http://langfuse.langfuse.svc.cluster.local:3000/api/public/models" || true
 
                   echo "Seed complete"

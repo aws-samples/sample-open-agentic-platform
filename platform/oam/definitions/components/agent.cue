@@ -69,6 +69,10 @@ template: {
 					containers: [{
 						name:  "agent"
 						image: parameter.image
+						// Decentralized mode: wrap with opentelemetry-instrument for ADOT auto-instrumentation
+						if parameter.observability.mode == "decentralized" {
+							command: ["opentelemetry-instrument", "python", "-m", "app.main"]
+						}
 						ports: [{
 							name:          "a2a"
 							containerPort: 8083
@@ -82,10 +86,30 @@ template: {
 							{name: "PORT", value: "8083"},
 							{name: "LLM_GATEWAY_URL", value: parameter.modelConfig.llmGatewayUrl},
 							{name: "LLM_GATEWAY_API_KEY", value: parameter.modelConfig.llmGatewayApiKey},
-							// OTel: local collector for traces
-							{name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "http://otel-collector.otel.svc.cluster.local:4318"},
+							// Observability env vars — mode-dependent
 							{name: "OTEL_SERVICE_NAME", value: parameter.name},
 							{name: "OTEL_TRACES_EXPORTER", value: "otlp"},
+							if parameter.observability.mode == "centralized" {
+								{name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "http://otel-collector.otel.svc.cluster.local:4318"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "OTEL_PYTHON_DISTRO", value: "aws_distro"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "OTEL_PYTHON_CONFIGURATOR", value: "aws_configurator"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: "http/protobuf"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "OTEL_EXPORTER_OTLP_LOGS_HEADERS", value: "x-aws-log-group=" + parameter.name + "-logs,x-aws-log-stream=default,x-aws-metric-namespace=agents"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "OTEL_RESOURCE_ATTRIBUTES", value: "service.name=" + parameter.name + ",aws.log.group.names=" + parameter.name + "-logs"}
+							},
+							if parameter.observability.mode == "decentralized" {
+								{name: "AGENT_OBSERVABILITY_ENABLED", value: "true"}
+							},
 							// Langfuse: direct OTLP from agent (Strands StrandsTelemetry)
 							{name: "LANGFUSE_PUBLIC_KEY", value: parameter.langfuse.publicKey},
 							{name: "LANGFUSE_SECRET_KEY", value: parameter.langfuse.secretKey},
@@ -266,6 +290,13 @@ template: {
 			publicKey: *"" | string
 			secretKey: *"" | string
 			baseUrl:   *"" | string
+		}
+
+		// Observability mode
+		// centralized: Agent → OTel Collector → Langfuse (traces) + AMP (metrics)
+		// decentralized: Agent → ADOT → CloudWatch GenAI Console (traces + logs + metrics)
+		observability: {
+			mode: *"centralized" | "decentralized"
 		}
 
 		// Memory configuration — pluggable providers

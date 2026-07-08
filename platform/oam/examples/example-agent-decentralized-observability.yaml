@@ -1,0 +1,43 @@
+# Example: Agent with decentralized observability (CloudWatch GenAI Console)
+#
+# In this mode, the agent exports traces, logs, and metrics directly to
+# CloudWatch via the AWS OpenTelemetry Distro (ADOT). No OTel Collector
+# or Langfuse infrastructure is required.
+#
+# Prerequisites:
+# - Pod Identity on the agent's ServiceAccount with permissions:
+#   logs:PutLogEvents, logs:CreateLogGroup, logs:CreateLogStream,
+#   xray:PutTraceSegments, xray:PutTelemetryRecords,
+#   cloudwatch:PutMetricData
+# - CloudWatch Transactional Search enabled in the account
+#
+# View traces: CloudWatch > Application Signals > Traces
+# View logs: CloudWatch > Log Groups > <agent-name>-logs
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: my-cw-agent
+  namespace: default
+spec:
+  components:
+    - name: my-cw-agent
+      type: agent
+      properties:
+        name: my-cw-agent
+        namespace: default
+        description: "Agent with CloudWatch GenAI observability"
+        replicas: 1
+        systemMessage: "You are a helpful assistant."
+        modelConfig:
+          modelId: claude-sonnet
+        # Switch to decentralized observability (CloudWatch direct)
+        observability:
+          mode: decentralized
+        registerWithGateway: false
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
