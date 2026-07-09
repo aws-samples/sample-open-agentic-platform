@@ -102,10 +102,7 @@ template: {
 								{name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: "http/protobuf"}
 							},
 							if parameter.observability.mode == "decentralized" {
-								{name: "OTEL_EXPORTER_OTLP_LOGS_HEADERS", value: "x-aws-log-group=" + parameter.name + "-logs,x-aws-log-stream=default,x-aws-metric-namespace=agents"}
-							},
-							if parameter.observability.mode == "decentralized" {
-								{name: "OTEL_RESOURCE_ATTRIBUTES", value: "service.name=" + parameter.name + ",aws.log.group.names=" + parameter.name + "-logs"}
+								{name: "OTEL_RESOURCE_ATTRIBUTES", value: "service.name=" + parameter.name}
 							},
 							if parameter.observability.mode == "decentralized" {
 								{name: "AGENT_OBSERVABILITY_ENABLED", value: "true"}
