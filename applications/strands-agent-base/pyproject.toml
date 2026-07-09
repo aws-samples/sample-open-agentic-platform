@@ -9,7 +9,7 @@ dependencies = [
     "pydantic~=2.0",
     "strands-agents[a2a,openai,otel]~=1.0",
     "bedrock-agentcore",
-    "aws-opentelemetry-distro>=0.10.0",
+    "aws-opentelemetry-distro>=0.18.0",
 ]
 
 [project.optional-dependencies]
