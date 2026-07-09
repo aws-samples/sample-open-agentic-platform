@@ -196,6 +196,7 @@ tasks:
     desc: Deploy agentic platform components to the hub (and spokes via ArgoCD)
     cmds:
       - task: agentic:ensure-kubeconfig
+      - task: agentic:enable-transaction-search
       - task: agentic:bootstrap
 
   agentic:upgrade:
@@ -210,6 +211,18 @@ tasks:
       - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}} --alias {{.HUB_CLUSTER_NAME}}
       - kubectl --context {{.HUB_CLUSTER_NAME}} cluster-info >/dev/null
       - printf '✓ kubectl context "{{.HUB_CLUSTER_NAME}}" is reachable\n'
+
+  agentic:enable-transaction-search:
+    desc: Enable CloudWatch Transaction Search (one-time, idempotent)
+    cmds:
+      - |
+        printf '▸ Enabling CloudWatch Transaction Search...\n'
+        aws logs put-resource-policy --policy-name TransactionSearchXRayAccess \
+          --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"TransactionSearchXRayAccess","Effect":"Allow","Principal":{"Service":"xray.amazonaws.com"},"Action":"logs:PutLogEvents","Resource":["arn:aws:logs:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:log-group:aws/spans:*","arn:aws:logs:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:log-group:/aws/application-signals/data:*"],"Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:xray:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:*"},"StringEquals":{"aws:SourceAccount":"{{.AWS_ACCOUNT_ID}}"}}}]}' \
+          --region {{.AWS_REGION}} 2>/dev/null || true
+        aws xray update-trace-segment-destination --destination CloudWatchLogs \
+          --region {{.AWS_REGION}} 2>/dev/null || true
+        printf '✓ CloudWatch Transaction Search enabled\n'
 
   agentic:hub-oidc-annotation:
     desc: Annotate the hub cluster secret with its EKS OIDC issuer (enables secretless workload identity for agents running on the hub)
