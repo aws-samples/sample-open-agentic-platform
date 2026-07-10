@@ -1,0 +1,54 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: agent-with-tools
+  namespace: default
+spec:
+  components:
+    - name: memory
+      type: memory
+    - name: tool-agent
+      type: agent
+      properties:
+        name: tool-agent
+        namespace: default
+        description: "AI assistant with MCP tool integration"
+        
+        replicas: 3
+        
+        systemMessage: |
+          You are an AI assistant with access to various tools via MCP.
+          You can check weather, search the web, and perform calculations.
+          Use tools when appropriate to provide accurate information.
+        
+        modelConfig:
+          modelId: claude-sonnet
+          region: us-west-2
+          llmGatewayUrl: http://bifrost.bifrost.svc.cluster.local:8080/v1
+          llmGatewayApiKey: sk-1234
+        
+        # MCP tool servers
+        mcpServers:
+          - name: weather-tools
+          - name: web-search
+          - name: calculator
+        agents:
+          - name: design-agent
+          
+        
+        serviceAccount: default
+        
+        autoPromotionEnabled: true
+        autoPromotionSeconds: 10
+        scaleDownDelaySeconds: 30
+        
+        registerWithGateway: true
+        gatewayNamespace: agentgateway-system
+        
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi

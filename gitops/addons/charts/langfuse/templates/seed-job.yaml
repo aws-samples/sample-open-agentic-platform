@@ -1,0 +1,115 @@
+{{- if .Values.seed.enabled }}
+# CronJob runs every 5 minutes to:
+# 1. Create org/project/API keys (idempotent, first run only)
+# 2. Auto-assign any new SSO users to the org/project (picks up users who logged in after initial deploy)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: langfuse-seed
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: "*/5 * * * *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app: langfuse-seed
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: langfuse-seed
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: seed
+              image: postgres:16-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsUser: 70
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGHOST
+                  value: langfuse-postgres
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: langfuse
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: langfuse-secrets
+                      key: POSTGRES_PASSWORD
+                - name: PGDATABASE
+                  value: langfuse
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+
+                  # Wait for postgres to be ready
+                  until pg_isready -h $PGHOST -p $PGPORT; do sleep 2; done
+
+                  psql <<'SQL'
+                  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+                  -- 1. Organization
+                  INSERT INTO organizations (id, name)
+                  VALUES ('{{ .Values.seed.orgId }}', '{{ .Values.seed.orgName }}')
+                  ON CONFLICT (id) DO NOTHING;
+
+                  -- 2. Project
+                  INSERT INTO projects (id, name, org_id)
+                  VALUES ('{{ .Values.seed.projectId }}', '{{ .Values.seed.projectName }}', '{{ .Values.seed.orgId }}')
+                  ON CONFLICT (id) DO NOTHING;
+
+                  -- 3. API Keys
+                  INSERT INTO api_keys (id, public_key, hashed_secret_key, fast_hashed_secret_key, display_secret_key, project_id, note)
+                  VALUES (
+                    '{{ .Values.seed.apiKey.id }}',
+                    '{{ .Values.seed.apiKey.publicKey }}',
+                    crypt('{{ .Values.seed.apiKey.secretKey }}', gen_salt('bf')),
+                    encode(sha256(convert_to('{{ .Values.seed.apiKey.secretKey }}', 'UTF8')), 'hex'),
+                    '{{ .Values.seed.apiKey.publicKey | trunc 8 }}...',
+                    '{{ .Values.seed.projectId }}',
+                    'Platform OTEL (auto-provisioned)'
+                  )
+                  ON CONFLICT (id) DO UPDATE SET
+                    public_key = EXCLUDED.public_key,
+                    hashed_secret_key = EXCLUDED.hashed_secret_key,
+                    fast_hashed_secret_key = EXCLUDED.fast_hashed_secret_key,
+                    display_secret_key = EXCLUDED.display_secret_key,
+                    project_id = EXCLUDED.project_id;
+
+                  -- 4. Auto-assign all SSO users as OWNER (picks up new logins)
+                  INSERT INTO organization_memberships (id, org_id, user_id, role)
+                  SELECT 'om-' || id, '{{ .Values.seed.orgId }}', id, 'OWNER'
+                  FROM users
+                  WHERE id NOT IN (SELECT user_id FROM organization_memberships WHERE org_id = '{{ .Values.seed.orgId }}');
+
+                  INSERT INTO project_memberships (project_id, user_id, org_membership_id, role)
+                  SELECT '{{ .Values.seed.projectId }}', u.id, om.id, 'OWNER'
+                  FROM users u
+                  JOIN organization_memberships om ON om.user_id = u.id AND om.org_id = '{{ .Values.seed.orgId }}'
+                  WHERE u.id NOT IN (SELECT user_id FROM project_memberships WHERE project_id = '{{ .Values.seed.projectId }}');
+                  SQL
+
+                  # 5. Register model pricing for Bifrost aliases (idempotent via API)
+                  # Wait for Langfuse web to be ready
+                  until wget -qO- http://langfuse.langfuse.svc.cluster.local:3000/api/public/health >/dev/null 2>&1; do sleep 5; done
+
+                  # Create claude-sonnet model pricing (Bifrost alias → Sonnet 4 pricing)
+                  wget -qO- --post-data='{"modelName":"claude-sonnet","matchPattern":"(?i)^(claude-sonnet|us\\.anthropic\\.claude-sonnet.*)$","unit":"TOKENS","inputPrice":0.000003,"outputPrice":0.000015,"tokenizerId":"claude","tokenizerConfig":{"tokenizerModel":"claude"}}' \
+                    --header="Content-Type: application/json" \
+                    --header="Authorization: Basic $(echo -n {{ .Values.seed.apiKey.publicKey }}:{{ .Values.seed.apiKey.secretKey }} | base64)" \
+                    "http://langfuse.langfuse.svc.cluster.local:3000/api/public/models" || true
+
+                  echo "Seed complete"
+{{- end }}

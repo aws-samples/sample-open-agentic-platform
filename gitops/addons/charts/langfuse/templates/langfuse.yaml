@@ -1,17 +1,15 @@
+##########################################################################
+# Langfuse v3 — Full stack: Web + Worker + Postgres + ClickHouse + Redis + MinIO
+##########################################################################
+
+# ─── Service Account for seed job ──────────────────────────────────────────
 apiVersion: v1
-kind: Secret
+kind: ServiceAccount
 metadata:
-  name: langfuse-secrets
+  name: langfuse-seed
   namespace: {{ .Release.Namespace }}
-type: Opaque
-stringData:
-  DATABASE_URL: "postgresql://langfuse:langfuse-password@langfuse-postgres:5432/langfuse"
-  NEXTAUTH_SECRET: "changeme-generate-random-secret"
-  SALT: "changeme-generate-salt"
-  LANGFUSE_INIT_USER_EMAIL: "admin@agent-platform.local"
-  LANGFUSE_INIT_USER_PASSWORD: "changeme-admin-password"
-  LANGFUSE_INIT_PROJECT_NAME: "agent-platform"
 ---
+# ─── Shared ConfigMap (non-secret configuration only) ─────────────────────
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,97 +18,40 @@ metadata:
 data:
   NEXTAUTH_URL: "https://{{ .Values.ingress.host }}"
   TELEMETRY_ENABLED: "false"
-  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
   NODE_ENV: "production"
   AUTH_KEYCLOAK_CLIENT_ID: "langfuse"
   AUTH_KEYCLOAK_ISSUER: "{{ .Values.keycloak.issuerUrl }}"
   AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING: "true"
   AUTH_DISABLE_SIGNUP: "{{ .Values.keycloak.disableSignup | default "false" }}"
+  CLICKHOUSE_URL: "http://langfuse-clickhouse:8123"
+  CLICKHOUSE_MIGRATION_URL: "clickhouse://langfuse-clickhouse:9000"
+  CLICKHOUSE_USER: "default"
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_CONNECTION_STRING: "redis://langfuse-redis:6379"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "{{ .Values.minio.bucket }}"
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: "{{ .Values.global.awsRegion }}"
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "http://langfuse-minio:9000"
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
 ---
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: langfuse-postgres
-  namespace: {{ .Release.Namespace }}
-spec:
-  serviceName: langfuse-postgres
-  replicas: 1
-  # Set fields explicitly that the apiserver would otherwise default, so Argo
-  # does not see drift on every reconcile.
-  podManagementPolicy: OrderedReady
-  revisionHistoryLimit: 10
-  updateStrategy:
-    type: RollingUpdate
-    rollingUpdate:
-      partition: 0
-  persistentVolumeClaimRetentionPolicy:
-    whenDeleted: Retain
-    whenScaled: Retain
-  selector:
-    matchLabels:
-      app: langfuse-postgres
-  template:
-    metadata:
-      labels:
-        app: langfuse-postgres
-    spec:
-      # Pin pod-spec fields the apiserver would otherwise default, so Argo
-      # does not see drift on every reconcile.
-      dnsPolicy: ClusterFirst
-      restartPolicy: Always
-      schedulerName: default-scheduler
-      terminationGracePeriodSeconds: 30
-      securityContext: {}
-      containers:
-        - name: postgres
-          image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
-          imagePullPolicy: IfNotPresent
-          # Pin defaulted container fields too.
-          terminationMessagePath: /dev/termination-log
-          terminationMessagePolicy: File
-          ports:
-            - containerPort: 5432
-              protocol: TCP
-          env:
-            - name: POSTGRES_DB
-              value: langfuse
-            - name: POSTGRES_USER
-              value: langfuse
-            - name: POSTGRES_PASSWORD
-              value: langfuse-password
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
-          volumeMounts:
-            - name: postgres-data
-              mountPath: /var/lib/postgresql/data
-          resources:
-            {{- toYaml .Values.postgres.resources | nindent 12 }}
-  volumeClaimTemplates:
-    - apiVersion: v1
-      kind: PersistentVolumeClaim
-      metadata:
-        name: postgres-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        # Pin volumeMode so it matches the apiserver-defaulted live state.
-        volumeMode: Filesystem
-        resources:
-          requests:
-            storage: {{ .Values.postgres.storage }}
----
+# ─── Secret (credentials — overridable via values) ────────────────────────
 apiVersion: v1
-kind: Service
+kind: Secret
 metadata:
-  name: langfuse-postgres
+  name: langfuse-secrets
   namespace: {{ .Release.Namespace }}
-spec:
-  selector:
-    app: langfuse-postgres
-  ports:
-    - port: 5432
-      targetPort: 5432
-  type: ClusterIP
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@langfuse-postgres:5432/langfuse"
+  POSTGRES_PASSWORD: "{{ .Values.postgres.password }}"
+  NEXTAUTH_SECRET: "{{ .Values.nextauthSecret }}"
+  SALT: "{{ .Values.salt }}"
+  CLICKHOUSE_PASSWORD: "{{ .Values.clickhouse.password }}"
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "{{ .Values.minio.rootUser }}"
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "{{ .Values.minio.rootPassword }}"
+  MINIO_ROOT_PASSWORD: "{{ .Values.minio.rootPassword }}"
+
 ---
+# ─── Langfuse Web Deployment ──────────────────────────────────────────────
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -126,21 +67,36 @@ spec:
       labels:
         app: langfuse
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.36
-          command: ['sh', '-c', 'until nc -z langfuse-postgres 5432; do echo "Waiting for postgres..."; sleep 2; done']
+          command: ['sh', '-c', 'until nc -z langfuse-postgres 5432; do sleep 2; done']
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: langfuse
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 3000
           envFrom:
-            - secretRef:
-                name: langfuse-secrets
             - configMapRef:
                 name: langfuse-config
+            - secretRef:
+                name: langfuse-secrets
           env:
             - name: HOSTNAME
               value: "0.0.0.0"
@@ -152,18 +108,25 @@ spec:
                   optional: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /api/public/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 30
-            periodSeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /api/public/health
               port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
 ---
 apiVersion: v1
 kind: Service
@@ -177,7 +140,328 @@ spec:
     - port: 3000
       targetPort: 3000
   type: ClusterIP
+
 ---
+# ─── Langfuse Worker Deployment ───────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-worker
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: langfuse-worker
+  template:
+    metadata:
+      labels:
+        app: langfuse-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: {{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: langfuse-config
+            - secretRef:
+                name: langfuse-secrets
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+
+---
+# ─── PostgreSQL ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: langfuse-postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: langfuse-postgres
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: langfuse-postgres
+  template:
+    metadata:
+      labels:
+        app: langfuse-postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 70
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: langfuse
+            - name: POSTGRES_USER
+              value: "{{ .Values.postgres.user }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+
+---
+# ─── ClickHouse ───────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: langfuse-clickhouse
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: langfuse-clickhouse
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: langfuse-clickhouse
+  template:
+    metadata:
+      labels:
+        app: langfuse-clickhouse
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 101
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 8123
+              name: http
+            - containerPort: 9000
+              name: native
+          env:
+            - name: CLICKHOUSE_DB
+              value: default
+            - name: CLICKHOUSE_USER
+              value: default
+            - name: CLICKHOUSE_PASSWORD
+              value: "{{ .Values.clickhouse.password }}"
+          volumeMounts:
+            - name: clickhouse-data
+              mountPath: /var/lib/clickhouse
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: clickhouse-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.clickhouse.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-clickhouse
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-clickhouse
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+    - name: native
+      port: 9000
+      targetPort: 9000
+
+---
+# ─── Redis ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-redis
+  template:
+    metadata:
+      labels:
+        app: langfuse-redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}
+          args: ["--maxmemory-policy", "noeviction"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 999
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 6379
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-redis
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+# ─── MinIO (S3-compatible blob storage) ───────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: langfuse-minio
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: langfuse-minio
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: langfuse-minio
+  template:
+    metadata:
+      labels:
+        app: langfuse-minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: "{{ .Values.minio.rootUser }}"
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-secrets
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-minio
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: langfuse-minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+# MinIO bucket init job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: langfuse-minio-init
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command:
+            - sh
+            - -c
+            - |
+              mc alias set local http://langfuse-minio:9000 {{ .Values.minio.rootUser }} {{ .Values.minio.rootPassword }}
+              mc mb --ignore-existing local/{{ .Values.minio.bucket }}
+              echo "Bucket {{ .Values.minio.bucket }} ready"
+
+---
+# ─── Keycloak client secret (from Secrets Manager) ────────────────────────
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -196,3 +480,6 @@ spec:
       remoteRef:
         key: {{ .Values.keycloak.secretManagerKey }}
         property: LANGFUSE_CLIENT_SECRET
+
+---
+# ─── Ingress is defined in templates/ingress.yaml ─────────────────────────

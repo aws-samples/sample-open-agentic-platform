@@ -1,0 +1,25 @@
+apiVersion: v2
+name: oam-agent-components
+description: |
+  KubeVela ComponentDefinitions for agentic workloads: agent, mcp-server, and
+  agentcore-memory. Generated from CUE templates in platform/oam/.
+
+  Wave taxonomy (see appmod-blueprints/gitops/addons/registry/README.md):
+  this chart is a wave-5 "declarative consumer" — its ComponentDefinitions
+  reference resource kinds delivered by lower-wave addons.
+
+  Prerequisites (must be enabled in the cluster overlay before this chart
+  syncs):
+    - argo_rollouts        wave 3   (provides argoproj.io/v1alpha1.Rollout
+                                     CRD, consumed by agent and mcp-server
+                                     CUE templates)
+    - kubevela             wave 4   (provides ComponentDefinition CRD and
+                                     mutating admission webhook)
+    - crossplane           wave 3   (only needed for agentcore-memory, which
+                                     creates a Crossplane Composition claim)
+
+  See README.md alongside this Chart.yaml for the full prerequisite/depend-
+  ency story.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,53 @@
+{{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+# IAM Role for OTel Collector (AMP remote write)
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: {{ .Release.Namespace }}-otel-collector-role
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    crossplane.io/external-name: {{ .Release.Namespace }}-otel-collector-role
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "pods.eks.amazonaws.com"},
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }]
+      }
+    inlinePolicy:
+      - name: amp-remote-write
+        policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "aps:RemoteWrite",
+                "aps:GetSeries",
+                "aps:GetLabels",
+                "aps:GetMetricMetadata"
+              ],
+              "Resource": "*"
+            }]
+          }
+---
+# Pod Identity Association
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: PodIdentityAssociation
+metadata:
+  name: {{ .Release.Namespace }}-otel-collector
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  forProvider:
+    clusterName: {{ .Values.amp.clusterName | default "hub" }}
+    namespace: {{ .Release.Namespace }}
+    region: {{ .Values.global.awsRegion }}
+    roleArnRef:
+      name: {{ .Release.Namespace }}-otel-collector-role
+    serviceAccount: otel-collector
+{{- end }}

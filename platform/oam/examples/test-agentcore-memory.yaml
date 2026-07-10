@@ -1,0 +1,14 @@
+# Test: Provision AgentCore Memory in isolation
+# memoryName auto-generates to: agents_agentcore_memory_test
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: test-memory
+  namespace: agents
+spec:
+  components:
+    - name: agentcore-memory-test
+      type: agentcore-memory
+      properties:
+        description: "Test memory for validation"
+        eventExpiryDuration: 7

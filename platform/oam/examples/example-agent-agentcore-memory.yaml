@@ -1,0 +1,54 @@
+# Example: Agent with AgentCore memory provisioned via Crossplane managed resource
+#
+# Flow:
+#   1. agentcore-memory provisions a Memory via Crossplane bedrockagentcore provider,
+#      and emits a ComponentPolicy claim for IAM permissions.
+#      The memoryId is passed to the agent via outputs/inputs.
+#   2. dp-service-account creates IAM Role + ServiceAccount + PodIdentityAssociation,
+#      then emits PolicyAttachment claims to wire the permissions
+#   3. agent references the ServiceAccount and gets AWS credentials via pod identity
+#
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: agent-with-agentcore-memory-app
+  namespace: agents
+spec:
+  components:
+    - name: agentcore-short-memory
+      type: agentcore-memory
+      outputs:
+        - name: memory-id
+          valueFrom: output.status.atProvider.id
+      properties:
+        region: us-west-2
+        description: "Memory for my-agent"
+        eventExpiryDuration: 30
+
+    - name: my-agent-sa
+      type: dp-service-account
+      properties:
+        componentNamesForAccess:
+          - agentcore-short-memory
+        clusterName: hub
+        clusterRegion: us-west-2
+
+    - name: my-agent-with-mem
+      type: agent
+      dependsOn:
+        - my-agent-sa
+        - agentcore-short-memory
+      inputs:
+        - from: memory-id
+          parameterKey: properties.memory.config.memoryId
+      properties:
+        name: my-agent
+        namespace: agents
+        description: "Assistant agent with persistent memory"
+        systemMessage: "You are a helpful assistant."
+        serviceAccount: my-agent-sa
+        memory:
+          provider: agentcore
+          config:
+            memoryId: "injected-from-agentcore-memory-output"
+            region: us-west-2

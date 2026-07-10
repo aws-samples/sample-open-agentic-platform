@@ -18,45 +18,89 @@ data:
             endpoint: 0.0.0.0:4317
           http:
             endpoint: 0.0.0.0:4318
+      {{- if .Values.bifrost.enabled }}
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: bifrost-llm-gateway
+              scrape_interval: 15s
+              static_configs:
+                - targets: ["{{ .Values.bifrost.scrapeEndpoint }}"]
+      {{- end }}
 
     processors:
-      batch:
-        timeout: 30s
-        send_batch_size: 8192
+      probabilistic_sampler:
+        sampling_percentage: 100.0
       memory_limiter:
-        check_interval: 5s
-        limit_mib: 400
-        spike_limit_mib: 100
+        check_interval: 1s
+        limit_percentage: 85
+        spike_limit_percentage: 10
+      batch:
+        send_batch_size: 1024
+        timeout: 500ms
+        send_batch_max_size: 2048
 
     extensions:
       health_check:
         endpoint: 0.0.0.0:13133
-
-    exporters:
-      {{- if .Values.xray.enabled }}
-      awsxray:
+      {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+      sigv4auth:
         region: {{ .Values.global.awsRegion }}
       {{- end }}
-      {{- if .Values.jaeger.enabled }}
-      otlp/jaeger:
-        endpoint: {{ .Values.jaeger.endpoint }}
-        tls:
-          insecure: true
+
+    exporters:
+      {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
+      otlphttp/langfuse:
+        endpoint: "{{ .Values.langfuse.endpoint }}"
+        timeout: 30s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 5m
+        headers:
+          Authorization: "Basic ${LANGFUSE_OTEL_AUTH}"
+          x-langfuse-ingestion-version: "4"
+      {{- end }}
+      {{- if .Values.bifrost.enabled }}
+      debug:
+        verbosity: basic
+      {{- end }}
+      {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+      prometheusremotewrite/amp:
+        endpoint: "{{ .Values.amp.remoteWriteEndpoint }}api/v1/remote_write"
+        auth:
+          authenticator: sigv4auth
       {{- end }}
 
     service:
-      extensions: [health_check]
+      extensions:
+        - health_check
+        {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+        - sigv4auth
+        {{- end }}
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
+          processors: [memory_limiter, probabilistic_sampler, batch]
           exporters:
-            {{- if .Values.xray.enabled }}
-            - awsxray
+            {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
+            - otlphttp/langfuse
             {{- end }}
-            {{- if .Values.jaeger.enabled }}
-            - otlp/jaeger
+        {{- if .Values.bifrost.enabled }}
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters:
+            {{- if and .Values.amp.enabled .Values.amp.remoteWriteEndpoint }}
+            - prometheusremotewrite/amp
+            {{- else }}
+            - debug
             {{- end }}
+        {{- end }}
+      telemetry:
+        logs:
+          level: "info"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -74,6 +118,9 @@ spec:
     metadata:
       labels:
         app: otel-collector
+      annotations:
+        checksum/config: {{ printf "%s-%s-%s-%s" (.Values.langfuse.endpoint | default "") (.Values.bifrost.scrapeEndpoint | default "") (.Values.amp.remoteWriteEndpoint | default "") (.Values.amp.enabled | toString) | sha256sum | trunc 32 }}
+        checksum/langfuse-auth: {{ .Values.langfuse.secretManagerKey | default "none" | sha256sum | trunc 8 }}
     spec:
       serviceAccountName: otel-collector
       containers:
@@ -91,6 +138,14 @@ spec:
           env:
             - name: AWS_REGION
               value: {{ .Values.global.awsRegion }}
+            {{- if and .Values.langfuse.enabled .Values.langfuse.endpoint }}
+            - name: LANGFUSE_OTEL_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-otel-auth
+                  key: LANGFUSE_OTEL_AUTH
+                  optional: true
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /conf

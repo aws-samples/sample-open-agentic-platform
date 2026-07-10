@@ -6,15 +6,14 @@ Deploy the AI agent platform on an EKS cluster using the ArgoCD EKS Capability.
 
 | Wave | Addon | Source | Namespace |
 |------|-------|--------|-----------|
-| 2 | kagent-crds | OCI: `ghcr.io/kagent-dev/kagent/helm/kagent-crds:0.7.9` | kagent |
-| 3 | kagent (operator + UI) | OCI: `ghcr.io/kagent-dev/kagent/helm/kagent:0.7.9` | kagent |
-| 3 | kagent-setup (ModelConfig) | Local chart | kagent |
-| 3 | litellm (LLM gateway) | Local chart | kagent |
+| 3 | litellm (LLM gateway) | Local chart | litellm |
 | 4 | crossplane-agentcore | Local chart | crossplane-system |
 | 5 | langfuse (LLM tracing + PostgreSQL) | Local chart | langfuse |
 | 5 | jaeger (distributed tracing) | Helm: `jaegertracing/jaeger:3.4.1` | jaeger |
-| 5 | prometheus-operator-crds | Helm: `prometheus-community/prometheus-operator-crds:28.0.1` | kagent |
-| 6 | kagent-monitoring (ServiceMonitor) | Local chart | kagent |
+| 5 | otel-collector | Local chart | otel |
+| 5 | prometheus-operator-crds | Helm: `prometheus-community/prometheus-operator-crds:28.0.1` | monitoring |
+| 5 | bifrost (AI gateway) | Helm: `maximhq/bifrost:2.1.16` | bifrost |
+| 5 | oam-agent-components (KubeVela ComponentDefinitions) | Local chart | vela-system |
 | 7 | gateway-api-crds | Local chart (Job) | agentgateway-system |
 | 7 | agentgateway-crds | OCI: `cr.agentgateway.dev/charts/agentgateway-crds:v1.1.0` | agentgateway-system |
 | 8 | agentgateway (control plane) | OCI: `cr.agentgateway.dev/charts/agentgateway:v1.1.0` | agentgateway-system |
@@ -31,6 +30,16 @@ The `crossplane-agentcore` chart provisions Bedrock AgentCore resources using Cr
 
 Prerequisites: Crossplane must be installed with `provider-family-aws`, `provider-aws-iam`, and `provider-aws-eks` (provided by appmod-blueprints or installed separately).
 
+### OAM Agent Components (wave 5)
+
+The `oam-agent-components` chart registers KubeVela ComponentDefinitions for declaratively deploying agents and MCP servers:
+
+- **`agent`** — A2A agent with blue-green deployment via Argo Rollouts and pluggable memory backends
+- **`mcp-server`** — MCP server with blue-green deployment and AgentGateway registration
+- **`agentcore-memory`** — Bedrock AgentCore Memory provisioned via the `crossplane-agentcore` Composition
+
+Prerequisite: KubeVela must be installed (provided by appmod-blueprints `kubevela` addon at sync wave 3).
+
 ## Deployment via appmod-blueprints
 
 When deployed through the [appmod-blueprints](https://github.com/aws-samples/appmod-blueprints) platform, the `enable_agent_platform` label is set declaratively via `gitops/overlays/environments/<env>/enabled-addons.yaml` in this repo. The platform's fleet-secrets mechanism reads these overlays and applies the label to cluster secrets automatically — no manual labeling required.
@@ -44,6 +53,7 @@ When deployed through the [appmod-blueprints](https://github.com/aws-samples/app
 - Local cluster registered in ArgoCD using its EKS ARN
 - `kubectl` and `aws` CLI configured
 - Crossplane installed with `provider-aws-bedrockagentcore` (for AgentCore resources)
+- KubeVela installed (for OAM components)
 
 ### Pod Identity (EKS Auto Mode)
 
@@ -77,7 +87,7 @@ aws iam put-role-policy --role-name ${CLUSTER_NAME}-LiteLLMBedrockRole --policy-
 
 aws eks create-pod-identity-association \
   --cluster-name $CLUSTER_NAME --region $REGION \
-  --namespace kagent --service-account litellm \
+  --namespace litellm --service-account litellm \
   --role-arn arn:aws:iam::${ACCOUNT_ID}:role/${CLUSTER_NAME}-LiteLLMBedrockRole
 ```
 
@@ -133,19 +143,17 @@ The hub cluster secret must have `enable_agent_platform: "true"` label for the g
 ### Path 1: Agent A2A (direct chat, no auth for internal access)
 
 ```
-┌──────────┐     ┌───────────────────┐     ┌──────────────────┐     ┌─────────────┐     ┌─────────┐
-│  Client  │────▶│  Agent Pod        │────▶│ kagent-controller│     │   LiteLLM   │────▶│ Bedrock │
-│  (curl/  │ A2A │  (bedrock-asst    │     │  (session mgmt)  │     │  (proxy)    │     │  (LLM)  │
-│   UI)    │     │   or k8s-ops)     │     │                  │     │             │     │         │
-└──────────┘     └───────┬───────────┘     └──────────────────┘     └─────────────┘     └─────────┘
-                         │  OpenAI-compatible API                           ▲
-                         └─────────────────────────────────────────────────┘
+┌──────────┐     ┌───────────────────┐     ┌─────────────┐     ┌─────────┐
+│  Client  │────▶│  Agent Pod        │────▶│   LiteLLM   │────▶│ Bedrock │
+│  (curl/  │ A2A │  deployed via     │     │  (proxy via │     │  (LLM)  │
+│   UI)    │     │  OAM Application  │     │  Pod ID)    │     │         │
+└──────────┘     └───────────────────┘     └─────────────┘     └─────────┘
 ```
 
-1. Client sends JSON-RPC `message/send` to the agent's Service (port 8080)
-2. Agent framework calls kagent-controller to create/manage sessions
+1. Client sends JSON-RPC `message/send` to the agent's Service (port 8083)
+2. Agent (deployed as a KubeVela `agent` ComponentDefinition + Argo Rollout) handles the A2A protocol
 3. Agent calls LiteLLM (OpenAI-compatible) which routes to Bedrock via Pod Identity
-4. For tool-using agents (k8s-ops), the agent also calls `kagent-tool-server` via MCP
+4. For tool-using agents, the agent calls MCP servers via the AgentGateway
 
 ### Path 2: Authenticated MCP via AgentGateway + KeyCloak
 
@@ -174,9 +182,9 @@ The hub cluster secret must have `enable_agent_platform: "true"` label for the g
 ### Testing
 
 ```bash
-# Chat with an agent (A2A, no auth)
-kubectl run chat --rm -i --restart=Never --image=curlimages/curl -n kagent -- \
-  -s -X POST http://bedrock-assistant.kagent.svc.cluster.local:8080/ \
+# Chat with an agent (A2A, no auth) — assumes agent deployed in 'default' namespace
+kubectl run chat --rm -i --restart=Never --image=curlimages/curl -n default -- \
+  -s -X POST http://<agent-name>-stable.default.svc.cluster.local/ \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","messageId":"msg-1","parts":[{"type":"text","text":"Hello"}]}}}'
 
@@ -203,9 +211,10 @@ curl -N http://agentgateway-proxy.agentgateway-system.svc.cluster.local:8080/sse
 |---|---|---|
 | LiteLLM "Unable to locate credentials" | Missing Pod Identity | Create Pod Identity association, restart LiteLLM |
 | LiteLLM "model version has reached end of life" | Outdated model IDs | Update to `us.anthropic.*` inference profiles in litellm chart |
-| kagent-controller CrashLoop | Startup probe timeout | Upstream kagent chart issue — may need resource tuning |
 | ApplicationSet "map has no entry" | Cluster secret missing annotations | Use `useSelectors: false` with `globalSelectors` |
+| langfuse ApplicationSet "map has no entry for key \"hub_cluster_name\"" (blocks all agentic addons — parent `agent-platform-addons` app retries forever and never applies later sync-wave ApplicationSets) | langfuse `secretManagerKey` referenced a non-existent `hub_cluster_name` annotation | Template must use `aws_cluster_name` (the per-cluster annotation set by the fleet-secret chart), not `hub_cluster_name`. Fixed in `gitops/addons/bootstrap/default/addons.yaml`. The `<cluster>/keycloak-clients` Secrets Manager secret must also exist. |
 | Gateway API CRDs Job fails | No outbound internet or image pull issue | Verify NAT gateway, check `bitnami/kubectl:latest` availability |
 | AgentGateway proxy not starting | Missing Gateway API CRDs or JWKS fetch failure | Verify CRDs installed, check KeyCloak reachability |
 | JWT validation fails | Wrong issuer URL | Ensure issuer matches `iss` claim (`https://<domain>/keycloak/realms/platform`) |
+| OAM Application stuck "no matches for kind ComponentDefinition" | KubeVela not installed | Install kubevela addon (platform side); verify `oam-agent-components` synced |
 | ArgoCD reverts manual changes | selfHeal enabled | Push changes to git instead of patching directly |
