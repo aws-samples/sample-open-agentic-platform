@@ -69,10 +69,10 @@ template: {
 					containers: [{
 						name:  "agent"
 						image: parameter.image
-						// Decentralized mode: wrap with opentelemetry-instrument for ADOT auto-instrumentation
-						if parameter.observability.mode == "decentralized" {
-							command: ["opentelemetry-instrument", "python", "-m", "app.main"]
-						}
+						// Always use opentelemetry-instrument for auto-instrumentation:
+						// - Centralized: instruments httpx to propagate W3C traceparent to Bifrost
+						// - Decentralized: activates ADOT distro for CW GenAI export
+						command: ["opentelemetry-instrument", "python", "-m", "app.main"]
 						ports: [{
 							name:          "a2a"
 							containerPort: 8083
