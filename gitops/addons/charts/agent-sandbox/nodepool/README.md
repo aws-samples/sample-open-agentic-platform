@@ -15,43 +15,55 @@ were validated by a live spike (see [`docs/dark-factory` §12a](../../../../../d
 | `kata-mng.tf` | Terraform launch template (`cpu_options.nested_virtualization=enabled`) + MNG — use when you need the nested-virt flag eksctl can't set. `terraform validate` passes. |
 | `kata-mng-launch-template-userdata.mime` | The AL2023 **nodeadm MIME** userData (modprobe kvm_intel + join). Reference for either path. |
 
-## ⚠️ Prerequisite on EKS Auto Mode: install the `vpc-cni` addon
+## ✅ PROVEN END-TO-END on EKS Auto Mode (spoke-dev, 2026-07-10)
 
-**Auto Mode clusters have NO `vpc-cni` addon** — Auto Mode's built-in networking
-only applies to its own managed nodes. A self-managed MNG node will join but stay
-`NotReady` with `cni plugin not initialized` until you install the standard CNI:
+Kata micro-VMs **do run on an Auto Mode cluster** via a self-managed nested-virt MNG.
+Verified with a pod under `runtimeClassName: kata-clh`:
+
+| | Value |
+|---|---|
+| Pod kernel (`uname -r` inside) | **`6.18.35`** — the Kata guest kernel |
+| Host node kernel | `6.12.90-…amzn2023` |
+
+Different kernels ⇒ the pod ran in a **real VM with hardware isolation**, not a container.
+
+### The two Auto-Mode-specific prerequisites (the crux)
+
+Auto Mode's built-in networking applies ONLY to its own managed nodes. A self-managed
+MNG node has **neither the CNI nor kube-proxy** that pods need — so you MUST install
+both EKS addons, or pods on the kata node can't reach the API server:
 
 ```
-aws eks create-addon --cluster-name <cluster> --addon-name vpc-cni --resolve-conflicts OVERWRITE
+aws eks create-addon --cluster-name <cluster> --addon-name vpc-cni    --resolve-conflicts OVERWRITE
+aws eks create-addon --cluster-name <cluster> --addon-name kube-proxy --resolve-conflicts OVERWRITE
 ```
 
-`aws-node` tolerates all taints (`operator: Exists`), so it schedules onto the
-tainted kata node automatically. (Discovered in live testing — lesson #4.)
+- **Without `vpc-cni`** → node stays `NotReady` (`cni plugin not initialized`).
+- **Without `kube-proxy`** → the node has no iptables rules for the `kubernetes.default.svc`
+  (172.20.0.1) service IP, so **kata-deploy crashloops** with `Failed to get node ...
+  client error (Connect)` — it connects to the API via the in-cluster service and times
+  out. This was the real blocker (NOT the containerd restart, and not the nydus
+  snapshotter — both were red herrings). Installing kube-proxy fixed it; kata-deploy then
+  reached `1/1 Running` with **zero restarts** and installed the runtime cleanly.
 
-## ⚠️ Known blocker: kata-deploy vs the VPC-CNI on Auto Mode (lesson #5)
+Both `aws-node` and `kube-proxy` tolerate all taints (`operator: Exists`), so they land
+on the tainted kata node automatically.
 
-Live testing found kata-deploy **crashloops** on a self-managed MNG node in an
-Auto Mode cluster and never finishes installing the runtime. Root cause: kata-deploy
-patches containerd and **restarts it**; because the VPC-CNI runs as `aws-node` pods
-*on that same containerd*, the restart briefly drops node networking, and
-kata-deploy's next Kubernetes API call fails (`Failed to get node ... client error
-(Connect)`) → the pod exits and CrashLoopBackOffs *before* completing the install.
-Disabling the experimental nydus snapshotter (`snapshotter.setup: []`) did **not**
-resolve it — the containerd restart itself is the trigger.
+### The startup-taint gate (from openclaw PR #10)
 
-**Everything up to the runtime install is proven** (node joins Ready, `/dev/kvm`,
-kata labels/taint, kata-deploy schedules only on the kata node). Options to finish:
+The kata node registers with **two** taints:
+- `kata=true:NoSchedule` — workload taint (only kata pods run here)
+- `katacontainers.io/runtime-not-ready=true:NoSchedule` — **startup taint**; blocks all
+  workloads until the runtime is installed. Set via nodeadm
+  `--register-with-taints`. The **`kata-readiness` DaemonSet** watches kata-deploy's
+  `/readyz` and removes this taint once install completes — proven to work here
+  (`node ... untainted` in its log).
 
-1. **Bake Kata into a custom AMI** (Packer) so no on-node containerd patch/restart is
-   needed at runtime — the most robust path on Auto Mode clusters.
-2. **Follow openclaw's model** — a self-managed Karpenter (not Auto Mode) where the
-   CNI/containerd lifecycle is fully controlled and kata-deploy's restart is tolerated.
-3. Investigate a kata-deploy mode that configures containerd **without a full restart**,
-   or pin `aws-node` to not depend on the restarted containerd during install.
+### IAM access-entry gotcha (lesson from this test)
 
-This is a **kata-deploy-on-Auto-Mode** integration issue, not a flaw in the
-`agent-sandbox` chart (operator/RuntimeClasses/template/pool-manager all render and
-apply fine).
+If you recreate the node IAM role, its principal ID changes — **delete and recreate the
+EKS access entry** (`type EC2_LINUX`) or the node's kubelet gets `Unauthorized` and never
+registers. A stale access entry pointing at an old role ID is silent and confusing.
 
 ## Enablement sequence (per kata-capable cluster, e.g. spoke-dev)
 
