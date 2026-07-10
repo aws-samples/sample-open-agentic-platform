@@ -47,6 +47,25 @@ def _get_model() -> OpenAIModel:
     return _model
 
 
+def _gateway_headers() -> dict:
+    """Authorization header from the projected workload-identity token.
+
+    The `gateway-identity` OAM trait mounts a projected ServiceAccount token
+    (audience `agentgateway`) and sets WORKLOAD_TOKEN_PATH. AgentGateway
+    validates it against the cluster OIDC issuer. Read fresh on each connect so
+    the kubelet-rotated token is always current. Returns {} when no token is
+    mounted (gateway auth not in use).
+    """
+    path = os.getenv("WORKLOAD_TOKEN_PATH")
+    if path:
+        try:
+            with open(path) as f:
+                return {"Authorization": "Bearer " + f.read().strip()}
+        except OSError:
+            logger.warning("WORKLOAD_TOKEN_PATH set but token unreadable at %s", path)
+    return {}
+
+
 def _get_mcp_tools() -> list:
     global _mcp_tools, _mcp_exit_stack
     if _mcp_exit_stack is not None:
@@ -61,7 +80,7 @@ def _get_mcp_tools() -> list:
     for url in urls:
         logger.info(f"Connecting to MCP server: {url}")
         try:
-            client = MCPClient(lambda u=url: streamablehttp_client(u))
+            client = MCPClient(lambda u=url: streamablehttp_client(u, headers=_gateway_headers()))
             stack.enter_context(client)
             server_tools = client.list_tools_sync()
             logger.info(f"  Loaded {len(server_tools)} tools from {url}")

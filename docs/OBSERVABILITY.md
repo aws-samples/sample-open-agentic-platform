@@ -1,154 +1,244 @@
-# Observability Architecture
+# Agent Observability
 
-## Overview
+The platform supports two observability modes for agents. Both work out of the box — no custom image build needed if using the pre-built ECR image.
 
-The Open Agentic Platform uses a dual-pipeline observability strategy:
-
-- **Langfuse** — LLM trace visualization (agent reasoning, tool calls, token usage, costs)
-- **Amazon Managed Grafana (AMG)** — operational dashboards (latency, throughput, system health)
-
-Jaeger is not used. Langfuse acts as the distributed tracer for agent workloads.
-
-## Architecture
+## Mode 1: Centralized (Default) — Langfuse + AMP/Grafana
 
 ```
-Spoke Clusters (dev, prod)                         Hub Cluster
-┌─────────────────────────────────┐     ┌──────────────────────────────────────┐
-│                                 │     │                                      │
-│  Agent (Strands)                │     │  Langfuse v3                         │
-│    ├─ StrandsTelemetry SDK      │     │    ├─ Web (:3000)                    │
-│    │    OTLP/HTTP direct ───────┼─────┼──► │   /api/public/otel             │
-│    │    (traces with GenAI      │HTTPS│    ├─ Worker (async processing)      │
-│    │     semantic attributes)   │     │    ├─ Redis (queue)                  │
-│    │                            │     │    ├─ ClickHouse (OLAP trace store)  │
-│    └─ W3C traceparent header    │     │    ├─ MinIO (S3 event upload)        │
-│         ↓                       │     │    └─ PostgreSQL (metadata)          │
-│  Bifrost Proxy                  │     │                                      │
-│    ├─ Receives traceparent      │     │  Seed CronJob (every 5min)           │
-│    ├─ Creates child LLM spans   │     │    └─ Auto-assigns SSO users         │
-│    └─ Exposes :8080/metrics     │     │                                      │
-│         ↓                       │     │  AMG (Grafana)                       │
-│  OTel Collector                 │     │    ├─ AMP datasource (Prometheus)    │
-│    ├─ Traces → X-Ray            │     │    └─ Agent Platform dashboards      │
-│    └─ Metrics → AMP             │     │                                      │
-│                                 │     └──────────────────────────────────────┘
-│  Prometheus Scrapers (AMP)      │
-│    └─ kube-state-metrics        │
-│    └─ node-exporter             │
-└─────────────────────────────────┘
+Agent → OTel Collector (:4318) → Langfuse (traces) + AMP (metrics) → Grafana
 ```
 
-## Trace Flow (Agent → Langfuse)
+The agent exports OTLP spans to the local OTel Collector. The collector forwards traces to Langfuse and scrapes Bifrost metrics to AMP.
 
-1. Agent creates a root span via `StrandsTelemetry.setup_otlp_exporter()`
-2. Agent injects W3C `traceparent` header into Bifrost LLM call
-3. Bifrost creates nested child spans (model, tokens, latency)
-4. Both agent and Bifrost push spans via OTLP/HTTP to Langfuse's `/api/public/otel` endpoint
-5. Langfuse Web accepts the payload, queues to Redis
-6. Langfuse Worker reads from Redis, stores raw event in MinIO (S3), writes structured data to ClickHouse
-7. Traces visible in Langfuse UI with full parent-child hierarchy
+### How it works
 
-### Authentication
+1. OAM `agent` ComponentDefinition injects `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel.svc.cluster.local:4318`
+2. Agent's `main.py` detects the endpoint and calls `StrandsTelemetry().setup_otlp_exporter()`
+3. Strands SDK creates spans for agent invocations, tool calls, and LLM requests
+4. Bifrost proxy reads the W3C `traceparent` header and creates child spans for model calls
+5. OTel Collector merges all spans into one trace tree and exports to Langfuse via OTLP/HTTP with Basic Auth
+6. Collector also scrapes Bifrost Prometheus metrics and pushes to AMP via remote write
 
-Traces are authenticated via HTTP Basic Auth:
-- Header: `Authorization: Basic <base64(publicKey:secretKey)>`
-- Header: `x-langfuse-ingestion-version: 4` (enables real-time Fast Preview)
-- Keys are created by the Langfuse seed CronJob and stored in the Langfuse database
+### Deploy (no config needed — centralized is the default)
 
-### Agent Configuration (OAM ComponentDefinition)
+```yaml
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: my-agent
+  namespace: default
+spec:
+  components:
+    - name: my-agent
+      type: agent
+      properties:
+        name: my-agent
+        namespace: default
+        description: "My agent"
+        image: "<account-id>.dkr.ecr.<region>.amazonaws.com/strands-agent:latest"
+        systemMessage: "You are helpful."
+        modelConfig:
+          modelId: claude-sonnet
+```
 
-The `agent` OAM component injects these env vars:
+### View traces
+
+Langfuse UI: `https://<ingress_domain>/` (Keycloak SSO)
+
+### View metrics
+
+AMG Grafana: Agent Platform > Bifrost LLM Metrics dashboard
+
+---
+
+## Mode 2: Decentralized — CloudWatch GenAI Console
 
 ```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.otel.svc.cluster.local:4318
-OTEL_SERVICE_NAME=<agent-name>
-LANGFUSE_PUBLIC_KEY=<from OAM Application properties>
-LANGFUSE_SECRET_KEY=<from OAM Application properties>
-LANGFUSE_BASE_URL=https://<ingress_domain>
+Agent → ADOT auto-instrumentation → CloudWatch (traces + logs + metrics)
 ```
 
-The agent's `main.py` initializes `StrandsTelemetry().setup_otlp_exporter()` at startup which configures the OTLP exporter pointing to Langfuse.
+The agent exports directly to CloudWatch via the AWS OpenTelemetry Distro (ADOT >=0.18.0). No collector or Langfuse needed.
 
-## Metrics Flow (Bifrost → Grafana)
+### How it works
 
-1. Bifrost exposes Prometheus metrics at `:8080/metrics`
-2. OTel Collector scrapes Bifrost metrics (prometheus receiver)
-3. Collector forwards to AMP via `prometheusremotewrite` exporter
-4. AMG (Grafana) queries AMP for dashboards
+1. OAM `agent` ComponentDefinition injects ADOT env vars and overrides the container command to `opentelemetry-instrument python -m app.main`
+2. ADOT auto-instruments the FastAPI + Strands application at startup
+3. GenAI spans (agent invocations, tool calls, LLM requests) are exported to CloudWatch
+4. With ADOT 0.18.0+ (unsplit architecture), spans go directly to the `aws/spans` log group — no separate log group needed
+5. Pod Identity on the `default` ServiceAccount provides CW/X-Ray write permissions (provisioned by the `oam-agent-components` chart)
 
-### Metrics Available
+### Deploy
 
-| Metric | Source | Description |
-|--------|--------|-------------|
-| Request latency per model | Bifrost | P50/P95/P99 latency by model |
-| Token usage | Bifrost | Input/output/total tokens per request |
-| Provider cost | Bifrost | Cost tracking by model provider |
-| Cache hit ratio | Bifrost | Virtual key cache effectiveness |
-| Pod CPU/Memory | kube-state-metrics | Resource usage by namespace |
-| Node health | node-exporter | Cluster infrastructure metrics |
+```yaml
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: my-agent
+  namespace: default
+spec:
+  components:
+    - name: my-agent
+      type: agent
+      properties:
+        name: my-agent
+        namespace: default
+        description: "My agent"
+        image: "<account-id>.dkr.ecr.<region>.amazonaws.com/strands-agent:latest"
+        systemMessage: "You are helpful."
+        modelConfig:
+          modelId: claude-sonnet
+        observability:
+          mode: decentralized
+```
 
-## Langfuse v3 Infrastructure
+### View traces
 
-Deployed on the hub cluster only (namespace: `langfuse`).
+CloudWatch Console > Application Signals > GenAI Observability
 
-| Component | Image | Purpose |
-|-----------|-------|---------|
-| langfuse (Web) | `langfuse/langfuse:3` | API + UI, OTLP receiver |
-| langfuse-worker | `langfuse/langfuse-worker:3` | Async event processing |
-| langfuse-postgres | `postgres:16-alpine` | Metadata, users, projects |
-| langfuse-clickhouse | `clickhouse/clickhouse-server:24.12` | OLAP trace/observation storage |
-| langfuse-redis | `redis:7-alpine` | Async queue + cache |
-| langfuse-minio | `minio/minio:latest` | S3-compatible blob storage (event upload) |
+### Prerequisites (automated by `task install`)
 
-### Why MinIO?
+- CloudWatch Transaction Search enabled (one-time per account)
+- Pod Identity with `logs:PutLogEvents`, `xray:PutTraceSegments`, `cloudwatch:PutMetricData`
 
-Langfuse v3 requires S3-compatible blob storage for its event ingestion pipeline. Raw OTLP events are written to S3 before being processed into ClickHouse. Without it, the OTLP endpoint returns 500. MinIO provides this locally without requiring an AWS S3 bucket.
+---
 
-### Seed CronJob
+## Environment Variables Injected by Mode
 
-Runs every 5 minutes (idempotent):
-1. Creates "Agent Platform" organization
-2. Creates "agent-platform" project
-3. Creates API keys for OTLP authentication
-4. Auto-assigns any new Keycloak SSO users as OWNER of org + project
+| Variable | Centralized | Decentralized |
+|----------|-------------|---------------|
+| `OTEL_SERVICE_NAME` | ✅ `<agent-name>` | ✅ `<agent-name>` |
+| `OTEL_TRACES_EXPORTER` | ✅ `otlp` | ✅ `otlp` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | ✅ collector :4318 | — |
+| `OTEL_PYTHON_DISTRO` | — | ✅ `aws_distro` |
+| `OTEL_PYTHON_CONFIGURATOR` | — | ✅ `aws_configurator` |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | — | ✅ `http/protobuf` |
+| `OTEL_RESOURCE_ATTRIBUTES` | — | ✅ `service.name=<name>` |
+| `AGENT_OBSERVABILITY_ENABLED` | — | ✅ `true` |
+| Container command | `python -m app.main` | `opentelemetry-instrument python -m app.main` |
 
-## OTel Collector
+---
 
-Deployed on every spoke cluster (namespace: `otel`).
+## Agent Image
 
-Two pipelines:
-- **Traces:** OTLP receiver (HTTP:4318) → otlphttp/langfuse exporter
-- **Metrics:** Prometheus scraper (Bifrost) → AMP remote write
+Both modes use the same image. The image includes all dependencies for both paths.
 
-The Langfuse trace export happens directly from the agent SDK, not through the collector. The collector handles infrastructure-level traces (X-Ray service maps) and Bifrost metrics only.
+### Dependencies (pyproject.toml)
 
-## Grafana Dashboards (AMG)
+```toml
+dependencies = [
+    "fastapi~=0.115.0",
+    "uvicorn[standard]>=0.34.2",
+    "pydantic~=2.0",
+    "strands-agents[a2a,openai,otel]~=1.0",
+    "bedrock-agentcore",
+    "aws-opentelemetry-distro>=0.18.0",
+]
+```
 
-Three agent-platform dashboards in the "Agent Platform" folder:
+- `strands-agents[otel]` — brings OpenTelemetry SDK + OTLP HTTP exporter (centralized)
+- `aws-opentelemetry-distro>=0.18.0` — ADOT with unsplit architecture (decentralized)
 
-### Agent Platform — Overview
-- OAM Agent pods count
-- MCP Server pods count
-- LiteLLM/Bifrost readiness
-- AgentGateway readiness
-- CPU/Memory by namespace (litellm, bifrost, otel, agentgateway-system, mcp-*)
-- Pod restarts (last 1h)
-- Argo Rollout replicas
+### Dockerfile
 
-### Agent Platform — LiteLLM Gateway
-- LiteLLM CPU/Memory
-- Bifrost CPU/Memory
-- Network I/O
+```dockerfile
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+WORKDIR /app
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache --prerelease=allow .
 
-### Agent Platform — X-Ray Traces
-- Service map (node graph)
-- Recent traces (table)
+FROM python:3.13-slim-bookworm
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY app/ ./app/
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+EXPOSE 8083
+CMD ["python", "-m", "app.main"]
+```
 
-## Access
+### Build and Push
 
-| Service | URL | Auth |
-|---------|-----|------|
-| Langfuse UI | `https://<ingress_domain>/` | Keycloak SSO (user1) |
-| Langfuse OTLP | `https://<ingress_domain>/api/public/otel/v1/traces` | Basic Auth (API keys) |
-| AMG (Grafana) | `https://g-<id>.grafana-workspace.<region>.amazonaws.com` | Keycloak SSO |
-| Langfuse API | `https://<ingress_domain>/api/public/traces` | Basic Auth (API keys) |
+```bash
+cd applications/strands-agent-base
+IMAGE_NAME=strands-agent IMAGE_TAG=latest AWS_REGION=us-east-1 ./build.sh push
+```
+
+Output: `<account-id>.dkr.ecr.us-east-1.amazonaws.com/strands-agent:latest`
+
+---
+
+## Testing Agents
+
+### Deploy a centralized agent and invoke
+
+```bash
+# Deploy
+kubectl apply -f platform/oam/examples/example-agent-centralized-observability.yaml
+
+# Wait for pod
+kubectl get pods -l app.kubernetes.io/name=my-agent -w
+
+# Invoke
+kubectl run test --image=curlimages/curl --rm -it --restart=Never -- \
+  curl -s -X POST http://my-agent-stable.default.svc.cluster.local:8083/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"message/send","id":"1","params":{"message":{"role":"user","messageId":"t1","parts":[{"type":"text","text":"What is S3?"}]}}}'
+
+# Verify trace in Langfuse
+curl -s "https://<domain>/api/public/traces?limit=1" \
+  -H "Authorization: Basic $(echo -n pk-lf-otel-platform:sk-lf-otel-platform-2026 | base64)"
+```
+
+### Deploy a decentralized agent and invoke
+
+```bash
+# Deploy
+kubectl apply -f platform/oam/examples/example-agent-decentralized-observability.yaml
+
+# Wait for pod
+kubectl get pods -l app.kubernetes.io/name=my-cw-agent -w
+
+# Invoke
+kubectl run test --image=curlimages/curl --rm -it --restart=Never -- \
+  curl -s -X POST http://my-cw-agent-stable.default.svc.cluster.local:8083/ \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"message/send","id":"1","params":{"message":{"role":"user","messageId":"t1","parts":[{"type":"text","text":"What is Lambda?"}]}}}'
+
+# Verify trace in CloudWatch
+# Console > CloudWatch > Application Signals > GenAI Observability
+```
+
+---
+
+## Platform Infrastructure
+
+### Centralized (provisioned by task install)
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| OTel Collector | `otel` namespace (all clusters) | OTLP receiver + Langfuse export + AMP remote write |
+| Langfuse v3 | `langfuse` namespace (hub only) | Trace UI + OTLP endpoint |
+| AMP Workspace | AWS (Crossplane-provisioned) | Prometheus metrics storage |
+| AMG Workspace | AWS (Crossplane-provisioned) | Grafana dashboards |
+| Bifrost | `bifrost` namespace (all clusters) | LLM proxy with OTEL plugin + metrics |
+
+### Decentralized (provisioned by task install)
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Pod Identity | `vela-system` namespace (Crossplane) | IAM role with CW/X-Ray permissions |
+| Transaction Search | AWS account-level | One-time CW config (enabled in Taskfile) |
+
+---
+
+## Troubleshooting
+
+| Problem | Check |
+|---------|-------|
+| No traces in Langfuse | Agent logs for `StrandsTelemetry` init. Collector logs for export errors. ExternalSecret `langfuse-otel-auth` status. |
+| No traces in CloudWatch | Pod Identity association exists (`kubectl get podidentityassociation -n vela-system`). Agent logs for ADOT init. Transaction Search enabled. |
+| Cost shows $0 in Langfuse | Seed CronJob logs (`kubectl logs -n langfuse -l app=langfuse-seed`). Check 401 auth errors. |
+| Agent crashes on startup | Check if image has ADOT packages. Verify port 4318 (not 4317) for centralized. |
+| Metrics not in Grafana | Check `amp_endpoint_url` annotation on cluster secret. Collector logs for AMP errors. |

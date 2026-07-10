@@ -5,20 +5,15 @@ metadata:
   namespace: default
 spec:
   components:
+    # Component name is the agent identity (context.name).
     - name: simple-agent
       type: agent
       properties:
-        name: simple-agent
-        namespace: default
         description: "Minimal AI assistant configuration"
-        
-        # Only required fields
+        # Only required field
         systemMessage: "You are a helpful AI assistant."
-        
-        # Everything else uses defaults:
-        # - image: 498530348755.dkr.ecr.us-east-1.amazonaws.com/strands-agent:latest
-        # - replicas: 3
-        # - modelId: claude-sonnet
-        # - llmGatewayUrl: http://bifrost.bifrost.svc.cluster.local:8080/v1
-        # - autoPromotionEnabled: true
-        # - registerWithGateway: true
+        # Everything else uses defaults (image, replicas, modelId=claude-sonnet,
+        # llmGatewayUrl, autoPromotionEnabled, registerWithGateway).
+      traits:
+        # Secretless identity to AgentGateway/MCP.
+        - type: gateway-identity

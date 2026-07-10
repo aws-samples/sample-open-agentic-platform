@@ -37,18 +37,18 @@ template: {
 		apiVersion: "argoproj.io/v1alpha1"
 		kind:       "Rollout"
 		metadata: {
-			name:      parameter.name
-			namespace: parameter.namespace
+			name:      context.name
+			namespace: context.namespace
 			labels: {
-				"app.kubernetes.io/name":      parameter.name
+				"app.kubernetes.io/name":      context.name
 				"app.kubernetes.io/component": "ai-agent"
 			}
 		}
 		spec: {
 			replicas: parameter.replicas
 			strategy: blueGreen: {
-				activeService:        parameter.name + "-stable"
-				previewService:       parameter.name + "-preview"
+				activeService:        context.name + "-stable"
+				previewService:       context.name + "-preview"
 				autoPromotionEnabled: parameter.autoPromotionEnabled
 				if parameter.autoPromotionSeconds != _|_ {
 					autoPromotionSeconds: parameter.autoPromotionSeconds
@@ -58,28 +58,24 @@ template: {
 				}
 			}
 			selector: matchLabels: {
-				"app.kubernetes.io/name": parameter.name
+				"app.kubernetes.io/name": context.name
 			}
 			template: {
 				metadata: labels: {
-					"app.kubernetes.io/name": parameter.name
+					"app.kubernetes.io/name": context.name
 				}
 				spec: {
-					serviceAccountName: parameter.serviceAccount
+					serviceAccountName: context.name
 					containers: [{
-						name:  "agent"
+						name:  context.name
 						image: parameter.image
-						// Decentralized mode: wrap with opentelemetry-instrument for ADOT auto-instrumentation
-						if parameter.observability.mode == "decentralized" {
-							command: ["opentelemetry-instrument", "python", "-m", "app.main"]
-						}
 						ports: [{
 							name:          "a2a"
 							containerPort: 8083
 							protocol:      "TCP"
 						}]
 						env: [
-							{name: "AGENT_NAME", value: parameter.name},
+							{name: "AGENT_NAME", value: context.name},
 							{name: "AGENT_DESCRIPTION", value: parameter.description},
 							{name: "MODEL_ID", value: parameter.modelConfig.modelId},
 							{name: "SYSTEM_PROMPT", value: parameter.systemMessage},
@@ -87,7 +83,7 @@ template: {
 							{name: "LLM_GATEWAY_URL", value: parameter.modelConfig.llmGatewayUrl},
 							{name: "LLM_GATEWAY_API_KEY", value: parameter.modelConfig.llmGatewayApiKey},
 							// Observability env vars — mode-dependent
-							{name: "OTEL_SERVICE_NAME", value: parameter.name},
+							{name: "OTEL_SERVICE_NAME", value: context.name},
 							{name: "OTEL_TRACES_EXPORTER", value: "otlp"},
 							if parameter.observability.mode == "centralized" {
 								{name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "http://otel-collector.otel.svc.cluster.local:4318"}
@@ -102,7 +98,7 @@ template: {
 								{name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: "http/protobuf"}
 							},
 							if parameter.observability.mode == "decentralized" {
-								{name: "OTEL_RESOURCE_ATTRIBUTES", value: "service.name=" + parameter.name}
+								{name: "OTEL_RESOURCE_ATTRIBUTES", value: "service.name=" + context.name}
 							},
 							if parameter.observability.mode == "decentralized" {
 								{name: "AGENT_OBSERVABILITY_ENABLED", value: "true"}
@@ -146,17 +142,30 @@ template: {
 	}
 
 	outputs: {
+		// Dedicated ServiceAccount — the agent's single identity anchor. The
+		// gateway-identity and aws-service-identity traits attach their
+		// capabilities to this SA (name == context.name).
+		serviceAccount: {
+			apiVersion: "v1"
+			kind:       "ServiceAccount"
+			metadata: {
+				name:      context.name
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
+			}
+		}
+
 		// Stable service (active)
 		stableService: {
 			apiVersion: "v1"
 			kind:       "Service"
 			metadata: {
-				name:      parameter.name + "-stable"
-				namespace: parameter.namespace
-				labels: "app.kubernetes.io/name": parameter.name
+				name:      context.name + "-stable"
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
 			}
 			spec: {
-				selector: "app.kubernetes.io/name": parameter.name
+				selector: "app.kubernetes.io/name": context.name
 				ports: [{
 					name: "a2a", port: 8083, targetPort: 8083, protocol: "TCP"
 					appProtocol: "kgateway.dev/a2a"
@@ -170,12 +179,12 @@ template: {
 			apiVersion: "v1"
 			kind:       "Service"
 			metadata: {
-				name:      parameter.name + "-preview"
-				namespace: parameter.namespace
-				labels: "app.kubernetes.io/name": parameter.name
+				name:      context.name + "-preview"
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
 			}
 			spec: {
-				selector: "app.kubernetes.io/name": parameter.name
+				selector: "app.kubernetes.io/name": context.name
 				ports: [{
 					name: "a2a", port: 8083, targetPort: 8083, protocol: "TCP"
 					appProtocol: "kgateway.dev/a2a"
@@ -189,15 +198,15 @@ template: {
 			apiVersion: "v1"
 			kind:       "ConfigMap"
 			metadata: {
-				name:      parameter.name + "-card"
-				namespace: parameter.namespace
+				name:      context.name + "-card"
+				namespace: context.namespace
 				labels: {
-					"app.kubernetes.io/name": parameter.name
+					"app.kubernetes.io/name": context.name
 					"agent.dev/type":         "agent-card"
 				}
 			}
 			data: {
-				name:        parameter.name
+				name:        context.name
 				description: parameter.description
 				model:       parameter.modelConfig.modelId
 			}
@@ -215,9 +224,9 @@ template: {
 				apiVersion: "gateway.networking.k8s.io/v1"
 				kind:       "HTTPRoute"
 				metadata: {
-					name:      parameter.name
-					namespace: parameter.namespace
-					labels: "app.kubernetes.io/name": parameter.name
+					name:      context.name
+					namespace: context.namespace
+					labels: "app.kubernetes.io/name": context.name
 				}
 				spec: {
 					parentRefs: [{
@@ -228,7 +237,7 @@ template: {
 						matches: [{
 							path: {
 								type:  "PathPrefix"
-								value: "/" + parameter.name
+								value: "/" + context.name
 							}
 						}]
 						filters: [{
@@ -239,9 +248,9 @@ template: {
 							}
 						}]
 						backendRefs: [{
-							name:      parameter.name + "-stable"
+							name:      context.name + "-stable"
 							port:      8083
-							namespace: parameter.namespace
+							namespace: context.namespace
 						}]
 					}]
 				}
@@ -252,8 +261,6 @@ template: {
 
 	parameter: {
 		// Required fields
-		name:          string
-		namespace:     string
 		description:   string
 		systemMessage: string
 
@@ -261,8 +268,7 @@ template: {
 		image: *"public.ecr.aws/z0a4o2j5/strands-agent:latest" | string
 
 		// Optional fields with defaults
-		replicas:       *3 | int
-		serviceAccount: *"default" | string
+		replicas: *3 | int
 
 		// Blue-green deployment settings
 		autoPromotionEnabled:  *true | bool
