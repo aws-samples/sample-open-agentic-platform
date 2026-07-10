@@ -43,6 +43,13 @@ kata:
       value: "true"
       effect: NoSchedule
 
+# ── kata-readiness ───────────────────────────────────────────────────────────
+# Removes the runtime-not-ready startup taint once kata-deploy finishes on a
+# node. Required whenever nodes carry that startup taint (the kata MNG does).
+kataReadiness:
+  enabled: true
+  image: alpine/k8s:1.31.0   # needs kubectl
+
 # ── Warm pool ────────────────────────────────────────────────────────────────
 warmPool:
   enabled: true
