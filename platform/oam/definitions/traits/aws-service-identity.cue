@@ -81,7 +81,7 @@ template: {
 							policyArnRef: name: "\(context.appName)-\(c)-iam-policy"
 							role: "\(context.name)-role"
 						}
-						providerConfigRef: name: "provider-aws-config"
+						providerConfigRef: name: "default"
 					}
 				}
 			}
