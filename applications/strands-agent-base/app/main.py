@@ -13,17 +13,13 @@ from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
 # ── OpenTelemetry initialization ─────────────────────────────────────────
-# Dockerfile CMD uses `opentelemetry-instrument` which auto-instruments httpx
-# (for W3C traceparent propagation to Bifrost). But Strands agent spans require
-# StrandsTelemetry to be initialized separately — it uses the same tracer provider
-# that opentelemetry-instrument configured via OTEL_EXPORTER_OTLP_ENDPOINT.
-#
-# Modes:
-# - Centralized: setup_otlp_exporter() creates Strands spans → collector → Langfuse
-# - Decentralized (OTEL_PYTHON_DISTRO=aws_distro): ADOT handles everything
-# - Direct to Langfuse (LANGFUSE_BASE_URL): manual auth headers
+# Three modes (mutually exclusive, checked in order):
+# 1. Decentralized (OTEL_PYTHON_DISTRO=aws_distro) — ADOT handles everything,
+#    agent exports directly to CloudWatch. No manual init needed.
+# 2. Direct to Langfuse (LANGFUSE_BASE_URL set) — agent sends OTLP directly
+# 3. Via Collector (OTEL_EXPORTER_OTLP_ENDPOINT set) — agent sends to local collector
 if os.getenv("OTEL_PYTHON_DISTRO") == "aws_distro":
-    # Decentralized: ADOT distro handles all telemetry
+    # Decentralized mode: ADOT auto-instrumentation handles telemetry.
     pass
 elif os.getenv("LANGFUSE_BASE_URL"):
     try:

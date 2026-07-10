@@ -39,7 +39,5 @@ EXPOSE 8083
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8083/ping')"
 
-# Run application with OpenTelemetry auto-instrumentation
-# This enables W3C traceparent propagation to Bifrost (centralized mode)
-# and ADOT distro activation (decentralized mode)
-CMD ["opentelemetry-instrument", "python", "-m", "app.main"]
+# Run application
+CMD ["python", "-m", "app.main"]

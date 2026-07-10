@@ -12,14 +12,10 @@ bifrost:
   serviceAccount:
     create: true
     name: bifrost
-  # Enable OTEL plugin — exports LLM call spans to the local OTel Collector
+  # OTEL plugin — disabled until Strands SDK supports shared TracerProvider
+  # for W3C traceparent correlation. See docs/OBSERVABILITY.md for details.
+  # When enabled, Bifrost creates separate traces (not child spans) because
+  # Strands SDK and opentelemetry-instrument use different TracerProviders.
   plugins:
     otel:
-      enabled: true
-      version: 1
-      config:
-        service_name: "bifrost"
-        collector_url: "otel-collector.otel.svc.cluster.local:4317"
-        trace_type: "genai_extension"
-        protocol: "grpc"
-        insecure: true
+      enabled: false
