@@ -23,8 +23,13 @@ enabledAddons:
   agent_platform: true
   bifrost: true
   # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool.
-  # DISABLED for now: spoke clusters run EKS Auto Mode + Bottlerocket, which
-  # cannot host Kata (no nested-virt / kvm control). Chart exists at
-  # gitops/addons/charts/agent-sandbox; enabling it needs a kata-capable
-  # nodepool strategy for Auto Mode — see docs/dark-factory (Flow A open item).
-  # agent_sandbox: true
+  # Enabled on DEV (where the Dark Factory runs). ArgoCD manages the IN-CLUSTER
+  # pieces (operator, CRDs, RuntimeClasses, SandboxTemplate, pool-manager).
+  # The kata-capable node layer is NOT GitOps-managed — it requires a
+  # self-managed nested-virt MNG + the vpc-cni & kube-proxy addons provisioned
+  # out-of-band (AWS infra ArgoCD can't create). See
+  # gitops/addons/charts/agent-sandbox/nodepool/README.md for the proven recipe
+  # (validated live on spoke-dev 2026-07-10: real kata VM, guest kernel 6.18.35).
+  agent_sandbox: true
+  # kata-deploy installs the runtime on the kata MNG nodes (separate app).
+  agent_sandbox_kata: true
