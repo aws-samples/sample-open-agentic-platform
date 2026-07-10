@@ -374,11 +374,15 @@ agent-sandbox-operator:
     argocd.argoproj.io/sync-wave: '0'
   syncPolicyAppSet:
     preserveResourcesOnDeletion: false
-  selector:
+  # Agent Sandbox is a spoke-dev-only capability (Kata needs a nested-virt MNG;
+  # not on the hub, and prod stays off). alwaysSelector is honored regardless of
+  # the global useSelectors flag, so the generated ApplicationSet matches ONLY
+  # the cluster whose `environment` label is `dev` — hub and prod apps are pruned.
+  alwaysSelector:
     matchExpressions:
-      - key: enable_agent_sandbox
+      - key: environment
         operator: In
-        values: ['true']
+        values: ['dev']
 
 # Agent Sandbox capability chart — RuntimeClasses, kata-readiness (removes the
 # runtime-not-ready startup taint), coder SandboxTemplate, SandboxWarmPool, and
@@ -392,11 +396,13 @@ agent-sandbox:
   path: 'gitops/addons/charts/agent-sandbox'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '2'
-  selector:
+  # Spoke-dev-only (see agent-sandbox-operator note above). alwaysSelector pins
+  # generation to the `environment: dev` cluster regardless of useSelectors.
+  alwaysSelector:
     matchExpressions:
-      - key: enable_agent_sandbox
+      - key: environment
         operator: In
-        values: ['true']
+        values: ['dev']
   valuesObject:
     coderTemplate:
       bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
@@ -419,11 +425,14 @@ kata-deploy:
   chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '1'
-  selector:
+  # Spoke-dev-only: the kata runtime is only installed where a nested-virt MNG
+  # exists (spoke-dev). alwaysSelector pins generation to `environment: dev`
+  # regardless of useSelectors — no hub or prod kata-deploy app.
+  alwaysSelector:
     matchExpressions:
-      - key: enable_agent_sandbox_kata
+      - key: environment
         operator: In
-        values: ['true']
+        values: ['dev']
   valuesObject:
     kata-deploy:
       image:
