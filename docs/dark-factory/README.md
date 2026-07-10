@@ -402,26 +402,44 @@ Rejected alternatives: **Bedrock AgentCore / Fargate** (breaks the k8s-native po
 Sandbox/warm-pool/claim design depends on — it's an invoke-a-session runtime, not a pod we own);
 **gVisor** (same Auto-Mode node-install blocker as Kata, weaker isolation).
 
-### ✅ Validated by a live spike (spoke-dev, 2026-07-10)
+### ✅ Validated by two live tests (spoke-dev, 2026-07-10)
 
-A throwaway 1-node `c8i.4xlarge` MNG was created on spoke-dev, then torn down. Results:
+A `c8i.4xlarge` kata MNG was created on spoke-dev, exercised, then torn down. Results:
 
 | Question | Result |
 |---|---|
-| Self-managed MNG coexists with Auto Mode? | **Yes** — MNG provisioned alongside Auto Mode nodepools, no conflict; Auto Mode stayed healthy |
-| Nested virtualization / `/dev/kvm`? | **Yes** — `/dev/kvm` present, `kvm_intel` loaded, 32 `vmx` flags, via `CpuOptions.NestedVirtualization: enabled` |
-| aws-cli support | Requires **aws-cli ≥ 2.35** for the `CpuOptions.NestedVirtualization` launch-template field |
+| Self-managed MNG coexists with Auto Mode? | **✅ Yes** — MNG provisioned alongside Auto Mode nodepools, no conflict; Auto Mode stayed healthy |
+| Nested virtualization / `/dev/kvm`? | **✅ Yes** — `/dev/kvm` present, `kvm_intel` loaded, 32 `vmx` flags, via `CpuOptions.NestedVirtualization: enabled` |
+| Node joins the cluster & goes Ready? | **✅ Yes** — with the fixes below (nodeadm endpoint/CA + vpc-cni addon) |
+| Kata runtime install (kata-deploy)? | **⚠️ Partial** — kata-deploy schedules on the kata node but crashloops on Auto Mode; see lesson #5 |
 
-### Two hard-won lessons (baked into the implementation)
+### Hard-won lessons (baked into the implementation)
 
 1. **Node bootstrap** — do **not** override the AMI + userData with plain bash; that clobbers the
-   EKS bootstrap and the node boots (`/dev/kvm` present) but never joins the cluster. Use the
-   **AL2023 nodeadm MIME userData** format (or the default EKS AMI + a systemd unit that runs
-   `modprobe kvm_intel`), and set nested-virt via the **launch-template `CpuOptions`**, not userData.
-2. **Teardown ordering** — delete the **MNG first and let it drain**. Terminating the instance out
-   from under the MNG makes the ASG respawn and can wedge the delete on a `Pending:Wait` lifecycle
-   hook; recover with `aws autoscaling terminate-instance-in-auto-scaling-group` +
-   `complete-lifecycle-action`. Set MNG min/desired to 0 before deleting for a clean teardown.
+   EKS bootstrap and the node boots (`/dev/kvm` present) but never joins. Use the **AL2023 nodeadm
+   MIME userData**, and set nested-virt via the launch-template `CpuOptions`, not userData.
+2. **Teardown ordering** — delete the **MNG first and let it drain** (set min/desired=0 first).
+   Terminating the instance out from under the MNG makes the ASG respawn and can wedge the delete on
+   a `Pending:Wait` lifecycle hook; recover with `terminate-instance-in-auto-scaling-group` +
+   `complete-lifecycle-action`.
+3. **Custom-AMI nodeadm needs cluster coordinates** — with a custom `ImageId`, nodeadm can't
+   auto-discover the API; you must set `apiServerEndpoint` + `certificateAuthority` + `cidr` in the
+   NodeConfig, or it fails "Apiserver endpoint is missing in cluster configuration".
+4. **Auto Mode has no `vpc-cni`** — self-managed MNG nodes stay `NotReady` (`cni plugin not
+   initialized`) until you install the `vpc-cni` EKS addon. `aws-node` tolerates all taints and
+   schedules onto the kata node once installed.
+5. **kata-deploy on Auto Mode (open item)** — the upstream kata-deploy chart defaults to the
+   **experimental nydus snapshotter** (`EXPERIMENTAL_SETUP_SNAPSHOTTER=nydus`), which restarts
+   containerd and briefly drops CNI networking; kata-deploy then fails its own API call
+   (`Failed to get node ... client error (Connect)`) and crashloops before installing the runtime.
+   Fix to apply next: disable the experimental nydus snapshotter (openclaw uses overlayfs) and/or
+   raise kata-deploy's API-retry tolerance. Everything *up to* the runtime install is proven; the
+   runtime install itself needs this one chart-tuning fix.
+
+Also fixed during testing: the kata-deploy Helm values are **top-level** (`nodeSelector`,
+`tolerations`, `shims`) for a direct install — the nested `kata-deploy:` key only applies when it's
+a subchart. Our catalog entry uses the nested form (correct, since ArgoCD deploys it as its own
+app), but a direct `helm install` must use top-level values.
 
 ---
 
