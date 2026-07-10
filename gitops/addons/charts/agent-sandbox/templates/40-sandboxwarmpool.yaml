@@ -6,7 +6,7 @@ Factory) binds one via a SandboxClaim and the operator refills the buffer. This
 replaces the custom pool-manager CronJob — the warm pool is now a first-class
 operator primitive (requires the vendored v0.5.1 upstream, NOT v0.1.0).
 */ -}}
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: {{ .Values.warmPool.name | default "coder-warmpool" }}

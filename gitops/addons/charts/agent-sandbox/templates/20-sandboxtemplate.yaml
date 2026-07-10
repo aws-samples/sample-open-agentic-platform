@@ -9,7 +9,7 @@ LLM-generated code:
 The concrete coder image (claude-code | kiro) and per-claim secrets are patched
 in by the consumer when it binds a SandboxClaim.
 */ -}}
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: {{ .Values.warmPool.templateName }}
