@@ -1,0 +1,75 @@
+# Dark Factory (Flow B) trigger — issue labeled `dark-factory` → orchestrator.
+#
+# This is the P1 entrypoint (§4 step 1). It gates on the label, mints a
+# short-TTL token scoped to this repo, and POSTs the run request to the
+# orchestrator running on spoke-dev. The orchestrator (not this Action) holds
+# the long-lived credentials and drives the sandbox; the Action's only job is
+# to authenticate the trigger and hand over a short-lived token.
+#
+# The token here is the workflow's GITHUB_TOKEN (auto-expires when the run
+# ends). For cross-repo / org installs, swap in a GitHub App token minted via
+# actions/create-github-app-token — the orchestrator treats it the same way.
+name: dark-factory
+
+on:
+  issues:
+    types: [labeled]
+
+# Least-privilege: the orchestrator opens the PR + updates the sticky comment
+# using the token we pass, so it needs write on contents + PRs + issues.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  dispatch:
+    # Only fire when the `dark-factory` label is the one that was added.
+    if: github.event.label.name == 'dark-factory'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Acknowledge on the issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🏭 Dark Factory accepted this issue — claiming a sandbox on spoke-dev…',
+            });
+
+      - name: Dispatch to orchestrator
+        env:
+          # The orchestrator's ingress URL (private ALB / VPN-reachable).
+          # Configure as a repo/org variable; kept out of the workflow so the
+          # endpoint isn't hard-coded.
+          ORCHESTRATOR_URL: ${{ vars.DARK_FACTORY_ORCHESTRATOR_URL }}
+          # Shared secret so the orchestrator only accepts trusted triggers.
+          DISPATCH_TOKEN: ${{ secrets.DARK_FACTORY_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ORCHESTRATOR_URL:-}" ]; then
+            echo "::error::DARK_FACTORY_ORCHESTRATOR_URL is not set — cannot dispatch."
+            exit 1
+          fi
+          # Build the JSON payload safely (jq handles escaping of title/body).
+          payload="$(jq -n \
+            --arg issue "$ISSUE_NUMBER" \
+            --arg repo "$REPO" \
+            --arg title "$ISSUE_TITLE" \
+            --arg body "$ISSUE_BODY" \
+            --arg base "$BASE" \
+            --arg ghToken "$GH_TOKEN" \
+            '{issue: ($issue|tonumber), repo: $repo, title: $title, body: $body, base: $base, ghToken: $ghToken}')"
+          curl -fsS -X POST "$ORCHESTRATOR_URL/run" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN:-}" \
+            -d "$payload"
+          echo "Dispatched issue #$ISSUE_NUMBER to the Dark Factory orchestrator."
