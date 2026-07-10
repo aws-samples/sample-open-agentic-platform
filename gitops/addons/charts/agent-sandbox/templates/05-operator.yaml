@@ -1,0 +1,106 @@
+{{- if .Values.operator.installCRDs }}
+{{- /*
+Agent Sandbox operator (agents.x-k8s.io). Installs the controller that
+materializes a Kata-VM Pod + Service (+ PVCs) per Sandbox CR and reports
+status.serviceFQDN.
+
+NOTE ON CRDs: the Sandbox / SandboxTemplate / SandboxClaim CRDs are large
+(~4k lines of OpenAPI schema) and are installed from the upstream operator
+bundle, not vendored here. In this monorepo they are applied at an earlier
+sync-wave (see gitops wiring) via the upstream manifest at
+  public.ecr.aws/t6v6o5d5/agent-sandbox:v0.1.0
+This template provides the controller runtime (SA + ClusterRole + StatefulSet
++ Service); it assumes the CRDs already exist. Set operator.installCRDs=false
+if a newer operator on the cluster already manages both.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-sandbox-controller
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agent-sandbox-controller
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes", "sandboxes/status", "sandboxes/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxclaims", "sandboxclaims/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: agent-sandbox-controller
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: agent-sandbox-controller
+    namespace: {{ include "agent-sandbox.namespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: agent-sandbox-controller
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-sandbox-controller
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: agent-sandbox
+    agent-sandbox.io/component: controller
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: agent-sandbox-controller
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  serviceName: agent-sandbox-controller
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agent-sandbox
+      agent-sandbox.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "agent-sandbox.labels" . | nindent 8 }}
+        agent-sandbox.io/component: controller
+    spec:
+      serviceAccountName: agent-sandbox-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ .Values.operator.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+{{- end }}
