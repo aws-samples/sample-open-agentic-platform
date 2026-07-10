@@ -64,6 +64,17 @@ langfuse:
       - key: enable_langfuse
         operator: In
         values: ['true']
+  # Langfuse is a hub singleton (one Keycloak client, hub-domain redirect, shared
+  # platform realm). It must run ONLY on the control-plane/hub. alwaysSelector is
+  # honored regardless of the global useSelectors flag, so the generated
+  # ApplicationSet matches only clusters whose `environment` label is control-plane
+  # (the hub) — spoke langfuse apps are pruned. Spoke agents send traces to the hub
+  # Langfuse via the OTel pipeline.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
   valuesObject:
     global:
       awsRegion: '{{.metadata.annotations.aws_region}}'

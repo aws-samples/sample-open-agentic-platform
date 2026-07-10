@@ -49,6 +49,12 @@ spec:
           {{- if and $chartConfig.selector $useSelectors }}
           {{- toYaml $chartConfig.selector | nindent 10 }}
           {{- end }}
+          {{- /* alwaysSelector is applied regardless of useSelectors — use for addons
+                 that must be gated per-cluster even when global selectors are disabled
+                 (e.g. hub-only components). */}}
+          {{- if $chartConfig.alwaysSelector }}
+          {{- toYaml $chartConfig.alwaysSelector | nindent 10 }}
+          {{- end }}
         {{- if not $chartConfig.path }}
         values:
           addonChart: {{ $chartConfig.chartName | default $nameNormalize | quote }}
