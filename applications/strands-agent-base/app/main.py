@@ -13,13 +13,19 @@ from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
 # ── OpenTelemetry initialization ─────────────────────────────────────────
-# The Dockerfile CMD uses `opentelemetry-instrument` which auto-configures
-# tracing via env vars (OTEL_EXPORTER_OTLP_ENDPOINT for centralized,
-# OTEL_PYTHON_DISTRO for decentralized). No manual init needed in either mode.
+# Dockerfile CMD uses `opentelemetry-instrument` which auto-instruments httpx
+# (for W3C traceparent propagation to Bifrost). But Strands agent spans require
+# StrandsTelemetry to be initialized separately — it uses the same tracer provider
+# that opentelemetry-instrument configured via OTEL_EXPORTER_OTLP_ENDPOINT.
 #
-# The only case requiring manual setup: direct-to-Langfuse (bypassing collector)
-# where we need to construct the auth headers.
-if os.getenv("LANGFUSE_BASE_URL"):
+# Modes:
+# - Centralized: setup_otlp_exporter() creates Strands spans → collector → Langfuse
+# - Decentralized (OTEL_PYTHON_DISTRO=aws_distro): ADOT handles everything
+# - Direct to Langfuse (LANGFUSE_BASE_URL): manual auth headers
+if os.getenv("OTEL_PYTHON_DISTRO") == "aws_distro":
+    # Decentralized: ADOT distro handles all telemetry
+    pass
+elif os.getenv("LANGFUSE_BASE_URL"):
     try:
         import base64
         from strands.telemetry import StrandsTelemetry
@@ -30,6 +36,12 @@ if os.getenv("LANGFUSE_BASE_URL"):
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = os.getenv("LANGFUSE_BASE_URL") + "/api/public/otel"
         os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth_bytes},x-langfuse-ingestion-version=4"
 
+        strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
+    except ImportError:
+        pass
+elif os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    try:
+        from strands.telemetry import StrandsTelemetry
         strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
     except ImportError:
         pass
