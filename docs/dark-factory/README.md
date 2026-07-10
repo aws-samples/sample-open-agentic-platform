@@ -383,23 +383,52 @@ Each phase is independently valuable — if you stop after any one, you're bette
 
 ---
 
+## 12a. Running Kata on EKS Auto Mode clusters (validated design)
+
+The spoke clusters run **EKS Auto Mode + Bottlerocket** (`c6a`/`c6g` nodes). Auto Mode's managed
+nodes **cannot host Kata**: no control over `cpuOptions.nestedVirtualization`, no kernel-module
+loading (`modprobe kvm_intel`), no `kata-deploy`, and those node types don't expose VT-x.
+`eks-platform-openclaw` avoids Auto Mode entirely for this reason — but we don't have to.
+
+### Decision: self-managed nested-virt MNG *alongside* Auto Mode
+
+Add a small, tainted **self-managed Managed Node Group** of **nested-virt `c8i`/`m8i`** instances to
+spoke-dev. Auto Mode keeps running everything else; kata sandboxes schedule onto the MNG via the
+`kata=true:NoSchedule` taint the chart already applies. We chose an **MNG, not a second
+Karpenter** — running a self-managed Karpenter beside Auto Mode's managed Karpenter risks
+NodePool/CRD conflicts, whereas MNGs are additive and coexist cleanly.
+
+Rejected alternatives: **Bedrock AgentCore / Fargate** (breaks the k8s-native pod model our whole
+Sandbox/warm-pool/claim design depends on — it's an invoke-a-session runtime, not a pod we own);
+**gVisor** (same Auto-Mode node-install blocker as Kata, weaker isolation).
+
+### ✅ Validated by a live spike (spoke-dev, 2026-07-10)
+
+A throwaway 1-node `c8i.4xlarge` MNG was created on spoke-dev, then torn down. Results:
+
+| Question | Result |
+|---|---|
+| Self-managed MNG coexists with Auto Mode? | **Yes** — MNG provisioned alongside Auto Mode nodepools, no conflict; Auto Mode stayed healthy |
+| Nested virtualization / `/dev/kvm`? | **Yes** — `/dev/kvm` present, `kvm_intel` loaded, 32 `vmx` flags, via `CpuOptions.NestedVirtualization: enabled` |
+| aws-cli support | Requires **aws-cli ≥ 2.35** for the `CpuOptions.NestedVirtualization` launch-template field |
+
+### Two hard-won lessons (baked into the implementation)
+
+1. **Node bootstrap** — do **not** override the AMI + userData with plain bash; that clobbers the
+   EKS bootstrap and the node boots (`/dev/kvm` present) but never joins the cluster. Use the
+   **AL2023 nodeadm MIME userData** format (or the default EKS AMI + a systemd unit that runs
+   `modprobe kvm_intel`), and set nested-virt via the **launch-template `CpuOptions`**, not userData.
+2. **Teardown ordering** — delete the **MNG first and let it drain**. Terminating the instance out
+   from under the MNG makes the ASG respawn and can wedge the delete on a `Pending:Wait` lifecycle
+   hook; recover with `aws autoscaling terminate-instance-in-auto-scaling-group` +
+   `complete-lifecycle-action`. Set MNG min/desired to 0 before deleting for a clean teardown.
+
+---
+
 ## 13. Open questions / future work
 
 *To resolve during implementation — flagged honestly rather than assumed:*
 
-- **🚧 BLOCKER — Kata on EKS Auto Mode.** The current spoke clusters run **EKS Auto Mode +
-  Bottlerocket** (`c6a`/`c6g` nodes), which **cannot host Kata micro-VMs**: Auto Mode gives no
-  control over `cpuOptions.nestedVirtualization`, kernel-module loading (`modprobe kvm_intel`), or
-  running `kata-deploy`, and the node types don't expose VT-x. `eks-platform-openclaw` deliberately
-  avoids Auto Mode for exactly this reason. The `agent-sandbox` addon is therefore **built but
-  disabled** in the dev/prod overlays until we choose an integration path. Options to evaluate:
-    1. **Self-managed kata nodepool alongside Auto Mode** — add a nested-virt (`c8i`/`m8i`) Karpenter
-       nodepool + `kata-deploy` to spokes (mirrors openclaw); real hardware isolation, extra cost/ops.
-    2. **AWS-managed microVM isolation** — use **Bedrock AgentCore** (per-session microVM) or Fargate
-       as the isolation boundary instead of self-hosted Kata; less control, no node management.
-    3. **gVisor / user-space sandbox** on Auto Mode — weaker than a true VM boundary but Auto-Mode-
-       compatible; a middle option for the coder sandbox.
-  This is the top thing to think through before enabling Flow A on these clusters.
 - **Headless auth** for Claude Code & Kiro through a Bifrost base-URL override inside a Kata VM
   (the biggest unknown — prototype first in P1).
 - **Import the `agent-sandbox` operator** from `eks-platform-openclaw` into the OAP addon catalog
