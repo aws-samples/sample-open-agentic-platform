@@ -1,0 +1,50 @@
+# Narrowly-scoped RBAC for the Dark Factory orchestrator.
+#
+# The orchestrator is trusted but still least-privilege: it only manages
+# SandboxClaims (claim/inspect/release the warm pool) in the agent-sandbox
+# namespace. It does NOT get pod/exec, secrets, or cluster scope — the coder
+# runs in a Kata VM the orchestrator never shells into, and all model access is
+# via Bifrost. This mirrors the openclaw session-router's trust invariants.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dark-factory-orchestrator
+  namespace: agent-sandbox-system
+  labels:
+    app: dark-factory-orchestrator
+    app.kubernetes.io/part-of: dark-factory
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-orchestrator
+  namespace: agent-sandbox-system
+  labels:
+    app: dark-factory-orchestrator
+    app.kubernetes.io/part-of: dark-factory
+rules:
+  # Claim / inspect / release warm sandboxes.
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Read the bound Sandbox + its pod IPs (status) — read-only.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-orchestrator
+  namespace: agent-sandbox-system
+  labels:
+    app: dark-factory-orchestrator
+    app.kubernetes.io/part-of: dark-factory
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-orchestrator
+    namespace: agent-sandbox-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-orchestrator
