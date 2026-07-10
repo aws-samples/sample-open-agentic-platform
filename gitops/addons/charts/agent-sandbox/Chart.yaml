@@ -1,0 +1,21 @@
+apiVersion: v2
+name: agent-sandbox
+description: >-
+  Agent Sandbox capability for the Open Agent Platform — hardware-isolated
+  Kata micro-VM sandboxes (agents.x-k8s.io Sandbox CRD) with a pre-warmed pool
+  kept ready by a pool-manager controller. The reusable isolation substrate any
+  agent workload (e.g. the Dark Factory coding pipeline) can claim on demand.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kata
+  - sandbox
+  - isolation
+  - micro-vm
+  - dark-factory
+sources:
+  - https://github.com/aws-samples/sample-open-agentic-platform
+  - https://github.com/elamaran11/eks-platform-openclaw
+maintainers:
+  - name: Open Agent Platform
