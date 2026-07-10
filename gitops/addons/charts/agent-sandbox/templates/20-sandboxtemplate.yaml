@@ -1,0 +1,70 @@
+{{- /*
+SandboxTemplate — the podTemplate the warm pool (and Dark Factory claims) are
+cloned from. Encodes the isolation invariants for running untrusted,
+LLM-generated code:
+  - runtimeClassName: a Kata micro-VM (own kernel), not a shared-kernel container
+  - automountServiceAccountToken: false (no in-cluster API creds by default)
+  - runAsNonRoot + restricted seccomp + drop ALL caps
+  - workspace on an ephemeral PVC (per claim), model access via Bifrost only
+The concrete coder image (claude-code | kiro) and per-claim secrets are patched
+in by the consumer when it binds a SandboxClaim.
+*/ -}}
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: {{ .Values.warmPool.templateName }}
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  podTemplate:
+    metadata:
+      labels:
+        {{- include "agent-sandbox.selectorLabels" . | nindent 8 }}
+        agent-sandbox.io/role: coder
+    spec:
+      runtimeClassName: {{ .Values.kata.defaultRuntimeClass }}
+      automountServiceAccountToken: false
+      nodeSelector:
+        {{- toYaml .Values.kata.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.kata.tolerations | nindent 8 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: coder
+          image: {{ .Values.coderTemplate.image }}
+          # Overridden per claim by the consumer (Dark Factory picks the profile).
+          command: ["/bin/sh", "-c", "echo 'coder image set per-claim'; sleep infinity"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            # This platform uses Bifrost (not LiteLLM) as the LLM gateway.
+            - name: BIFROST_URL
+              value: {{ .Values.coderTemplate.bifrostUrl | quote }}
+          resources:
+            {{- toYaml .Values.coderTemplate.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.coderTemplate.workspaceSizeGi }}Gi
