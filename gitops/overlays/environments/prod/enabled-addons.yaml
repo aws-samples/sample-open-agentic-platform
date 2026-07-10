@@ -23,8 +23,8 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
-  # Agent Sandbox capability installed on prod too (permanent platform feature),
-  # but the Dark Factory pipeline never runs here — the prod warm pool stays
-  # dormant. Unreviewed, agent-authored code is only ever built/tested on
-  # spoke-dev (production-safety).
-  agent_sandbox: true
+  # Agent Sandbox capability — DISABLED for now (same reason as dev): EKS Auto
+  # Mode + Bottlerocket cannot host Kata. Re-enable once Auto Mode integration
+  # is designed. When on, prod holds the capability but the pool stays dormant
+  # (the Dark Factory only runs on spoke-dev — production-safety).
+  # agent_sandbox: true
