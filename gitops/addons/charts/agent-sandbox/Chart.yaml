@@ -19,3 +19,12 @@ sources:
   - https://github.com/elamaran11/eks-platform-openclaw
 maintainers:
   - name: Open Agent Platform
+# kata-deploy installs the Kata runtime (binaries, guest kernel, containerd
+# runtime handlers for kata-clh/kata-qemu) on the tainted kata MNG nodes.
+# Gated by values.kataDeploy.enabled so the chart is inert on clusters without
+# a kata-capable nodepool.
+dependencies:
+  - name: kata-deploy
+    version: "3.32.0"
+    repository: oci://ghcr.io/kata-containers/kata-deploy-charts
+    condition: kataDeploy.enabled
