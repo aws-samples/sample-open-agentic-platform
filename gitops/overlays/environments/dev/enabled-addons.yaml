@@ -22,6 +22,9 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
-  # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool. Permanent
-  # platform feature; the Dark Factory coding pipeline runs on spoke-dev.
-  agent_sandbox: true
+  # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool.
+  # DISABLED for now: spoke clusters run EKS Auto Mode + Bottlerocket, which
+  # cannot host Kata (no nested-virt / kvm control). Chart exists at
+  # gitops/addons/charts/agent-sandbox; enabling it needs a kata-capable
+  # nodepool strategy for Auto Mode — see docs/dark-factory (Flow A open item).
+  # agent_sandbox: true
