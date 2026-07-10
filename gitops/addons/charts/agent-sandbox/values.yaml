@@ -17,6 +17,42 @@ operator:
   # Disable if the cluster already has a newer operator managing the CRDs.
   installCRDs: true
 
+# ── kata-deploy (installs Kata runtime on the kata MNG nodes) ────────────────
+# Set enabled: true only on clusters that have a kata-capable nodepool (a
+# self-managed nested-virt MNG on EKS Auto Mode — see docs/dark-factory §12a).
+kataDeploy:
+  enabled: false
+# Values passed to the upstream kata-deploy subchart.
+kata-deploy:
+  kata-deploy:
+    image:
+      reference: quay.io/kata-containers/kata-deploy
+      tag: "3.32.0"
+    # Target the STATIC label set at node birth on the kata MNG — NOT
+    # katacontainers.io/kata-runtime (kata-deploy emits that only after install,
+    # so selecting on it would deadlock).
+    nodeSelector:
+      kata-enabled: "true"
+    tolerations:
+      - key: kata
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+      - key: katacontainers.io/runtime-not-ready
+        operator: Exists
+        effect: NoSchedule
+    shims:
+      disableAll: true
+      qemu:
+        enabled: true
+      clh:
+        enabled: true
+    # Our chart owns the RuntimeClasses (10-runtimeclasses.yaml) so all VMMs carry
+    # the same pool-steering scheduling block; disable kata-deploy's own to avoid
+    # two RuntimeClasses fighting over the same names.
+    runtimeClasses:
+      enabled: false
+
 # ── Kata micro-VM runtime ────────────────────────────────────────────────────
 kata:
   # Default VMM for coder sandboxes. Cloud Hypervisor (clh) boots fast and is
