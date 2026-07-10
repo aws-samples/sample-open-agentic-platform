@@ -23,3 +23,8 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  # Agent Sandbox capability installed on prod too (permanent platform feature),
+  # but the Dark Factory pipeline never runs here — the prod warm pool stays
+  # dormant. Unreviewed, agent-authored code is only ever built/tested on
+  # spoke-dev (production-safety).
+  agent_sandbox: true
