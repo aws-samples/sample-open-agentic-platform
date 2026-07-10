@@ -81,7 +81,12 @@ spec:
                     '{{ .Values.seed.projectId }}',
                     'Platform OTEL (auto-provisioned)'
                   )
-                  ON CONFLICT (id) DO NOTHING;
+                  ON CONFLICT (id) DO UPDATE SET
+                    public_key = EXCLUDED.public_key,
+                    hashed_secret_key = EXCLUDED.hashed_secret_key,
+                    fast_hashed_secret_key = EXCLUDED.fast_hashed_secret_key,
+                    display_secret_key = EXCLUDED.display_secret_key,
+                    project_id = EXCLUDED.project_id;
 
                   -- 4. Auto-assign all SSO users as OWNER (picks up new logins)
                   INSERT INTO organization_memberships (id, org_id, user_id, role)
