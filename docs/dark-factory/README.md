@@ -387,6 +387,19 @@ Each phase is independently valuable — if you stop after any one, you're bette
 
 *To resolve during implementation — flagged honestly rather than assumed:*
 
+- **🚧 BLOCKER — Kata on EKS Auto Mode.** The current spoke clusters run **EKS Auto Mode +
+  Bottlerocket** (`c6a`/`c6g` nodes), which **cannot host Kata micro-VMs**: Auto Mode gives no
+  control over `cpuOptions.nestedVirtualization`, kernel-module loading (`modprobe kvm_intel`), or
+  running `kata-deploy`, and the node types don't expose VT-x. `eks-platform-openclaw` deliberately
+  avoids Auto Mode for exactly this reason. The `agent-sandbox` addon is therefore **built but
+  disabled** in the dev/prod overlays until we choose an integration path. Options to evaluate:
+    1. **Self-managed kata nodepool alongside Auto Mode** — add a nested-virt (`c8i`/`m8i`) Karpenter
+       nodepool + `kata-deploy` to spokes (mirrors openclaw); real hardware isolation, extra cost/ops.
+    2. **AWS-managed microVM isolation** — use **Bedrock AgentCore** (per-session microVM) or Fargate
+       as the isolation boundary instead of self-hosted Kata; less control, no node management.
+    3. **gVisor / user-space sandbox** on Auto Mode — weaker than a true VM boundary but Auto-Mode-
+       compatible; a middle option for the coder sandbox.
+  This is the top thing to think through before enabling Flow A on these clusters.
 - **Headless auth** for Claude Code & Kiro through a Bifrost base-URL override inside a Kata VM
   (the biggest unknown — prototype first in P1).
 - **Import the `agent-sandbox` operator** from `eks-platform-openclaw` into the OAP addon catalog
