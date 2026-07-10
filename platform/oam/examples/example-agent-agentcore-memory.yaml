@@ -1,13 +1,13 @@
-# Example: Agent with AgentCore memory provisioned via Crossplane managed resource
+# Example: Agent with AgentCore memory, using identity traits (no dp-service-account).
 #
 # Flow:
-#   1. agentcore-memory provisions a Memory via Crossplane bedrockagentcore provider,
-#      and emits a ComponentPolicy claim for IAM permissions.
-#      The memoryId is passed to the agent via outputs/inputs.
-#   2. dp-service-account creates IAM Role + ServiceAccount + PodIdentityAssociation,
-#      then emits PolicyAttachment claims to wire the permissions
-#   3. agent references the ServiceAccount and gets AWS credentials via pod identity
-#
+#   1. agentcore-memory provisions a Memory via Crossplane and emits an IAM policy
+#      (<app>-<component>-iam-policy) for accessing it; memoryId is passed to the agent.
+#   2. The agent owns its ServiceAccount (context.name). The aws-service-identity trait
+#      creates the IAM role + PodIdentityAssociation via the XPodIdentity Composition
+#      (clusterName/region resolved from the env-config EnvironmentConfig — no params)
+#      and attaches the memory policy via accessFor.
+#   3. The gateway-identity trait gives the agent a projected token for AgentGateway/MCP.
 apiVersion: core.oam.dev/v1beta1
 kind: Application
 metadata:
@@ -25,30 +25,28 @@ spec:
         description: "Memory for my-agent"
         eventExpiryDuration: 30
 
-    - name: my-agent-sa
-      type: dp-service-account
-      properties:
-        componentNamesForAccess:
-          - agentcore-short-memory
-        clusterName: hub
-        clusterRegion: us-west-2
-
-    - name: my-agent-with-mem
+    # Component name (my-agent) is the identity: Rollout/Service/SA/container all
+    # named my-agent; the traits attach AWS + gateway identity to that same SA.
+    - name: my-agent
       type: agent
       dependsOn:
-        - my-agent-sa
         - agentcore-short-memory
       inputs:
         - from: memory-id
           parameterKey: properties.memory.config.memoryId
       properties:
-        name: my-agent
-        namespace: agents
         description: "Assistant agent with persistent memory"
         systemMessage: "You are a helpful assistant."
-        serviceAccount: my-agent-sa
         memory:
           provider: agentcore
           config:
             memoryId: "injected-from-agentcore-memory-output"
             region: us-west-2
+      traits:
+        # Secretless identity to AgentGateway/MCP.
+        - type: gateway-identity
+        # Secretless AWS IAM identity (EKS Pod Identity); attach the memory policy.
+        - type: aws-service-identity
+          properties:
+            accessFor:
+              - agentcore-short-memory
