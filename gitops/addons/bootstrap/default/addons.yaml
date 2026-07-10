@@ -380,3 +380,47 @@ agent-sandbox:
   valuesObject:
     coderTemplate:
       bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+
+# kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
+# kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
+# agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by
+# enable_agent_sandbox_kata — only clusters with a kata-capable nested-virt MNG
+# (see docs/dark-factory §12a) should carry that label. Sync-wave 1: runtime is
+# installed on nodes before the Sandbox operator (wave 2) schedules VMs.
+kata-deploy:
+  enabled: true
+  namespace: kube-system
+  chartName: kata-deploy
+  defaultVersion: '3.32.0'
+  chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
+  chartNamespace: kata-containers
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox_kata
+        operator: In
+        values: ['true']
+  valuesObject:
+    kata-deploy:
+      image:
+        reference: quay.io/kata-containers/kata-deploy
+        tag: '3.32.0'
+      nodeSelector:
+        kata-enabled: 'true'
+      tolerations:
+        - key: kata
+          operator: Equal
+          value: 'true'
+          effect: NoSchedule
+        - key: katacontainers.io/runtime-not-ready
+          operator: Exists
+          effect: NoSchedule
+      shims:
+        disableAll: true
+        qemu:
+          enabled: true
+        clh:
+          enabled: true
+      runtimeClasses:
+        enabled: false
