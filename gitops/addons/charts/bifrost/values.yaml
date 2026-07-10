@@ -16,6 +16,8 @@ bifrost:
   plugins:
     otel:
       enabled: true
-      endpoint: "http://otel-collector.otel.svc.cluster.local:4318"
-      protocol: "http"
-      insecure: true
+      config:
+        service_name: "bifrost"
+        collector_url: "otel-collector.otel.svc.cluster.local:4317"
+        protocol: "grpc"
+        insecure: true
