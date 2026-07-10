@@ -58,13 +58,14 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        # Ephemeral per-claim workspace. SandboxTemplate.spec only supports
+        # podTemplate (verified against the live CRD — it has NO
+        # volumeClaimTemplates field; that belongs on the Sandbox CR). Use an
+        # emptyDir sized by coderTemplate.workspaceSizeGi; consumers that need a
+        # persistent workspace across scale-to-zero set spec.volumeClaimTemplates
+        # on the Sandbox CR they create from this template.
+        - name: workspace
+          emptyDir:
+            sizeLimit: {{ .Values.coderTemplate.workspaceSizeGi }}Gi
         - name: tmp
           emptyDir: {}
-  volumeClaimTemplates:
-    - metadata:
-        name: workspace
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: {{ .Values.coderTemplate.workspaceSizeGi }}Gi
