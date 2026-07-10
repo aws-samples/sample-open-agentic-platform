@@ -13,17 +13,13 @@ from .agent import create_agent, get_or_create_agent, shutdown_mcp
 from .config import config
 
 # ── OpenTelemetry initialization ─────────────────────────────────────────
-# Three modes (mutually exclusive, checked in order):
-# 1. Decentralized (OTEL_PYTHON_DISTRO=aws_distro) — ADOT handles everything,
-#    agent exports directly to CloudWatch. No manual init needed.
-# 2. Direct to Langfuse (LANGFUSE_BASE_URL set) — agent sends OTLP directly
-# 3. Via Collector (OTEL_EXPORTER_OTLP_ENDPOINT set) — agent sends to local collector
-if os.getenv("OTEL_PYTHON_DISTRO") == "aws_distro":
-    # Decentralized mode: ADOT auto-instrumentation handles telemetry.
-    # No manual StrandsTelemetry init — the aws_distro entry point
-    # configures exporters via env vars (CW Logs, X-Ray, CW Metrics).
-    pass
-elif os.getenv("LANGFUSE_BASE_URL"):
+# The Dockerfile CMD uses `opentelemetry-instrument` which auto-configures
+# tracing via env vars (OTEL_EXPORTER_OTLP_ENDPOINT for centralized,
+# OTEL_PYTHON_DISTRO for decentralized). No manual init needed in either mode.
+#
+# The only case requiring manual setup: direct-to-Langfuse (bypassing collector)
+# where we need to construct the auth headers.
+if os.getenv("LANGFUSE_BASE_URL"):
     try:
         import base64
         from strands.telemetry import StrandsTelemetry
@@ -34,12 +30,6 @@ elif os.getenv("LANGFUSE_BASE_URL"):
         os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = os.getenv("LANGFUSE_BASE_URL") + "/api/public/otel"
         os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = f"Authorization=Basic {auth_bytes},x-langfuse-ingestion-version=4"
 
-        strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
-    except ImportError:
-        pass
-elif os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
-    try:
-        from strands.telemetry import StrandsTelemetry
         strands_telemetry = StrandsTelemetry().setup_otlp_exporter()
     except ImportError:
         pass
