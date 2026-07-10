@@ -22,3 +22,6 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool. Permanent
+  # platform feature; the Dark Factory coding pipeline runs on spoke-dev.
+  agent_sandbox: true
