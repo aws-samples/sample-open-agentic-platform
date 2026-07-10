@@ -410,8 +410,9 @@ A `c8i.4xlarge` kata MNG was created on spoke-dev, exercised, then torn down. Re
 |---|---|
 | Self-managed MNG coexists with Auto Mode? | **✅ Yes** — MNG provisioned alongside Auto Mode nodepools, no conflict; Auto Mode stayed healthy |
 | Nested virtualization / `/dev/kvm`? | **✅ Yes** — `/dev/kvm` present, `kvm_intel` loaded, 32 `vmx` flags, via `CpuOptions.NestedVirtualization: enabled` |
-| Node joins the cluster & goes Ready? | **✅ Yes** — with the fixes below (nodeadm endpoint/CA + vpc-cni addon) |
-| Kata runtime install (kata-deploy)? | **⚠️ Partial** — kata-deploy schedules on the kata node but crashloops on Auto Mode; see lesson #5 |
+| Node joins the cluster & goes Ready? | **✅ Yes** — with the fixes below (nodeadm endpoint/CA + vpc-cni + kube-proxy) |
+| Kata runtime install (kata-deploy)? | **✅ Yes** — `1/1`, zero restarts, once `kube-proxy` was installed |
+| **Real Kata VM runs?** | **✅ YES** — pod under `kata-clh` had guest kernel `6.18.35` vs host `6.12.90` = true hardware VM isolation |
 
 ### Hard-won lessons (baked into the implementation)
 
