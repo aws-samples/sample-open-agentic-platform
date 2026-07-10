@@ -23,8 +23,6 @@ spec:
     - name: my-agent
       type: agent
       properties:
-        name: my-agent
-        namespace: default
         description: "Agent with centralized observability (Langfuse)"
         replicas: 1
         systemMessage: "You are a helpful assistant."
