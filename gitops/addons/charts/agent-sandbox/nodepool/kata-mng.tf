@@ -34,9 +34,16 @@ data "aws_ssm_parameter" "al2023" {
   name = "/aws/service/eks/optimized-ami/1.35/amazon-linux-2023/x86_64/standard/recommended/image_id"
 }
 
+# Cluster endpoint/CA/cidr — REQUIRED in the NodeConfig when using a custom AMI
+# (lesson #3, live test): nodeadm does not auto-discover these with a custom
+# ImageId and fails with "Apiserver endpoint is missing in cluster configuration".
+data "aws_eks_cluster" "this" {
+  name = var.cluster_name
+}
+
 locals {
   # MIME userData: modprobe kvm_intel (so /dev/kvm exists) + nodeadm NodeConfig
-  # that joins the cluster with the kata labels/taint. See lesson #1 in §12a.
+  # that joins the cluster with the kata labels/taint. See §12a lessons #1 + #3.
   kata_userdata = base64encode(<<-MIME
     MIME-Version: 1.0
     Content-Type: multipart/mixed; boundary="//"
@@ -56,6 +63,9 @@ locals {
     spec:
       cluster:
         name: ${var.cluster_name}
+        apiServerEndpoint: ${data.aws_eks_cluster.this.endpoint}
+        certificateAuthority: ${data.aws_eks_cluster.this.certificate_authority[0].data}
+        cidr: ${data.aws_eks_cluster.this.kubernetes_network_config[0].service_ipv4_cidr}
       kubelet:
         flags:
           - "--node-labels=kata-enabled=true,katacontainers.io/kata-runtime=true,node-type=kata-mng"

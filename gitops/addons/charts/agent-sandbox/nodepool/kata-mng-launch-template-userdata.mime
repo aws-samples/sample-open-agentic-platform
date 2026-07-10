@@ -19,12 +19,24 @@ Content-Type: application/node.eks.aws
 # nodeadm NodeConfig — this is what actually joins the node to the cluster.
 # CRITICAL (spike lesson #1): do NOT replace this with a plain-bash bootstrap or
 # a custom AMI without nodeadm — the node will boot with /dev/kvm but never
-# register with the control plane. Substitute the real cluster name at render.
+# register with the control plane.
+#
+# LESSON #3 (live test): when you supply a CUSTOM ImageId in the launch template,
+# nodeadm does NOT auto-discover the cluster API endpoint/CA — you must set
+# apiServerEndpoint, certificateAuthority, and cidr explicitly, or nodeadm fails
+# with "Apiserver endpoint is missing in cluster configuration". (The default
+# EKS AMI path injects these for you; a custom AMI does not.) Substitute the
+# cluster name + the three cluster values at render:
+#   aws eks describe-cluster --name <c> \
+#     --query 'cluster.{e:endpoint,ca:certificateAuthority.data,cidr:kubernetesNetworkConfig.serviceIpv4Cidr}'
 apiVersion: node.eks.aws/v1alpha1
 kind: NodeConfig
 spec:
   cluster:
     name: CLUSTER_NAME_PLACEHOLDER
+    apiServerEndpoint: API_SERVER_ENDPOINT_PLACEHOLDER
+    certificateAuthority: CERTIFICATE_AUTHORITY_DATA_PLACEHOLDER
+    cidr: SERVICE_IPV4_CIDR_PLACEHOLDER
   kubelet:
     flags:
       # Labels + taint applied at node birth so kata-deploy schedules and the
