@@ -86,12 +86,6 @@ template: {
 							{name: "OTEL_SERVICE_NAME", value: context.name},
 							{name: "OTEL_TRACES_EXPORTER", value: "otlp"},
 							if parameter.observability.mode == "centralized" {
-								{name: "OTEL_METRICS_EXPORTER", value: "none"}
-							},
-							if parameter.observability.mode == "centralized" {
-								{name: "OTEL_LOGS_EXPORTER", value: "none"}
-							},
-							if parameter.observability.mode == "centralized" {
 								{name: "OTEL_EXPORTER_OTLP_ENDPOINT", value: "http://otel-collector.otel.svc.cluster.local:4318"}
 							},
 							if parameter.observability.mode == "decentralized" {
