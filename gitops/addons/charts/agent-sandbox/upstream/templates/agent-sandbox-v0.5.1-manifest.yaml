@@ -111,8 +111,18 @@ spec:
       containers:
       - name: agent-sandbox-controller
         image: registry.k8s.io/agent-sandbox/agent-sandbox-controller:v0.5.1
+        # Merged controller: --extensions (so the controller knows the
+        # SandboxTemplate/SandboxClaim/SandboxWarmPool extension types and the
+        # /convert conversion webhook can answer) PLUS the webhook port 9443
+        # that agent-sandbox-webhook-service targets. Upstream ships these as
+        # two separate Deployments (manifest = core+webhook port, extensions =
+        # --extensions but no port); vendoring both into one chart made ArgoCD
+        # see the Deployment twice (RepeatedResourceWarning) and whichever
+        # applied last won — breaking either the conversion webhook (no 9443)
+        # or the extension types (no --extensions). This is the union of both.
         args:
         - --leader-elect=true
+        - --extensions
         ports:
         - name: metrics
           containerPort: 8080
@@ -123,6 +133,15 @@ spec:
         - name: webhook
           containerPort: 9443
           protocol: TCP
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/sandbox-config
+          readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: agent-sandbox-config
+          optional: true
 
 ---
 
