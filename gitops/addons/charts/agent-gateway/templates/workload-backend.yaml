@@ -1,0 +1,17 @@
+{{- if .Values.workloadIdentity.issuer }}
+# Static backend to the cluster's EKS OIDC issuer host, used by the workload
+# JWT provider (jwt-policy.yaml) to fetch the JWKS over HTTPS. Inline TLS
+# initiates TLS using the system trusted CA certificates with SNI auto-derived
+# from the destination host — sufficient for the public EKS OIDC endpoint.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: eks-oidc-jwks
+  namespace: agentgateway-system
+spec:
+  static:
+    host: {{ required "workloadIdentity.jwksHost is required when workloadIdentity.issuer is set" .Values.workloadIdentity.jwksHost | quote }}
+    port: 443
+  policies:
+    tls: {}
+{{- end }}

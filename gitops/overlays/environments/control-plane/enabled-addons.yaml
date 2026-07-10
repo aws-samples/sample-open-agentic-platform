@@ -19,7 +19,7 @@ enabledAddons:
   image_prepuller: false
   # GitOps
   argo_events: false
-  argo_rollouts: false
+  argo_rollouts: true
   argo_workflows: true
   kargo: false
   flux: false
@@ -46,7 +46,7 @@ enabledAddons:
   multi_acct: false
   platform_manifests: false
   backstage: false
-  kubevela: false
+  kubevela: true
   devlake: false
   gitlab: false
   # ACK controllers
@@ -70,3 +70,5 @@ enabledAddons:
   observability_aws: true
   # Agentic Platform
   agent_platform: true
+  bifrost: true
+  langfuse: true

@@ -1,0 +1,60 @@
+{{- if .Values.decentralizedObservability.enabled }}
+# IAM Role for agents using decentralized observability (CloudWatch GenAI)
+# Grants CW Logs, X-Ray, and CW Metrics write access.
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: {{ .Values.decentralizedObservability.roleName }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    crossplane.io/external-name: {{ .Values.decentralizedObservability.roleName }}
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "pods.eks.amazonaws.com"},
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }]
+      }
+    inlinePolicy:
+      - name: cloudwatch-xray-write
+        policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "logs:PutLogEvents",
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:DescribeLogGroups",
+                "logs:DescribeLogStreams",
+                "xray:PutTraceSegments",
+                "xray:PutTelemetryRecords",
+                "xray:GetSamplingRules",
+                "xray:GetSamplingTargets",
+                "cloudwatch:PutMetricData"
+              ],
+              "Resource": "*"
+            }]
+          }
+---
+# Pod Identity Association — binds default SA in default namespace to CW role
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: PodIdentityAssociation
+metadata:
+  name: {{ .Values.decentralizedObservability.roleName }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  forProvider:
+    clusterName: "{{ .Values.global.clusterName }}"
+    namespace: {{ .Values.decentralizedObservability.namespace }}
+    region: "{{ .Values.global.awsRegion | default "us-west-2" }}"
+    roleArnRef:
+      name: {{ .Values.decentralizedObservability.roleName }}
+    serviceAccount: {{ .Values.decentralizedObservability.serviceAccount }}
+{{- end }}

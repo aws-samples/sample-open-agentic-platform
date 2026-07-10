@@ -1,5 +1,5 @@
 global:
-  awsRegion: us-east-1
+  awsRegion: us-west-2
 
 collector:
   image: public.ecr.aws/aws-observability/aws-otel-collector:v0.43.1
@@ -12,11 +12,20 @@ collector:
       cpu: 1000m
       memory: 512Mi
 
-# Jaeger in-cluster endpoint for dual export
-jaeger:
+# Langfuse OTLP trace export (via collector — merges agent + Bifrost spans)
+langfuse:
   enabled: true
-  endpoint: "jaeger-collector.jaeger.svc.cluster.local:4317"
+  # Endpoint set dynamically by ApplicationSet (https://<ingress>/api/public/otel)
+  endpoint: ""
+  # Secret Manager key holding LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY
+  secretManagerKey: ""
 
-# X-Ray export (uses Pod Identity for auth)
-xray:
+# Bifrost Prometheus metrics scraping
+bifrost:
   enabled: true
+  scrapeEndpoint: "bifrost.bifrost.svc.cluster.local:8080"
+
+# AMP remote write for Grafana dashboards (requires Pod Identity with AMP write permissions)
+amp:
+  enabled: false
+  remoteWriteEndpoint: ""

@@ -1,0 +1,41 @@
+# Example: Agent with centralized observability (Langfuse + AMP/Grafana)
+#
+# Default mode — no observability config needed. The platform's OTel Collector
+# handles trace forwarding to Langfuse and metrics scraping from Bifrost.
+#
+# Trace flow: Agent → OTel Collector (:4318) → Langfuse (OTLP/HTTP)
+# Metrics flow: Bifrost → OTel Collector (scrape) → AMP → Grafana
+#
+# Prerequisites (provisioned automatically by task install):
+# - OTel Collector deployed on the cluster (otel namespace)
+# - Langfuse running on the hub with seed job (API keys in Secrets Manager)
+# - AMP workspace + Grafana datasource
+#
+# View traces: https://<ingress_domain>/ (Langfuse UI, Keycloak SSO)
+# View metrics: AMG Grafana > Agent Platform > Bifrost LLM Metrics
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: my-agent
+  namespace: default
+spec:
+  components:
+    - name: my-agent
+      type: agent
+      properties:
+        name: my-agent
+        namespace: default
+        description: "Agent with centralized observability (Langfuse)"
+        replicas: 1
+        systemMessage: "You are a helpful assistant."
+        modelConfig:
+          modelId: claude-sonnet
+        # observability.mode defaults to "centralized" — no config needed
+        registerWithGateway: false
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi

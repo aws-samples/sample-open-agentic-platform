@@ -1,0 +1,21 @@
+podIdentity:
+  enabled: true
+  clusterName: ""
+  region: ""
+  namespace: bifrost
+  serviceAccountName: bifrost
+
+bifrost:
+  image:
+    tag: "v1.5.0"
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    name: bifrost
+  # Enable OTEL plugin — exports LLM call spans to the local OTel Collector
+  plugins:
+    otel:
+      enabled: true
+      endpoint: "http://otel-collector.otel.svc.cluster.local:4318"
+      protocol: "http"
+      insecure: true

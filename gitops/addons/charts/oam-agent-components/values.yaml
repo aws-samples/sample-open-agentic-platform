@@ -1,0 +1,12 @@
+global:
+  awsRegion: us-west-2
+  clusterName: ""
+
+# Decentralized observability Pod Identity
+# Creates an IAM Role + PodIdentityAssociation for agents using
+# observability.mode=decentralized (CloudWatch GenAI direct export).
+decentralizedObservability:
+  enabled: true
+  roleName: "agent-cw-observability-role"
+  namespace: "default"
+  serviceAccount: "default"

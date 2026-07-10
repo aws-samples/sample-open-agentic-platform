@@ -164,9 +164,29 @@ tasks:
     desc: Delete spoke clusters
     cmds:
       - task: agentic:ensure-kubeconfig
+      # The PlatformCluster claims are GitOps-managed: the fleet `clusters`
+      # ApplicationSet generates `clusters-<env>` Application(s) that own the claims
+      # with automated prune. Deleting a claim directly makes ArgoCD immediately
+      # re-sync and recreate it, spinning up a fresh spoke EKS + VPC while the old
+      # one is still deleting. Stop the generator first, then delete the claims so
+      # they stay deleted and Crossplane can drain the spokes cleanly.
       - |
+        CTX={{.HUB_CLUSTER_NAME}}
+        # Pause the ApplicationSet so it stops regenerating the clusters Application(s).
+        if kubectl --context "$CTX" get applicationset clusters -n argocd >/dev/null 2>&1; then
+          kubectl --context "$CTX" patch applicationset clusters -n argocd --type merge \
+            -p '{"spec":{"syncPolicy":{"preserveResourcesOnDeletion":true}}}' 2>/dev/null || true
+          kubectl --context "$CTX" delete applicationset clusters -n argocd --timeout=60s 2>/dev/null || true
+        fi
+        # Disable self-heal on the generated Application(s) so deleting the claim below
+        # is not immediately reverted, then delete the claims.
+        for APP in $(kubectl --context "$CTX" get applications -n argocd \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -E '^clusters(-|$)'); do
+          kubectl --context "$CTX" patch application "$APP" -n argocd --type merge \
+            -p '{"spec":{"syncPolicy":{"automated":null}}}' 2>/dev/null || true
+        done
         for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
-          kubectl delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
+          kubectl --context "$CTX" delete platformcluster.platform.gitops.io "${SPOKE}" -n crossplane-system --ignore-not-found
           printf "✓ PlatformCluster claim deleted: %s\n" "$SPOKE"
         done
 
@@ -176,6 +196,7 @@ tasks:
     desc: Deploy agentic platform components to the hub (and spokes via ArgoCD)
     cmds:
       - task: agentic:ensure-kubeconfig
+      - task: agentic:enable-transaction-search
       - task: agentic:bootstrap
 
   agentic:upgrade:
@@ -187,17 +208,50 @@ tasks:
   agentic:ensure-kubeconfig:
     desc: Ensure kubectl points to the hub cluster
     cmds:
-      - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}}
+      - aws eks update-kubeconfig --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}} --alias {{.HUB_CLUSTER_NAME}}
+      - kubectl --context {{.HUB_CLUSTER_NAME}} cluster-info >/dev/null
+      - printf '✓ kubectl context "{{.HUB_CLUSTER_NAME}}" is reachable\n'
+
+  agentic:enable-transaction-search:
+    desc: Enable CloudWatch Transaction Search (one-time, idempotent)
+    cmds:
+      - |
+        printf '▸ Enabling CloudWatch Transaction Search...\n'
+        aws logs put-resource-policy --policy-name TransactionSearchXRayAccess \
+          --policy-document '{"Version":"2012-10-17","Statement":[{"Sid":"TransactionSearchXRayAccess","Effect":"Allow","Principal":{"Service":"xray.amazonaws.com"},"Action":"logs:PutLogEvents","Resource":["arn:aws:logs:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:log-group:aws/spans:*","arn:aws:logs:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:log-group:/aws/application-signals/data:*"],"Condition":{"ArnLike":{"aws:SourceArn":"arn:aws:xray:{{.AWS_REGION}}:{{.AWS_ACCOUNT_ID}}:*"},"StringEquals":{"aws:SourceAccount":"{{.AWS_ACCOUNT_ID}}"}}}]}' \
+          --region {{.AWS_REGION}} 2>/dev/null || true
+        aws xray update-trace-segment-destination --destination CloudWatchLogs \
+          --region {{.AWS_REGION}} 2>/dev/null || true
+        printf '✓ CloudWatch Transaction Search enabled\n'
+
+  agentic:hub-oidc-annotation:
+    desc: Annotate the hub cluster secret with its EKS OIDC issuer (enables secretless workload identity for agents running on the hub)
+    deps: [agentic:ensure-kubeconfig]
+    cmds:
+      - |
+        # The hub is singular and bootstrapped from a kind cluster before the
+        # agentic platform exists, so (unlike spokes — which get this annotation
+        # automatically from the platform-cluster Crossplane composition) the hub
+        # is annotated here. Idempotent; re-applied on every install/upgrade.
+        # Customers typically run agents on spokes, not the hub — this exists so
+        # the platform is usable hub-only for evaluation without spokes.
+        ISSUER=$(aws eks describe-cluster --name {{.HUB_CLUSTER_NAME}} --region {{.AWS_REGION}} --profile {{.AWS_PROFILE}} \
+          --query 'cluster.identity.oidc.issuer' --output text)
+        kubectl --context {{.HUB_CLUSTER_NAME}} annotate secret {{.HUB_CLUSTER_NAME}} -n argocd --overwrite \
+          eks_oidc_provider="${ISSUER}"
+        printf '✓ Hub cluster secret annotated: eks_oidc_provider=%s\n' "${ISSUER}"
 
   agentic:bootstrap:
     desc: Apply the agentic platform bootstrap Application to ArgoCD
+    deps: [agentic:ensure-kubeconfig]
     env:
       REPO_URL: "{{.AGENTIC_REPO_URL}}"
       REVISION: "{{.AGENTIC_REPO_REVISION}}"
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
       HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
     cmds:
-      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
+      - task: agentic:hub-oidc-annotation
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl --context {{.HUB_CLUSTER_NAME}} apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
 
   # ─── Ingress / Domain Post-Install ───────────────────────────────────────────
@@ -294,13 +348,13 @@ tasks:
 
   status:
     desc: Show status of agentic platform ArgoCD applications
+    deps: [agentic:ensure-kubeconfig]
     cmds:
-      - task: agentic:ensure-kubeconfig
-      - kubectl get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl get applications.argoproj.io -n argocd --no-headers | grep -E "kagent|litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore"
+      - kubectl --context {{.HUB_CLUSTER_NAME}} get applications.argoproj.io -n argocd -l "app.kubernetes.io/part-of=agent-platform" --no-headers 2>/dev/null || kubectl --context {{.HUB_CLUSTER_NAME}} get applications.argoproj.io -n argocd --no-headers | grep -E "litellm|langfuse|jaeger|otel|bifrost|agentgateway|agent-gateway|crossplane-agentcore|oam-agent-components"
 
   destroy:
     desc: Remove agentic platform components (does not destroy the base platform)
+    deps: [agentic:ensure-kubeconfig]
     cmds:
-      - task: agentic:ensure-kubeconfig
-      - kubectl delete application agent-platform-addons -n argocd --ignore-not-found
+      - kubectl --context {{.HUB_CLUSTER_NAME}} delete application agent-platform-addons -n argocd --ignore-not-found
       - printf '\n✓ Agentic platform bootstrap removed. ArgoCD will prune agentic components.\n'

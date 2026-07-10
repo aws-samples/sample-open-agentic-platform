@@ -1,0 +1,53 @@
+{{- if .Values.seed.enabled }}
+# IAM Role for Langfuse seed Job (Secrets Manager write access)
+apiVersion: iam.aws.upbound.io/v1beta1
+kind: Role
+metadata:
+  name: hub-langfuse-seed-role
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    crossplane.io/external-name: hub-langfuse-seed-role
+spec:
+  forProvider:
+    assumeRolePolicy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [{
+          "Effect": "Allow",
+          "Principal": {"Service": "pods.eks.amazonaws.com"},
+          "Action": ["sts:AssumeRole", "sts:TagSession"]
+        }]
+      }
+    inlinePolicy:
+      - name: secrets-manager-write
+        policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Action": [
+                "secretsmanager:CreateSecret",
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:DescribeSecret",
+                "secretsmanager:GetSecretValue"
+              ],
+              "Resource": "arn:aws:secretsmanager:*:*:secret:hub/langfuse-*"
+            }]
+          }
+---
+# Pod Identity Association — binds langfuse-seed SA to the IAM role
+apiVersion: eks.aws.upbound.io/v1beta1
+kind: PodIdentityAssociation
+metadata:
+  name: hub-langfuse-seed
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  forProvider:
+    clusterName: {{ .Values.clusterName | default "hub" }}
+    namespace: {{ .Release.Namespace }}
+    region: {{ .Values.global.awsRegion | default "us-west-2" }}
+    roleArnRef:
+      name: hub-langfuse-seed-role
+    serviceAccount: langfuse-seed
+{{- end }}
