@@ -359,12 +359,35 @@ oam-agent-components:
       awsRegion: '{{.metadata.annotations.aws_region}}'
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
-# Agent Sandbox — hardware-isolated Kata micro-VM sandboxes (agents.x-k8s.io
-# Sandbox CRD) with a pre-warmed pool kept ready by a pool-manager controller.
-# The reusable isolation substrate the Dark Factory coding pipeline (and other
-# agent workloads) claim on demand. Sync-wave 2: after the kata runtime is
-# installed on nodes (base platform), before agentic workloads that claim a
-# sandbox.
+# Agent Sandbox OPERATOR (upstream agent-sandbox v0.5.1) — the controller +
+# Sandbox/SandboxClaim/SandboxTemplate/SandboxWarmPool CRDs + webhooks. Vendored
+# manifest applied directly (it's a self-contained install; the ~400KB CRD set
+# is too large for a Helm-templated chart). ServerSideApply + Replace handle the
+# oversized CRDs. Sync-wave 0: CRDs + operator MUST exist before the kata-deploy
+# runtime (wave 1) and the agent-sandbox chart CRs (wave 2).
+agent-sandbox-operator:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.5.1'
+  path: 'gitops/addons/charts/agent-sandbox/upstream'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  syncPolicyAppSet:
+    preserveResourcesOnDeletion: false
+  # Directory source of raw manifests, not a Helm chart.
+  directory:
+    recurse: true
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox
+        operator: In
+        values: ['true']
+
+# Agent Sandbox capability chart — RuntimeClasses, kata-readiness (removes the
+# runtime-not-ready startup taint), coder SandboxTemplate, SandboxWarmPool, and
+# the egress NetworkPolicy. Sync-wave 2: after the operator (wave 0) + kata
+# runtime (wave 1). Consumers (the Dark Factory, Flow B) then claim from the
+# warm pool via a SandboxClaim(warmPoolRef).
 agent-sandbox:
   enabled: true
   namespace: agent-sandbox-system
