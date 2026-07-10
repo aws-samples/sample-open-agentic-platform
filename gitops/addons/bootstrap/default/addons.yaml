@@ -392,8 +392,11 @@ kata-deploy:
   namespace: kube-system
   chartName: kata-deploy
   defaultVersion: '3.32.0'
+  # OCI chart at oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy.
+  # Do NOT set chartNamespace — the appset would build chart=<ns>/<name>
+  # (kata-containers/kata-deploy) producing a wrong OCI path. The namespace is
+  # already part of chartRepository.
   chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
-  chartNamespace: kata-containers
   annotationsAppSet:
     argocd.argoproj.io/sync-wave: '1'
   selector:
