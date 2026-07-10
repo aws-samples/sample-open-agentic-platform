@@ -60,7 +60,7 @@ flowchart TB
                 RC --- KD --- NP
             end
 
-            MODEL["🧠  LiteLLM gateway<br/>litellm.litellm.svc:4000 → Bedrock"]:::node
+            MODEL["🧠  Bifrost LLM gateway<br/>bifrost.bifrost.svc:8080 → Bedrock"]:::node
         end
     end
 

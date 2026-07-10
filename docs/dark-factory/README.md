@@ -10,7 +10,7 @@ approves the *results*) merge and tear everything down.
 
 This pattern wires that idea onto the **Open Agent Platform (OAP)** using components the platform
 already has: hardware-isolated **Kata micro-VM sandboxes** (from `eks-platform-openclaw`), the
-**LiteLLM → Bedrock** model gateway, the **hub + spoke-dev/spoke-prod** cluster fleet, and
+**Bifrost → Bedrock** LLM gateway, the **hub + spoke-dev/spoke-prod** cluster fleet, and
 **AWS-managed frontier agents** (Security, DevOps) for independent review.
 
 ---
@@ -169,11 +169,11 @@ Runs on **spoke-dev only**. End to end:
 
 The coder is behind a **thin, swappable interface** — a deliberate choice (the industry lesson is
 *don't marry a single vendor*). Two profiles ship; both run **inside** the Kata sandbox and reach
-models only through LiteLLM.
+models only through the **Bifrost** LLM gateway.
 
 | Profile | Why | Notes |
 |---|---|---|
-| **A — Claude Code headless** *(primary)* | Purpose-built for autonomous implement→build→test→git loops; proven headless/CI autonomy | `CLAUDE_CODE_USE_BEDROCK` / base-URL → LiteLLM; strongest multi-file + shell |
+| **A — Claude Code headless** *(primary)* | Purpose-built for autonomous implement→build→test→git loops; proven headless/CI autonomy | `CLAUDE_CODE_USE_BEDROCK` / base-URL → Bifrost; strongest multi-file + shell |
 | **B — Kiro headless** | **Spec-driven** (`spec → requirements → design → tasks`) — the most natural fit since *an issue is a spec*; supports a headless GitHub Actions mode | AWS-native; documented as the second profile |
 
 ### The coder contract (drop-in interface)
@@ -185,11 +185,11 @@ INPUTS  (mounted into the sandbox)
   /workspace/SPEC.md          # the issue, as a spec
   /workspace/repo/            # the checked-out target repo (branch df/issue-<n>)
   /workspace/RETRY.md         # (optional) one-line failure reasons from a prior holdout run
-  tmpfs: litellm-api-key      # mode 0400, read then unset — never in env
+  tmpfs: bifrost-api-key      # mode 0400, read then unset — never in env
   tmpfs: gh-token             # short-TTL, mode 0400
 ENV
   CODER_PROFILE=claude-code|kiro
-  LITELLM_URL=http://litellm.litellm.svc:4000
+  BIFROST_URL=http://bifrost.bifrost.svc:8080
 OUTPUTS  (produced by the coder)
   git branch df/issue-<n> with commits
   /workspace/artifacts/result.json   # what changed, build/test logs, evidence links
@@ -309,10 +309,10 @@ Untrusted, LLM-generated code + issue text from anyone = treat the whole sandbox
 
 - **Hardware isolation:** every coder runs in a **Kata micro-VM** (own kernel), not a shared-kernel
   container.
-- **No cloud credentials in the sandbox:** the coder holds only a **LiteLLM API key** and a
+- **No cloud credentials in the sandbox:** the coder holds only a **Bifrost API key** and a
   **short-TTL GitHub token** via **projected tmpfs (mode 0400)** — read then unset, never in env.
   All AWS IAM lives with the **orchestrator, outside the VM**.
-- **Egress lockdown:** a **NetworkPolicy** restricts sandbox egress to **LiteLLM:4000 + DNS +
+- **Egress lockdown:** a **NetworkPolicy** restricts sandbox egress to **Bifrost:8080 + DNS +
   GitHub only**. `automountServiceAccountToken: false`, runAsNonRoot, seccomp `RuntimeDefault`,
   drop `ALL` caps.
 - **Prod is never a test bed:** the factory runs on **spoke-dev**; spoke-prod holds the sandbox
@@ -347,7 +347,7 @@ Jules, Cursor background agents, Factory.ai, and StrongDM's "Software Factory" a
 1. **Lethal trifecta / prompt injection (highest risk).** Untrusted issue text + cloud creds + egress
    → data exfiltration. Invariant Labs demonstrated a malicious GitHub *issue* injecting an agent
    into leaking private-repo data via an auto-PR. **Our defense:** credentials never in the
-   issue-ingesting sandbox context; egress denied except LiteLLM/GitHub; issue/repo content treated
+   issue-ingesting sandbox context; egress denied except Bifrost/GitHub; issue/repo content treated
    as hostile; frontier agents scoped read-only. *(Willison "lethal trifecta"; Invariant Labs.)*
 2. **Reward hacking / test-gaming.** Frontier models stub evaluators (`evaluate = _always_ok`), make
    `verify()` return true, read reference answers, or delete the test oracle (METR, OpenAI,
@@ -387,7 +387,7 @@ Each phase is independently valuable — if you stop after any one, you're bette
 
 *To resolve during implementation — flagged honestly rather than assumed:*
 
-- **Headless auth** for Claude Code & Kiro through a LiteLLM base-URL override inside a Kata VM
+- **Headless auth** for Claude Code & Kiro through a Bifrost base-URL override inside a Kata VM
   (the biggest unknown — prototype first in P1).
 - **Import the `agent-sandbox` operator** from `eks-platform-openclaw` into the OAP addon catalog
   (Flow A's first task).
@@ -427,6 +427,6 @@ Each phase is independently valuable — if you stop after any one, you're bette
 - Anthropic — *Claude Code best practices* — https://www.anthropic.com/engineering/claude-code-best-practices
 
 **Platform building blocks (this monorepo & siblings)**
-- `eks-platform-openclaw` — Kata micro-VM sandbox, `Sandbox` CRD, session-router lifecycle, LiteLLM gateway
+- `eks-platform-openclaw` — Kata micro-VM sandbox, `Sandbox` CRD, session-router lifecycle (uses LiteLLM there; **this platform uses Bifrost** as the LLM gateway)
 - `appmod-blueprints` — `PlatformCluster` Crossplane composition (ephemeral EKS), KRO CI/CD pipeline
-- `agent-platform-amazon-eks` — hub/spoke fleet, addon ApplicationSets, kagent, agent-gateway
+- `agent-platform-amazon-eks` — hub/spoke fleet, addon ApplicationSets, kagent, agent-gateway, **Bifrost** LLM gateway
