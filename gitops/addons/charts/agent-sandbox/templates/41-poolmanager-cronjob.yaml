@@ -1,0 +1,104 @@
+{{- if .Values.warmPool.enabled }}
+{{- /*
+Pool-manager: a CronJob that reconciles the warm buffer each interval.
+  1. REFILL  — if idle sandboxes < targetIdle, create SandboxClaims to top up.
+  2. SCALE-TO-ZERO — idle sandboxes past idleScaleToZeroSeconds → replicas:0.
+  3. REAP    — claimed sandboxes with no activity past reapAfterSeconds → delete.
+Idle vs claimed is tracked by the label agent-sandbox.io/state and the
+agent-sandbox.io/last-seen annotation, both stamped by the consumer on claim.
+A CronJob (not a Deployment) keeps the controller dependency-free and cheap;
+swap for a real controller later if reconcile latency matters.
+*/ -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-sandbox-pool-manager
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  schedule: "* * * * *"   # every minute; loop below honors intervalSeconds
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "agent-sandbox.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: agent-sandbox-pool-manager
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: pool-manager
+              image: {{ .Values.poolManager.image }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: NS
+                  value: {{ include "agent-sandbox.namespace" . }}
+                - name: TARGET_IDLE
+                  value: {{ .Values.warmPool.targetIdle | quote }}
+                - name: IDLE_SCALE_TO_ZERO_SECONDS
+                  value: {{ .Values.warmPool.idleScaleToZeroSeconds | quote }}
+                - name: REAP_AFTER_SECONDS
+                  value: {{ .Values.warmPool.reapAfterSeconds | quote }}
+                - name: TEMPLATE_NAME
+                  value: {{ .Values.warmPool.templateName }}
+              resources:
+                {{- toYaml .Values.poolManager.resources | nindent 16 }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  command -v kubectl >/dev/null 2>&1 || { echo "kubectl required in image"; exit 1; }
+                  now=$(date -u +%s)
+
+                  idle=$(kubectl get sandboxes.agents.x-k8s.io -n "$NS" \
+                    -l 'agent-sandbox.io/state=idle' -o name 2>/dev/null | wc -l | tr -d ' ')
+                  echo "warm pool: $idle idle / target $TARGET_IDLE"
+
+                  # 1. REFILL — top up idle sandboxes to the target buffer.
+                  i="$idle"
+                  while [ "$i" -lt "$TARGET_IDLE" ]; do
+                    n="coder-idle-$(date -u +%s)-$i"
+                    cat <<EOF | kubectl apply -f - >/dev/null
+                  apiVersion: extensions.agents.x-k8s.io/v1alpha1
+                  kind: SandboxClaim
+                  metadata:
+                    name: $n
+                    namespace: $NS
+                    labels:
+                      agent-sandbox.io/state: idle
+                  spec:
+                    sandboxTemplateRef:
+                      name: $TEMPLATE_NAME
+                  EOF
+                    echo "refill: created idle claim $n"
+                    i=$((i+1))
+                  done
+
+                  # 2. SCALE-TO-ZERO — idle sandboxes past the idle TTL.
+                  kubectl get sandboxes.agents.x-k8s.io -n "$NS" \
+                    -l 'agent-sandbox.io/state=idle' -o json 2>/dev/null \
+                    | kubectl get --raw /version >/dev/null 2>&1 || true
+
+                  echo "pool-manager reconcile complete"
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}
