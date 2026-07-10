@@ -1,0 +1,50 @@
+{{- /*
+Default-deny egress for coder sandboxes, then allow ONLY what a coder needs:
+  - DNS (kube-dns)
+  - Bifrost LLM gateway (model calls)
+  - HTTPS to the internet for git/gh + package registries the build needs
+This breaks the "lethal trifecta": untrusted issue text runs in a pod that
+cannot reach arbitrary internal services or exfiltrate to arbitrary hosts.
+Selects coder pods by the label the SandboxTemplate stamps.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coder-sandbox-egress
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      agent-sandbox.io/role: coder
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Bifrost LLM gateway (in-cluster)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: bifrost
+      ports:
+        - protocol: TCP
+          port: 8080
+    # HTTPS egress for git / gh / package registries (build dependencies).
+    # Note: broad :443 is required for public git+registry access; tighten to
+    # specific CIDRs/hostnames with an egress proxy for stricter deployments.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32   # block IMDS (instance metadata)
+      ports:
+        - protocol: TCP
+          port: 443
