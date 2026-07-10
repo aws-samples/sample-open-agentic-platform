@@ -429,6 +429,12 @@ A throwaway 1-node `c8i.4xlarge` MNG was created on spoke-dev, then torn down. R
 
 *To resolve during implementation — flagged honestly rather than assumed:*
 
+- **⚡ SIMPLIFICATION — use the operator's native `SandboxWarmPool`.** Live testing revealed the
+  upstream agent-sandbox operator ships a **`sandboxwarmpools.extensions.agents.x-k8s.io` CRD**
+  (`spec: {replicas, sandboxTemplateRef}`) — a first-class warm-pool primitive. Our custom
+  pool-manager CronJob (`41-poolmanager-cronjob.yaml`) is therefore likely **redundant**: create a
+  `SandboxWarmPool` CR instead and let the operator maintain the buffer. Keep the CronJob only for
+  the extra scale-to-zero/reap behaviors the CR may not cover. To reconcile after the live test.
 - **Headless auth** for Claude Code & Kiro through a Bifrost base-URL override inside a Kata VM
   (the biggest unknown — prototype first in P1).
 - **Import the `agent-sandbox` operator** from `eks-platform-openclaw` into the OAP addon catalog
