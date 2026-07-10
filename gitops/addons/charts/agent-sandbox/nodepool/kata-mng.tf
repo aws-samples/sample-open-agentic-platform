@@ -6,12 +6,28 @@
 # Requires: aws provider (nested_virtualization support), AWS API/CLI vintage
 # that exposes cpu_options.nested_virtualization.
 
-variable "cluster_name"   { type = string  default = "spoke-dev" }
-variable "region"         { type = string  default = "us-west-2" }
-variable "subnet_ids"     { type = list(string) }
-variable "node_role_arn"  { type = string }
-variable "instance_type"  { type = string  default = "c8i.4xlarge" }
-variable "kata_max_size"  { type = number  default = 3 }
+variable "cluster_name" {
+  type    = string
+  default = "spoke-dev"
+}
+variable "region" {
+  type    = string
+  default = "us-west-2"
+}
+variable "subnet_ids" {
+  type = list(string)
+}
+variable "node_role_arn" {
+  type = string
+}
+variable "instance_type" {
+  type    = string
+  default = "c8i.4xlarge"
+}
+variable "kata_max_size" {
+  type    = number
+  default = 3
+}
 
 # EKS-optimized AL2023 AMI for the cluster's k8s version (nodeadm bootstrap).
 data "aws_ssm_parameter" "al2023" {
@@ -61,7 +77,7 @@ resource "aws_launch_template" "kata" {
 
   tag_specifications {
     resource_type = "instance"
-    tags = { platform = "open-agent-platform", capability = "agent-sandbox" }
+    tags          = { platform = "open-agent-platform", capability = "agent-sandbox" }
   }
 }
 
@@ -91,9 +107,9 @@ resource "aws_eks_node_group" "kata" {
   }
 
   labels = {
-    "kata-enabled"                    = "true"
-    "katacontainers.io/kata-runtime"  = "true"
-    "node-type"                       = "kata-mng"
+    "kata-enabled"                   = "true"
+    "katacontainers.io/kata-runtime" = "true"
+    "node-type"                      = "kata-mng"
   }
 
   tags = { platform = "open-agent-platform", capability = "agent-sandbox" }
