@@ -28,6 +28,31 @@ aws eks create-addon --cluster-name <cluster> --addon-name vpc-cni --resolve-con
 `aws-node` tolerates all taints (`operator: Exists`), so it schedules onto the
 tainted kata node automatically. (Discovered in live testing — lesson #4.)
 
+## ⚠️ Known blocker: kata-deploy vs the VPC-CNI on Auto Mode (lesson #5)
+
+Live testing found kata-deploy **crashloops** on a self-managed MNG node in an
+Auto Mode cluster and never finishes installing the runtime. Root cause: kata-deploy
+patches containerd and **restarts it**; because the VPC-CNI runs as `aws-node` pods
+*on that same containerd*, the restart briefly drops node networking, and
+kata-deploy's next Kubernetes API call fails (`Failed to get node ... client error
+(Connect)`) → the pod exits and CrashLoopBackOffs *before* completing the install.
+Disabling the experimental nydus snapshotter (`snapshotter.setup: []`) did **not**
+resolve it — the containerd restart itself is the trigger.
+
+**Everything up to the runtime install is proven** (node joins Ready, `/dev/kvm`,
+kata labels/taint, kata-deploy schedules only on the kata node). Options to finish:
+
+1. **Bake Kata into a custom AMI** (Packer) so no on-node containerd patch/restart is
+   needed at runtime — the most robust path on Auto Mode clusters.
+2. **Follow openclaw's model** — a self-managed Karpenter (not Auto Mode) where the
+   CNI/containerd lifecycle is fully controlled and kata-deploy's restart is tolerated.
+3. Investigate a kata-deploy mode that configures containerd **without a full restart**,
+   or pin `aws-node` to not depend on the restarted containerd during install.
+
+This is a **kata-deploy-on-Auto-Mode** integration issue, not a flaw in the
+`agent-sandbox` chart (operator/RuntimeClasses/template/pool-manager all render and
+apply fine).
+
 ## Enablement sequence (per kata-capable cluster, e.g. spoke-dev)
 
 1. **Provision the kata MNG** — apply the eksctl or Terraform manifest here. Nodes
