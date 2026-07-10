@@ -5,7 +5,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CUE_DIR="${SCRIPT_DIR}/definitions/components"
+COMPONENTS_DIR="${SCRIPT_DIR}/definitions/components"
+TRAITS_DIR="${SCRIPT_DIR}/definitions/traits"
 YAML_DIR="${SCRIPT_DIR}/../../gitops/addons/charts/oam-agent-components/templates"
 
 if ! command -v vela &>/dev/null; then
@@ -14,11 +15,17 @@ if ! command -v vela &>/dev/null; then
 fi
 
 echo "Rendering CUE definitions → YAML"
-echo "  Source: ${CUE_DIR}"
-echo "  Output: ${YAML_DIR}"
+echo "  Components: ${COMPONENTS_DIR}"
+echo "  Traits:     ${TRAITS_DIR}"
+echo "  Output:     ${YAML_DIR}"
 
-vela def render "${CUE_DIR}" -o "${YAML_DIR}" \
+vela def render "${COMPONENTS_DIR}" -o "${YAML_DIR}" \
   --message "# Code generated from CUE definitions. DO NOT EDIT."
+
+if [ -d "${TRAITS_DIR}" ]; then
+  vela def render "${TRAITS_DIR}" -o "${YAML_DIR}" \
+    --message "# Code generated from CUE definitions. DO NOT EDIT."
+fi
 
 echo "Done. Generated files:"
 ls -1 "${YAML_DIR}"/*.yaml
