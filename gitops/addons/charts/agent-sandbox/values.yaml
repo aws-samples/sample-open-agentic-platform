@@ -43,6 +43,21 @@ kata:
       value: "true"
       effect: NoSchedule
 
+# ── NetworkPolicy (egress lockdown) ──────────────────────────────────────────
+networkPolicy:
+  # Private/link-local CIDRs carved OUT of the coder's :443 public-internet
+  # allow. On the hub the capability sits next to the fleet control plane
+  # (Keycloak/ArgoCD/external-secrets/Argo) reachable via ClusterIPs + pod IPs
+  # in the VPC private range; denying RFC-1918 + link-local blocks every path to
+  # the control plane, the node, the API server, and peer pods while still
+  # permitting public git/gh/registry egress. Covers hub VPC 10.0.0.0/16, pods
+  # (in-VPC), and service CIDR 172.20.0.0/16.
+  privateCidrsDenied:
+    - 10.0.0.0/8          # RFC-1918 (hub VPC + pod IPs)
+    - 172.16.0.0/12       # RFC-1918 (service CIDR 172.20.0.0/16)
+    - 192.168.0.0/16      # RFC-1918
+    - 169.254.0.0/16      # link-local (blocks IMDS 169.254.169.254)
+
 # ── kata-readiness ───────────────────────────────────────────────────────────
 # Removes the runtime-not-ready startup taint once kata-deploy finishes on a
 # node. Required whenever nodes carry that startup taint (the kata MNG does).
