@@ -52,9 +52,15 @@ networkPolicy:
   # the control plane, the node, the API server, and peer pods while still
   # permitting public git/gh/registry egress. Covers hub VPC 10.0.0.0/16, pods
   # (in-VPC), and service CIDR 172.20.0.0/16.
+  # NOTE (EKS VPC-CNI): NetworkPolicy egress ipBlock is matched on the Service
+  # ClusterIP *before* kube-proxy DNAT, so the service CIDR must be listed
+  # EXPLICITLY as its own except entry — the 172.16/12 supernet alone does NOT
+  # reliably catch 172.20.0.0/16 ClusterIP traffic (verified on this cluster:
+  # /12 let control-plane ClusterIPs through; the explicit /16 blocks them).
   privateCidrsDenied:
+    - 172.20.0.0/16       # EKS service CIDR (control-plane ClusterIPs) — MUST be explicit
     - 10.0.0.0/8          # RFC-1918 (hub VPC + pod IPs)
-    - 172.16.0.0/12       # RFC-1918 (service CIDR 172.20.0.0/16)
+    - 172.16.0.0/12       # RFC-1918
     - 192.168.0.0/16      # RFC-1918
     - 169.254.0.0/16      # link-local (blocks IMDS 169.254.169.254)
 
