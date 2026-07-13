@@ -1,12 +1,27 @@
-# Dark Factory — Flow B, Phase P1
+# Dark Factory — Flow B, Phase P1 (reference implementation — superseded)
+
+> ⚠️ **Superseded by the Argo Workflows design.** This directory is the **P1 reference**: a bespoke
+> long-running **Node orchestrator** that imperatively drives claim → coder → PR → teardown. The
+> current design orchestrates Flow B with **Argo Workflows on the hub** (see
+> [`docs/dark-factory/README.md`](../../docs/dark-factory/README.md) §4 and
+> [`diagrams/flow-b-dark-factory.md`](../../docs/dark-factory/diagrams/flow-b-dark-factory.md)).
+> Under that design this code is **not deployed as a service** — instead its pieces become **Argo
+> workflow step-containers**:
+> - `orchestrator/lib/github.js` — the sticky-comment upsert + PR creation (reused verbatim as a step).
+> - `orchestrator/lib/k8s.js` — the `SandboxClaim` shape / bind-poll (Argo does most of this
+>   declaratively via a `resource` template; the shape is the reference).
+> - `coder/agent.js` — the in-VM coder workload, **unchanged** (it's behind the SandboxTemplate,
+>   independent of who orchestrates).
+>
+> Kept for reference and reuse; not deleted. The sections below describe the original P1 service.
 
 **Trigger → claim warm sandbox → drive the coder → open a PR with a live sticky status → manual
 teardown.** The first independently-useful slice of the [Dark Factory pattern](../../docs/dark-factory/README.md)
 and the first real consumer of **[Flow A](../../docs/dark-factory/diagrams/flow-a-sandbox-capability.md)**'s
 Kata micro-VM warm pool.
 
-Runs on **spoke-dev only**. Autonomy is bounded here: P1 opens a PR and **stops** — a human still
-reviews and merges. The verification gates (holdout, Security/DevOps agents) arrive in P2/P3.
+Autonomy is bounded here: P1 opens a PR and **stops** — a human still reviews and merges. The
+verification gates (holdout, Security/DevOps agents) arrive in P2/P3.
 
 ## Components
 
