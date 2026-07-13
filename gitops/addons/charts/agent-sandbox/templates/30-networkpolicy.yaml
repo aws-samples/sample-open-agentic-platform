@@ -30,12 +30,12 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # DNS resolution (kube-dns only — the one in-cluster service the coder needs)
+    # DNS resolution — port 53 only, to the cluster DNS service. Kept broad by
+    # namespace (not pinned to a k8s-app=kube-dns pod label) because EKS Auto
+    # Mode runs CoreDNS without that label; :53 is harmless and control-plane
+    # isolation is enforced by the :443 + private-CIDR rule below, not here.
     - to:
         - namespaceSelector: {}
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
