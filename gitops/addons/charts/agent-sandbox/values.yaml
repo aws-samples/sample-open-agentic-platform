@@ -64,6 +64,29 @@ networkPolicy:
     - 192.168.0.0/16      # RFC-1918
     - 169.254.0.0/16      # link-local (blocks IMDS 169.254.169.254)
 
+  # Admin-tier ClusterNetworkPolicy (31-clusternetworkpolicy.yaml) — the
+  # AUTHORITATIVE control-plane isolation. The standard NetworkPolicy above does
+  # NOT reliably apply to coder pods (they're owned by a Sandbox CR, not a
+  # Deployment — an EKS VPC-CNI limitation) and can't block Service ClusterIPs.
+  # An Admin-tier Deny is evaluated first, wins over everything, and applies
+  # regardless of pod ownership. Requires VPC-CNI ≥1.21 + the ClusterNetworkPolicy
+  # CRD. Enabled on the hub (co-located with the control plane).
+  adminDenyControlPlane: true
+  adminPriority: 10
+  # Namespaces the untrusted coder must NEVER reach on the hub build plane.
+  # NOTE: kube-system is deliberately NOT listed — CoreDNS lives there and the
+  # coder needs :53 for git/gh resolution; an Admin-tier Deny is all-ports and
+  # would break DNS. kube-system carries no exfil-worthy secrets the coder can
+  # use (it has no SA token), and IMDS/API access is already blocked by the
+  # standard policy's CIDR denies.
+  controlPlaneNamespaces:
+    - argocd
+    - argo
+    - keycloak
+    - external-secrets
+    - crossplane-system
+    - langfuse
+
 # ── kata-readiness ───────────────────────────────────────────────────────────
 # Removes the runtime-not-ready startup taint once kata-deploy finishes on a
 # node. Required whenever nodes carry that startup taint (the kata MNG does).
