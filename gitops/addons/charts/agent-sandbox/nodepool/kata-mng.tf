@@ -76,9 +76,10 @@ locals {
 }
 
 resource "aws_launch_template" "kata" {
-  name_prefix = "${var.cluster_name}-kata-"
-  image_id    = data.aws_ssm_parameter.al2023.value
-  user_data   = local.kata_userdata
+  name_prefix   = "${var.cluster_name}-kata-"
+  image_id      = data.aws_ssm_parameter.al2023.value
+  instance_type = var.instance_type
+  user_data     = local.kata_userdata
 
   cpu_options {
     # THE key flag — exposes VT-x on 8i instances so kata's VMM can run guests.
