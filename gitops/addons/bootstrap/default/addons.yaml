@@ -437,26 +437,33 @@ kata-deploy:
       - key: environment
         operator: In
         values: ['control-plane']
+  # The kata-deploy OCI chart reads these keys at the ROOT of values (verified
+  # against chart v3.32.0 templates/kata-deploy.yaml → .Values.nodeSelector /
+  # .Values.tolerations). Do NOT nest them under a `kata-deploy:` key.
   valuesObject:
-    kata-deploy:
-      image:
-        reference: quay.io/kata-containers/kata-deploy
-        tag: '3.32.0'
-      nodeSelector:
-        kata-enabled: 'true'
-      tolerations:
-        - key: kata
-          operator: Equal
-          value: 'true'
-          effect: NoSchedule
-        - key: katacontainers.io/runtime-not-ready
-          operator: Exists
-          effect: NoSchedule
-      shims:
-        disableAll: true
-        qemu:
-          enabled: true
-        clh:
-          enabled: true
-      runtimeClasses:
-        enabled: false
+    image:
+      reference: quay.io/kata-containers/kata-deploy
+      tag: '3.32.0'
+    # Run the DaemonSet ONLY on the tainted nested-virt kata node — never on the
+    # hub's Auto Mode control-plane nodes (where it crashes on the TEE/nydus
+    # snapshotter and would churn containerd).
+    nodeSelector:
+      kata-enabled: 'true'
+    tolerations:
+      - key: kata
+        operator: Equal
+        value: 'true'
+        effect: NoSchedule
+      - key: katacontainers.io/runtime-not-ready
+        operator: Exists
+        effect: NoSchedule
+    # Only install the two VMMs the platform uses (clh default + qemu); the
+    # RuntimeClasses are rendered by the agent-sandbox chart, not kata-deploy.
+    shims:
+      disableAll: true
+      qemu:
+        enabled: true
+      clh:
+        enabled: true
+    runtimeClasses:
+      enabled: false
