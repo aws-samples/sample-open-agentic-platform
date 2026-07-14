@@ -20,7 +20,9 @@
 // Flow: fetch issue → SPEC.md → checkout df/issue-N → coder implements →
 // build+test → push → open PR → set commit status success/failure.
 const fs = require("fs");
+const http = require("http");
 const https = require("https");
+const { URL } = require("url");
 const { execFileSync } = require("child_process");
 
 const WORKSPACE = process.env.WORKSPACE || "/workspace";
@@ -87,6 +89,36 @@ function checkout() {
   return dir;
 }
 
+// Bifrost does User-Agent-prefix routing: any request whose UA starts with
+// "claude-cli" is run through a Claude-Code-specific request transform that is
+// broken on this build and returns `400 Unexpected field type` — REGARDLESS of
+// the body (the identical body + any other UA returns 200; verified by header
+// binary-search against the live gateway). We can't patch Bifrost from inside
+// the untrusted VM, so we front it with a tiny localhost shim that rewrites the
+// UA to a generic value and transparently forwards everything else — including
+// SSE streams (Claude Code sends stream:true). Claude Code points at this shim
+// via ANTHROPIC_BASE_URL; the shim proxies to the real Bifrost /anthropic route.
+function startBifrostUaShim(upstreamBase) {
+  const up = new URL(upstreamBase);
+  const agent = up.protocol === "https:" ? https : http;
+  const server = http.createServer((cReq, cRes) => {
+    const headers = { ...cReq.headers, host: up.host };
+    // The single field Bifrost's UA router keys off of. Neutralize it.
+    headers["user-agent"] = "dark-factory-coder";
+    const pReq = agent.request(
+      { protocol: up.protocol, hostname: up.hostname, port: up.port || (up.protocol === "https:" ? 443 : 80),
+        method: cReq.method, path: up.pathname.replace(/\/+$/, "") + cReq.url, headers },
+      (pRes) => { cRes.writeHead(pRes.statusCode, pRes.headers); pRes.pipe(cRes); },
+    );
+    pReq.on("error", (e) => { cRes.writeHead(502); cRes.end(String(e.message)); });
+    cReq.pipe(pReq);
+  });
+  server.listen(0, "127.0.0.1");
+  const port = server.address().port;
+  server.unref();
+  return `http://127.0.0.1:${port}`;
+}
+
 function runCoder(repoDir) {
   // Bifrost is an Anthropic-compatible gateway. Point Claude Code at its
   // /anthropic route via ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY. Do NOT set
@@ -95,7 +127,9 @@ function runCoder(repoDir) {
   // and ignores ANTHROPIC_BASE_URL. Bifrost auth is optional on this platform,
   // so the key may be absent; send a placeholder so the CLI doesn't prompt.
   const key = readSecret(BIFROST_KEY_PATH) || "bifrost";
-  const base = `${BIFROST_URL.replace(/\/+$/, "")}/anthropic`;
+  // Route through the localhost UA-shim (see startBifrostUaShim) so Bifrost
+  // doesn't apply its broken claude-cli request transform.
+  const base = startBifrostUaShim(`${BIFROST_URL.replace(/\/+$/, "")}/anthropic`);
   const env = {
     ...process.env,
     ANTHROPIC_BASE_URL: base,
@@ -112,8 +146,17 @@ function runCoder(repoDir) {
     CI: "1",
   };
   delete env.CLAUDE_CODE_USE_BEDROCK;
-  if (PROFILE === "kiro") return sh("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], { cwd: repoDir, env });
-  return sh("claude", ["-p", `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`, "--permission-mode", "bypassPermissions"], { cwd: repoDir, env });
+  console.log(`[coder] LLM: base=${base} model=${env.ANTHROPIC_MODEL}`);
+  // Inherit stdio so the coder CLI's own output + errors stream into the pod
+  // logs (kubectl logs), instead of being swallowed by execFileSync's exception.
+  const opts = { cwd: repoDir, env, stdio: "inherit", maxBuffer: 64 * 1024 * 1024 };
+  if (PROFILE === "kiro") return execFileSync("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], opts);
+  return execFileSync(
+    "claude",
+    ["-p", `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`,
+     "--permission-mode", "bypassPermissions", "--verbose"],
+    opts,
+  );
 }
 
 function buildAndTest(repoDir) {
