@@ -22,7 +22,7 @@ template: {
 	let _autoName = strings.Replace(context.namespace + "_" + context.name, "-", "_", -1)
 
 	output: {
-		apiVersion: "bedrockagentcore.aws.m.upbound.io/v1beta1"
+		apiVersion: "bedrockagentcore.aws.upbound.io/v1beta1"
 		kind:       "Memory"
 		metadata: name: context.name
 		spec: {
@@ -32,10 +32,7 @@ template: {
 				description:         parameter.description
 				eventExpiryDuration: parameter.eventExpiryDuration
 			}
-			providerConfigRef: {
-				name: "provider-aws-config"
-				kind: "ClusterProviderConfig"
-			}
+			providerConfigRef: name: "default"
 		}
 	}
 
@@ -67,7 +64,7 @@ template: {
 					}
 					"""
 			}
-			providerConfigRef: name: "provider-aws-config"
+			providerConfigRef: name: "default"
 		}
 	}
 

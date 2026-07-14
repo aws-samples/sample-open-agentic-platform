@@ -8,8 +8,6 @@ spec:
     - name: assistant
       type: agent
       properties:
-        name: assistant
-        namespace: agents
         description: "AI assistant with Milvus-backed mem0 memory"
 
         systemMessage: |
@@ -19,7 +17,7 @@ spec:
         modelConfig:
           modelId: claude-sonnet
 
-        # Memory — mem0 with Milvus vector store
+        # Memory — mem0 with Milvus vector store (in-cluster; no AWS identity needed)
         memory:
           provider: milvus
           config:
@@ -35,3 +33,6 @@ spec:
           limits:
             cpu: 1000m
             memory: 1Gi
+      traits:
+        # Secretless identity to AgentGateway/MCP.
+        - type: gateway-identity

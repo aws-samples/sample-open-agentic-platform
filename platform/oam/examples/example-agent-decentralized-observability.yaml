@@ -24,8 +24,6 @@ spec:
     - name: my-cw-agent
       type: agent
       properties:
-        name: my-cw-agent
-        namespace: default
         description: "Agent with CloudWatch GenAI observability"
         replicas: 1
         systemMessage: "You are a helpful assistant."
@@ -42,3 +40,6 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+      traits:
+        # CloudWatch/X-Ray IAM identity for ADOT export (EKS Pod Identity).
+        - type: decentralized-observability-identity
