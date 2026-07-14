@@ -175,4 +175,4 @@ coderTemplate:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
   # LLM gateway the coder reaches (this platform uses Bifrost, not LiteLLM).
-  bifrostUrl: http://bifrost.bifrost.svc.cluster.local:8080
+  bifrostUrl: http://172.20.181.17:8080  # ClusterIP — Kata VM guest DNS cannot resolve cluster svc names (P2: fix VM dnsConfig)
