@@ -146,6 +146,8 @@ poolManager:
 
 # ── Coder SandboxTemplate (podTemplate the warm pool clones) ─────────────────
 coderTemplate:
+  # Allow Flow B to inject per-claim env (SPEC/repo/branch/profile) via SandboxClaim.
+  envVarsInjectionPolicy: Allowed
   # Sandbox coder image is set by the consumer (Dark Factory picks the coder
   # profile — claude-code | kiro). Placeholder here; overridden per claim.
   image: public.ecr.aws/docker/library/busybox:1.36

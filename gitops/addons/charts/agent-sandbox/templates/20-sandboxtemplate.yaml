@@ -17,6 +17,13 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 spec:
+  # Flow B (the Dark Factory) drives each claimed coder by injecting per-claim env
+  # (SPEC, target repo, branch, profile) via SandboxClaim.spec.env. The operator
+  # rejects that injection unless the template opts in — default is Disallowed.
+  # `Allowed` lets a claim ADD env vars (it cannot override the template's own,
+  # e.g. BIFROST_URL — use `Overrides` for that). Verified against the live CRD:
+  # without this, claims fail with reason=EnvVarsInjectionRejected.
+  envVarsInjectionPolicy: {{ .Values.coderTemplate.envVarsInjectionPolicy | default "Allowed" }}
   podTemplate:
     metadata:
       labels:
