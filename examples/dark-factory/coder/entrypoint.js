@@ -211,7 +211,12 @@ async function main() {
     runCoder(repoDir);
     const test = buildAndTest(repoDir);
     if (!test.green) throw new Error(`tests not green: ${test.summary}`);
-    sh("git", ["push", "-u", "origin", BRANCH, "--force-with-lease"], { cwd: repoDir });
+    // df/issue-N is bot-owned and single-writer (the df-run workflow holds a
+    // per-issue mutex), so a plain --force is safe and correct. --force-with-lease
+    // can't be used: the depth-1 clone never fetched origin/df/issue-N, so its
+    // lease check fails ("stale info") whenever the branch already exists from a
+    // prior run.
+    sh("git", ["push", "-u", "origin", BRANCH, "--force"], { cwd: repoDir });
     headSha = sh("git", ["rev-parse", "HEAD"], { cwd: repoDir }).trim();
 
     // Open the PR (idempotent: ignore "already exists").
