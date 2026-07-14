@@ -68,16 +68,13 @@ networkPolicy:
   # isolation that applies regardless of pod ownership (the standard NetworkPolicy
   # above only applies to Deployment-owned pods; coder pods are Sandbox-CR-owned).
   #
-  # ⚠️ Known EKS VPC-CNI limitation (verified on this cluster): neither standard
-  # NetworkPolicy nor Admin ClusterNetworkPolicy egress applies to traffic sent to
-  # a Service ClusterIP (172.20.x) — it's DNAT'd before policy eval. Pod-to-pod
-  # (backend pod IPs in 10.0.x) IS blocked by both tiers. So a coder can open a
-  # TCP socket to a control-plane ClusterIP but CANNOT reach the backend pods
-  # directly, and defense-in-depth makes the ClusterIP path useless: the coder has
-  # NO ServiceAccount token (automountServiceAccountToken:false) and no IAM, and
-  # every sensitive service requires auth (e.g. external-secrets webhook returns
-  # TLS alert 47 / conn reset; the API server rejects unauthenticated list calls).
-  # Layers: Kata VM + no creds + pod-IP deny (both tiers) + service auth.
+  # EKS VPC-CNI limitation (verified): neither standard NetworkPolicy nor Admin
+  # ClusterNetworkPolicy egress applies to Service ClusterIP (172.20.x) traffic —
+  # DNAT'd before policy eval. Pod-to-pod (backend pod IPs 10.0.x) IS blocked by
+  # both tiers. The ClusterIP gap is now CLOSED at the node layer by the
+  # clusteripFirewall DaemonSet below (conntrack --ctorigdst FORWARD rules).
+  # Full defense-in-depth: Kata VM + no creds (no SA token, no IAM) + pod-IP deny
+  # (both policy tiers) + ClusterIP deny (node firewall) + service auth.
   adminDenyControlPlane: true
   adminPriority: 10
   # Namespaces the untrusted coder must NEVER reach on the hub build plane.
