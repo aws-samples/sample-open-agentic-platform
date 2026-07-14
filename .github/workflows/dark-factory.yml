@@ -36,18 +36,18 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: '🏭 Dark Factory accepted this issue — claiming a sandbox on spoke-dev…',
+              body: '🏭 Dark Factory accepted this issue — claiming a warm Kata sandbox on the hub…',
             });
 
-      - name: Dispatch to orchestrator
+      - name: Submit df-run to Argo Workflows
         env:
-          # The orchestrator's ingress URL (private ALB / VPN-reachable).
-          # Configure as a repo/org variable; kept out of the workflow so the
-          # endpoint isn't hard-coded.
-          ORCHESTRATOR_URL: ${{ vars.DARK_FACTORY_ORCHESTRATOR_URL }}
-          # Shared secret so the orchestrator only accepts trusted triggers.
-          DISPATCH_TOKEN: ${{ secrets.DARK_FACTORY_DISPATCH_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
+          # argo-server events endpoint base, e.g. https://<argo-host>/argo-workflows
+          # Configure as a repo/org variable so the host isn't hard-coded.
+          ARGO_SERVER: ${{ vars.DARK_FACTORY_ARGO_SERVER }}
+          # Bearer token for the argo-server events API (a token bound to the
+          # dark-factory-workflow SA, or an SSO token). Stored as a repo secret.
+          ARGO_TOKEN: ${{ secrets.DARK_FACTORY_ARGO_TOKEN }}
+          ISSUE_ID: ${{ github.event.issue.id }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -55,21 +55,23 @@ jobs:
           BASE: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ -z "${ORCHESTRATOR_URL:-}" ]; then
-            echo "::error::DARK_FACTORY_ORCHESTRATOR_URL is not set — cannot dispatch."
+          if [ -z "${ARGO_SERVER:-}" ]; then
+            echo "::error::DARK_FACTORY_ARGO_SERVER is not set — cannot submit."
             exit 1
           fi
-          # Build the JSON payload safely (jq handles escaping of title/body).
+          # POST the issue to the WorkflowEventBinding 'dark-factory' in the argo
+          # namespace. The discriminator header + payload.issue selector gate it.
           payload="$(jq -n \
-            --arg issue "$ISSUE_NUMBER" \
+            --arg id "$ISSUE_ID" \
+            --arg number "$ISSUE_NUMBER" \
             --arg repo "$REPO" \
             --arg title "$ISSUE_TITLE" \
             --arg body "$ISSUE_BODY" \
             --arg base "$BASE" \
-            --arg ghToken "$GH_TOKEN" \
-            '{issue: ($issue|tonumber), repo: $repo, title: $title, body: $body, base: $base, ghToken: $ghToken}')"
-          curl -fsS -X POST "$ORCHESTRATOR_URL/run" \
+            '{issue: {id: $id, number: ($number|tonumber), repo: $repo, title: $title, body: $body, base: $base}}')"
+          curl -fsS -X POST "${ARGO_SERVER}/api/v1/events/argo/dark-factory" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${DISPATCH_TOKEN:-}" \
+            -H "x-dark-factory: true" \
+            -H "Authorization: Bearer ${ARGO_TOKEN}" \
             -d "$payload"
-          echo "Dispatched issue #$ISSUE_NUMBER to the Dark Factory orchestrator."
+          echo "Submitted df-run for issue #$ISSUE_NUMBER to Argo Workflows."
