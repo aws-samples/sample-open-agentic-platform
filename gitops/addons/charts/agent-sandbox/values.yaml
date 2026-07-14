@@ -148,6 +148,12 @@ poolManager:
 coderTemplate:
   # Allow Flow B to inject per-claim env (SPEC/repo/branch/profile) via SandboxClaim.
   envVarsInjectionPolicy: Allowed
+  # Mount a k8s Secret at /etc/secrets (mode 0400) so the coder can read the
+  # short-TTL gh-token (+ optional bifrost key). Secret must exist in the
+  # capability namespace with key 'gh-token'.
+  secretsMount:
+    enabled: true
+    secretName: dark-factory-github
   # Sandbox coder image. Placeholder busybox until the Dark Factory coder image
   # (examples/dark-factory/coder, entrypoint.js) is built + pushed to ECR — then
   # set this to that image so a claim actually runs the coder.

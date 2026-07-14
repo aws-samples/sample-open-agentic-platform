@@ -69,6 +69,14 @@ spec:
               mountPath: /workspace
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.coderTemplate.secretsMount.enabled }}
+            # Short-TTL GitHub token (+ optional Bifrost key) the coder reads at
+            # /etc/secrets — mode 0400, never in env. The coder uses gh-token to
+            # clone/push + open the PR; Bifrost auth is optional on this platform.
+            - name: coder-secrets
+              mountPath: /etc/secrets
+              readOnly: true
+            {{- end }}
       volumes:
         # Ephemeral per-claim workspace. SandboxTemplate.spec only supports
         # podTemplate (verified against the live CRD — it has NO
@@ -81,3 +89,9 @@ spec:
             sizeLimit: {{ .Values.coderTemplate.workspaceSizeGi }}Gi
         - name: tmp
           emptyDir: {}
+        {{- if .Values.coderTemplate.secretsMount.enabled }}
+        - name: coder-secrets
+          secret:
+            secretName: {{ .Values.coderTemplate.secretsMount.secretName }}
+            defaultMode: 0400
+        {{- end }}
