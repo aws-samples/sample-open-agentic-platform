@@ -100,6 +100,14 @@ function runCoder(repoDir) {
     ...process.env,
     ANTHROPIC_BASE_URL: base,
     ANTHROPIC_API_KEY: key,
+    // Bifrost maps model ALIASES → Bedrock model IDs. Claude Code's default
+    // model name (e.g. claude-sonnet-4) isn't a Bifrost alias and returns
+    // "provided model identifier is invalid" (400). Use the platform's Bifrost
+    // alias (verified: 'claude-sonnet' → us.anthropic.claude-sonnet-4-5). Set
+    // both the primary and the small/fast model so the CLI never falls back to
+    // an unknown identifier.
+    ANTHROPIC_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+    ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_MODEL || "claude-sonnet",
     // Non-interactive: never open a browser / prompt for login in headless mode.
     CI: "1",
   };
