@@ -94,6 +94,22 @@ networkPolicy:
     - crossplane-system
     - langfuse
 
+  # ClusterIP egress firewall (32-clusterip-egress-firewall.yaml) — the DEFINITIVE
+  # fix for the VPC-CNI ClusterIP-DNAT gap documented above. A host-network,
+  # NET_ADMIN DaemonSet on the kata node installs FORWARD iptables rules matching
+  # conntrack --ctorigdst (the ORIGINAL ClusterIP before kube-proxy DNAT), allowing
+  # only the Bifrost ClusterIP and DROPping the rest of the service CIDR. Verified
+  # live: closes the external-secrets/kube-api ClusterIP socket while keeping
+  # Bifrost + public egress + DNS working. Only runs on the tainted kata node.
+  clusteripFirewall:
+    enabled: true
+    image: alpine/k8s:1.31.0     # needs kubectl + iptables
+    serviceCidr: 172.20.0.0/16   # EKS service CIDR (hub)
+    bifrostNamespace: bifrost
+    bifrostService: bifrost
+    bifrostPort: 8080
+    reconcileSeconds: 30
+
 # ── kata-readiness ───────────────────────────────────────────────────────────
 # Removes the runtime-not-ready startup taint once kata-deploy finishes on a
 # node. Required whenever nodes carry that startup taint (the kata MNG does).
