@@ -88,10 +88,24 @@ function checkout() {
 }
 
 function runCoder(repoDir) {
-  const key = readSecret(BIFROST_KEY_PATH);
-  const env = { ...process.env, ANTHROPIC_BASE_URL: BIFROST_URL, ANTHROPIC_API_KEY: key, CLAUDE_CODE_USE_BEDROCK: "1" };
+  // Bifrost is an Anthropic-compatible gateway. Point Claude Code at its
+  // /anthropic route via ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY. Do NOT set
+  // CLAUDE_CODE_USE_BEDROCK — that flag makes Claude Code use the AWS Bedrock
+  // SDK directly (needs AWS creds in the VM, which we deliberately withhold)
+  // and ignores ANTHROPIC_BASE_URL. Bifrost auth is optional on this platform,
+  // so the key may be absent; send a placeholder so the CLI doesn't prompt.
+  const key = readSecret(BIFROST_KEY_PATH) || "bifrost";
+  const base = `${BIFROST_URL.replace(/\/+$/, "")}/anthropic`;
+  const env = {
+    ...process.env,
+    ANTHROPIC_BASE_URL: base,
+    ANTHROPIC_API_KEY: key,
+    // Non-interactive: never open a browser / prompt for login in headless mode.
+    CI: "1",
+  };
+  delete env.CLAUDE_CODE_USE_BEDROCK;
   if (PROFILE === "kiro") return sh("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], { cwd: repoDir, env });
-  return sh("claude", ["-p", `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`], { cwd: repoDir, env });
+  return sh("claude", ["-p", `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`, "--permission-mode", "bypassPermissions"], { cwd: repoDir, env });
 }
 
 function buildAndTest(repoDir) {
