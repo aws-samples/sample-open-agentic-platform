@@ -148,9 +148,22 @@ poolManager:
 coderTemplate:
   # Allow Flow B to inject per-claim env (SPEC/repo/branch/profile) via SandboxClaim.
   envVarsInjectionPolicy: Allowed
-  # Sandbox coder image is set by the consumer (Dark Factory picks the coder
-  # profile — claude-code | kiro). Placeholder here; overridden per claim.
+  # Sandbox coder image. Placeholder busybox until the Dark Factory coder image
+  # (examples/dark-factory/coder, entrypoint.js) is built + pushed to ECR — then
+  # set this to that image so a claim actually runs the coder.
   image: public.ecr.aws/docker/library/busybox:1.36
+  # Warm pods idle until a SandboxClaim injects DF_ISSUE_NUMBER, then exec the
+  # baked-in coder entrypoint (node /app/entrypoint.js). If the image has no such
+  # entrypoint (placeholder busybox), the poll loop just idles forever — safe.
+  command:
+    - /bin/sh
+    - -c
+    - |
+      echo "[sandbox] idle — waiting for a SandboxClaim to inject DF_ISSUE_NUMBER..."
+      while [ -z "${DF_ISSUE_NUMBER:-}" ]; do sleep 5; done
+      echo "[sandbox] claim injected issue #${DF_ISSUE_NUMBER} — starting coder"
+      if [ -f /app/entrypoint.js ]; then exec node /app/entrypoint.js; fi
+      echo "[sandbox] no coder entrypoint in this image (placeholder) — idling"; sleep infinity
   workspaceSizeGi: 5
   resources:
     requests: { cpu: "1", memory: 2Gi }

@@ -46,8 +46,13 @@ spec:
       containers:
         - name: coder
           image: {{ .Values.coderTemplate.image }}
-          # Overridden per claim by the consumer (Dark Factory picks the profile).
-          command: ["/bin/sh", "-c", "echo 'coder image set per-claim'; sleep infinity"]
+          # Warm pods start BEFORE a claim injects env, so the coder can't run at
+          # boot. This command idles until the SandboxClaim injects DF_ISSUE_NUMBER
+          # (Flow B), then execs the baked-in coder entrypoint. When the image has
+          # no entrypoint (e.g. the busybox placeholder), it just idles — safe for
+          # the warm pool. Consumers other than Flow B simply never set DF_*.
+          command:
+            {{- toYaml .Values.coderTemplate.command | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
