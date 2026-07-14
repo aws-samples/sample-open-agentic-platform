@@ -14,13 +14,16 @@ RUN apk add --no-cache git bash python3 py3-pip go
 RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
-COPY agent.js ./
+# entrypoint.js — env-driven Flow B P1 coder (auto-runs on VM start, self-reports
+# via GitHub). agent.js — the earlier HTTP-server reference (kept for reuse).
+COPY entrypoint.js agent.js ./
 
 # Non-root, matches the SandboxTemplate securityContext (runAsUser 1000).
 USER 1000
 
-ENV CODER_PORT=8080 \
-    WORKSPACE=/workspace
-EXPOSE 8080
+ENV WORKSPACE=/workspace
 
-CMD ["node", "agent.js"]
+# Baked into the Flow A SandboxTemplate as the coder image. On VM start it reads
+# the DF_* env injected by the SandboxClaim, implements + tests, pushes the
+# branch, opens the PR, and sets the dark-factory/implementation commit status.
+CMD ["node", "entrypoint.js"]
