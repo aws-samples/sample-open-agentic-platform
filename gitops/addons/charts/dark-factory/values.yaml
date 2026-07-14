@@ -1,0 +1,43 @@
+# Dark Factory (Flow B) — default values.
+# Deployed on the hub (control-plane) only, alongside Argo Workflows and the
+# Flow A agent-sandbox warm pool.
+
+# Namespace where the warm pool, SandboxClaims, and coder pods live (Flow A).
+# The workflow SA + RBAC are created here so claims are in-namespace.
+namespace: agent-sandbox-system
+
+# Argo Workflows install (already on the hub in the `argo` namespace).
+argo:
+  namespace: argo
+
+warmPool:
+  # The Flow A SandboxWarmPool the factory claims from.
+  name: coder-warmpool
+  # Namespace of the pool / where claims + coder pods are created.
+  namespace: agent-sandbox-system
+
+coder:
+  # In-VM control endpoint the workflow drives (the coder image listens here).
+  port: 8080
+  profile: claude-code
+  # Max minutes for a single coder run before the step times out.
+  runTimeoutMinutes: 30
+
+bifrost:
+  url: http://bifrost.bifrost.svc.cluster.local:8080
+
+github:
+  # Secret (in .namespace) holding the GitHub App / token the workflow uses to
+  # open the PR + maintain the sticky status comment. Key: token.
+  tokenSecret: dark-factory-github
+  tokenKey: token
+
+# Step-container image: needs kubectl + curl + jq to drive claims, poll the
+# coder, and call the GitHub API. alpine/k8s bundles kubectl; curl/jq added at start.
+stepImage: alpine/k8s:1.31.0
+
+# Concurrency: cap total in-flight df-run workflows against the kata pool size.
+maxConcurrentRuns: 3
+
+# Safety-net TTL on a SandboxClaim (reaper backstop if teardown never runs).
+claimTtlSeconds: 10800
