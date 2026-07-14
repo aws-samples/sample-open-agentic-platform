@@ -103,6 +103,9 @@ networkPolicy:
   # Bifrost + public egress + DNS working. Only runs on the tainted kata node.
   clusteripFirewall:
     enabled: true
+    # Runs in kube-system (privileged node infra home) — agent-sandbox-system
+    # enforces `baseline` PodSecurity which forbids hostNetwork + NET_ADMIN.
+    namespace: kube-system
     image: alpine/k8s:1.31.0     # needs kubectl + iptables
     serviceCidr: 172.20.0.0/16   # EKS service CIDR (hub)
     bifrostNamespace: bifrost

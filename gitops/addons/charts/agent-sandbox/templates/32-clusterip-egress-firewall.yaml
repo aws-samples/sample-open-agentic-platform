@@ -16,12 +16,18 @@ coder's legitimate ClusterIPs (Bifrost) and DROPs the rest of the service CIDR.
 Reconciles every interval so it survives kube-proxy flushes and is idempotent.
 
 This runs ONLY on the tainted kata node, so it governs only coder-sandbox egress.
+
+NOTE: deployed in kube-system (not agent-sandbox-system) because it needs
+hostNetwork + NET_ADMIN, which the agent-sandbox namespace's `baseline`
+PodSecurity forbids. kube-system is the standard home for privileged node
+infra DaemonSets (aws-node, kube-proxy) and has no PSS restriction.
 */ -}}
+{{- $fwNs := .Values.networkPolicy.clusteripFirewall.namespace | default "kube-system" }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: clusterip-egress-firewall
-  namespace: {{ include "agent-sandbox.namespace" . }}
+  namespace: {{ $fwNs }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 ---
@@ -29,7 +35,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: clusterip-egress-firewall
-  namespace: {{ include "agent-sandbox.namespace" . }}
+  namespace: {{ $fwNs }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 rules:
@@ -56,13 +62,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: clusterip-egress-firewall
-  namespace: {{ include "agent-sandbox.namespace" . }}
+  namespace: {{ $fwNs }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: clusterip-egress-firewall
-    namespace: {{ include "agent-sandbox.namespace" . }}
+    namespace: {{ $fwNs }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -78,7 +84,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: clusterip-egress-firewall
-    namespace: {{ include "agent-sandbox.namespace" . }}
+    namespace: {{ $fwNs }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -88,7 +94,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: clusterip-egress-firewall
-  namespace: {{ include "agent-sandbox.namespace" . }}
+  namespace: {{ $fwNs }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 spec:
