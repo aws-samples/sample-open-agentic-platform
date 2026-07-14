@@ -467,3 +467,22 @@ kata-deploy:
         enabled: true
     runtimeClasses:
       enabled: false
+
+# Dark Factory (Flow B) — Argo Workflows that turn a GitHub issue into a PR by
+# claiming the Flow A warm pool. Hub-only (co-located with Argo Workflows + the
+# sandbox pool); sync-wave 3 so it lands after the agent-sandbox capability
+# (wave 2). Deploys the WorkflowTemplates + workflow RBAC.
+dark-factory:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/dark-factory'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  # Hub-only. alwaysSelector pins generation to environment: control-plane
+  # regardless of useSelectors — never generated on a spoke.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
