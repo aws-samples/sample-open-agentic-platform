@@ -1,0 +1,186 @@
+{{- /*
+df-run — the Flow B P1 pipeline as an Argo WorkflowTemplate.
+
+  trigger → claim warm sandbox → coder implements+tests (in the Kata VM) →
+  coder opens PR + posts a live sticky status → await human approval.
+
+Single-cluster on the hub: the claim step creates a SandboxClaim with the issue
+injected as env (verified contract: envVarsInjectionPolicy=Allowed), waits for
+the operator to bind a warm micro-VM (status Ready), then the coder VM — which
+boots the coder image from the SandboxTemplate — reads the env, implements on
+df/issue-N, builds+tests, pushes, and opens the PR + sticky comment itself using
+the short-TTL GitHub token projected into the VM. The workflow watches the coder
+pod to completion, then its onExit handler releases the claim (the operator
+refills the pool). P1 stops at "PR open, awaiting human" — merge/teardown +
+verification gates are P2-P4.
+
+Parameters (supplied by the trigger / Sensor):
+  issue-id, issue-number, repo (owner/name), issue-title, issue-body, base-branch
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: df-run
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+spec:
+  serviceAccountName: dark-factory-workflow
+  # Serialize per issue (no double-claim for the same issue) and cap total
+  # concurrent runs against the kata pool size.
+  synchronization:
+    mutex:
+      name: "df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: issue-id
+      - name: issue-number
+      - name: repo
+      - name: issue-title
+      - name: issue-body
+        value: ""
+      - name: base-branch
+        value: main
+  # Always release the claimed sandbox, on success OR failure.
+  onExit: teardown
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  templates:
+
+    # ---- DAG ----
+    - name: main
+      dag:
+        tasks:
+          - name: claim
+            template: claim-sandbox
+          - name: drive-coder
+            template: await-coder
+            dependencies: [claim]
+            arguments:
+              parameters:
+                - name: sandbox
+                  value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+          - name: status
+            template: sticky-status
+            dependencies: [drive-coder]
+            arguments:
+              parameters:
+                - name: phase
+                  value: "pr-open"
+
+    # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
+    - name: claim-sandbox
+      outputs:
+        parameters:
+          - name: sandbox
+            valueFrom:
+              jsonPath: "{.status.sandbox.name}"
+      resource:
+        action: create
+        setOwnerReference: false
+        successCondition: status.conditions.0.status == True
+        failureCondition: status.conditions.0.reason == EnvVarsInjectionRejected
+        manifest: |
+          apiVersion: extensions.agents.x-k8s.io/v1beta1
+          kind: SandboxClaim
+          metadata:
+            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
+            namespace: {{ .Values.warmPool.namespace }}
+            labels:
+              dark-factory.io/issue: "{{`{{workflow.parameters.issue-id}}`}}"
+              dark-factory.io/managed-by: df-run
+          spec:
+            warmPoolRef:
+              name: {{ .Values.warmPool.name }}
+            lifecycle:
+              ttlSecondsAfterFinished: {{ .Values.claimTtlSeconds }}
+            env:
+              - { containerName: coder, name: DF_ISSUE_NUMBER, value: "{{`{{workflow.parameters.issue-number}}`}}" }
+              - { containerName: coder, name: DF_REPO, value: "{{`{{workflow.parameters.repo}}`}}" }
+              - { containerName: coder, name: DF_BRANCH, value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}" }
+              - { containerName: coder, name: DF_BASE_BRANCH, value: "{{`{{workflow.parameters.base-branch}}`}}" }
+              - { containerName: coder, name: DF_ISSUE_TITLE, value: "{{`{{workflow.parameters.issue-title}}`}}" }
+              - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.profile }}" }
+
+    # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
+    # The coder image (baked into the SandboxTemplate) auto-runs on VM start,
+    # reads DF_* env, implements + tests, pushes df/issue-N, and opens the PR
+    # itself using the short-TTL gh-token projected into the VM. The coder is
+    # credential-less to the k8s API (no SA token), so it CANNOT signal via a pod
+    # annotation — it self-reports through GitHub. This step polls the GitHub API
+    # (with the workflow's own token) for a PR whose head is df/issue-N, and
+    # treats the head commit's dark-factory/implementation check as the verdict.
+    - name: await-coder
+      inputs:
+        parameters:
+          - name: sandbox
+      activeDeadlineSeconds: {{ mul .Values.coder.runTimeoutMinutes 60 }}
+      script:
+        image: {{ .Values.stepImage }}
+        command: [sh]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+        source: |
+          set -eu
+          command -v curl >/dev/null 2>&1 || apk add --no-cache curl jq >/dev/null 2>&1
+          REPO="{{`{{workflow.parameters.repo}}`}}"
+          BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          API="https://api.github.com/repos/${REPO}"
+          echo "[df-run] polling GitHub for PR head=${BRANCH} in ${REPO}..."
+          while true; do
+            # Is there an open PR from the coder's branch?
+            pr="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
+                   -H "Accept: application/vnd.github+json" \
+                   "${API}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null || echo '[]')"
+            n="$(echo "${pr}" | jq -r '.[0].number // empty')"
+            if [ -n "${n}" ]; then
+              # Read the coder's self-reported implementation status on the head SHA.
+              sha="$(echo "${pr}" | jq -r '.[0].head.sha')"
+              st="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                     "${API}/commits/${sha}/status" 2>/dev/null | jq -r '.statuses[] | select(.context=="dark-factory/implementation") | .state' | head -1)"
+              echo "[df-run] PR #${n} open (sha=${sha}) impl-status=${st:-pending}"
+              case "${st}" in
+                success) echo "[df-run] coder finished — PR #${n} ready."; echo "${n}" > /tmp/pr; exit 0 ;;
+                failure|error) echo "[df-run] coder reported failure."; exit 1 ;;
+              esac
+            else
+              echo "[df-run] no PR yet — coder still working..."
+            fi
+            sleep 15
+          done
+      outputs:
+        parameters:
+          - name: pr-number
+            valueFrom:
+              path: /tmp/pr
+              default: ""
+
+    # ---- 3. Sticky status (workflow-side backstop; the coder posts primary) ----
+    - name: sticky-status
+      inputs:
+        parameters:
+          - name: phase
+      script:
+        image: {{ .Values.stepImage }}
+        command: [sh]
+        source: |
+          set -eu
+          echo "[df-run] pipeline reached phase={{`{{inputs.parameters.phase}}`}} for issue #{{`{{workflow.parameters.issue-number}}`}}"
+          echo "[df-run] PR is open and awaiting human review (P1 stops here)."
+
+    # ---- onExit: release the claim (operator refills the pool) ----
+    - name: teardown
+      resource:
+        action: delete
+        flags: ["--ignore-not-found"]
+        manifest: |
+          apiVersion: extensions.agents.x-k8s.io/v1beta1
+          kind: SandboxClaim
+          metadata:
+            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
+            namespace: {{ .Values.warmPool.namespace }}
