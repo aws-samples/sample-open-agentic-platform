@@ -147,6 +147,13 @@ self-managed nested-virt Managed Node Group** alongside Auto Mode:
 > the taint + label + egress lockdown, an untrusted coder VM could land next to — or reach — the hub's
 > control-plane services. See [§10](#10-security-model).
 
+> ✅ **As-built (certified on the hub):** the capability was migrated dev → hub via GitOps. A
+> `c8i.4xlarge` nested-virt MNG was provisioned, the `vpc-cni` + `kube-proxy` addons installed, and
+> the node joined Ready. Verified end-to-end: operator `1/1`, warm pool `3/3`, a `kata-clh` pod runs
+> a real micro-VM (guest kernel ≠ host), `SandboxClaim` binds + the pool refills, and the coder is
+> blocked from the control plane while Bifrost + public GitHub + DNS work. The old spoke-dev pool was
+> torn down.
+
 ### Warm pool — instant claims, cheap idle
 
 When the platform finishes deploying, the operator's native `SandboxWarmPool` brings up a **target
@@ -443,18 +450,41 @@ Untrusted, LLM-generated code + issue text from anyone = treat the whole sandbox
   + GitHub/HTTPS**. `automountServiceAccountToken: false`, runAsNonRoot, seccomp `RuntimeDefault`,
   drop `ALL` caps.
 
-**Running on the hub — the extra hardening that makes it safe.** Because the sandbox pool is
-co-located with the hub's control-plane services (Keycloak, ArgoCD, external-secrets, Argo), the
-generic egress rule is **not** sufficient on its own — an "allow HTTPS to the internet" rule would
-also permit reaching those services in-cluster. The hub deployment therefore adds:
+**Running on the hub — the three-layer control-plane isolation (verified live).** Because the sandbox
+pool is co-located with the hub's control-plane services (Keycloak, ArgoCD, external-secrets, Argo),
+a single egress NetworkPolicy is **not** sufficient — and on EKS it is also *incomplete* (see the
+CNI note below). The hub deployment enforces isolation in **three independent layers**, all certified
+against a live coder pod:
+
+1. **Standard `NetworkPolicy`** (`30-networkpolicy.yaml`) — default-deny egress; allow only DNS +
+   Bifrost:8080 + public HTTPS with all RFC-1918 + link-local (incl. IMDS `169.254.169.254`)
+   excepted, so pod-IP egress to the control plane is blocked.
+2. **Admin-tier `ClusterNetworkPolicy`** (`31-clusternetworkpolicy.yaml`) — a `Deny` on egress to the
+   control-plane namespaces. Needed because EKS VPC-CNI standard NetworkPolicy *only applies to
+   Deployment-owned pods*, and coder pods are owned by a **`Sandbox` CR** — the Admin tier applies
+   regardless of ownership and is evaluated first (Deny wins).
+3. **ClusterIP egress-firewall DaemonSet** (`32-clusterip-egress-firewall.yaml`) — a host-network,
+   `NET_ADMIN` DaemonSet on the kata node (in `kube-system`, since the sandbox namespace's `baseline`
+   PodSecurity forbids privileged pods) that installs `FORWARD` iptables rules matching
+   `conntrack --ctorigdst` (the **original ClusterIP before kube-proxy DNAT**): allow the Bifrost
+   ClusterIP, drop the rest of the service CIDR. This closes the CNI gap in the note below.
+
+> ⚠️ **EKS VPC-CNI ClusterIP gap (found + fixed).** Neither standard NetworkPolicy nor Admin
+> ClusterNetworkPolicy egress applies to traffic sent to a **Service ClusterIP** — kube-proxy DNATs
+> it to a backend pod IP *before* policy evaluation, so control-plane Services (e.g. `172.20.x`) slip
+> past the CIDR/namespace denies even though backend **pod IPs are correctly blocked**. Layer 3 (the
+> node firewall) is what actually closes this. Verified: before it, `external-secrets` + the API
+> server were reachable by ClusterIP; after it, both are blocked while Bifrost + public egress + DNS
+> still work.
+
+Plus the always-on basics:
 
 - **Dedicated tainted kata nodegroup:** coder VMs schedule only onto the nested-virt MNG
   (`kata=true:NoSchedule` + `kata-enabled=true`); control-plane pods never land there and vice-versa.
-- **Control-plane egress deny:** the NetworkPolicy explicitly **denies** egress to the hub's
-  control-plane namespaces/services (keycloak, argocd, external-secrets, argo) **and** to IMDS
-  (`169.254.169.254`) — on top of the default-deny + narrow allowlist above.
-- **No cluster API from the VM:** `automountServiceAccountToken: false` and no RBAC — the coder
-  cannot talk to the hub Kubernetes API at all.
+- **No cluster API from the VM:** `automountServiceAccountToken: false`, no RBAC — even if a coder
+  opens a TCP socket to a ClusterIP, it has **no credentials** to authenticate (services reject it:
+  the external-secrets webhook returns TLS alert 47; the API server rejects unauthenticated calls).
+  Layers: Kata VM + no creds + pod-IP deny (2 tiers) + ClusterIP node-firewall + service auth.
 
 - **Prod is never a test bed, and neither is a spoke:** the factory runs on the **hub build plane**;
   the spokes are the **deploy/run plane**. Unreviewed agent code never runs next to enterprise
