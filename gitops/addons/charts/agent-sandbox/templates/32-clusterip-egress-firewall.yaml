@@ -141,6 +141,8 @@ spec:
               set -eu
               CHAIN=AGENT_SANDBOX_EGRESS
               echo "[clusterip-fw] service_cidr=${SERVICE_CIDR} bifrost=${BIFROST_NAMESPACE}/${BIFROST_SVC}:${BIFROST_PORT}"
+              # The alpine/k8s image ships kubectl but not iptables — install it once.
+              command -v iptables >/dev/null 2>&1 || apk add --no-cache iptables >/dev/null 2>&1
               while true; do
                 BIP="$(kubectl get svc "${BIFROST_SVC}" -n "${BIFROST_NAMESPACE}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
                 # Build/refresh a dedicated chain, hooked from FORWARD, matched on
