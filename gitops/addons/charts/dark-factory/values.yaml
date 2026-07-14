@@ -42,10 +42,28 @@ maxConcurrentRuns: 3
 # Safety-net TTL on a SandboxClaim (reaper backstop if teardown never runs).
 claimTtlSeconds: 10800
 
-# Trigger — how a GitHub issue starts a df-run workflow.
+# Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
-  # WorkflowEventBinding on the argo-server events endpoint. A thin GitHub Action
-  # (label-gated) POSTs the issue payload here. Swap for an Argo Events Sensor
-  # when Argo Events is installed (B.3) — the WorkflowTemplate is unchanged.
-  eventBinding:
+  argoEvents:
     enabled: true
+    namespace: argo-events
+    eventbusReplicas: 3
+    # JetStream version — MUST match an entry in the argo-events controller-config
+    # jetstream.versions list (verified live: 'latest' → nats:2.10.10).
+    jetstreamVersion: latest
+    # GitHub repos whose issues fire the factory.
+    repositories:
+      - owner: elamaran11
+        names:
+          - dark-factory-sandbox
+    # Public URL GitHub posts webhooks to (ALB ingress host + endpoint).
+    webhookUrl: https://idp.elamaras.people.aws.dev/dark-factory
+    webhookEndpoint: /dark-factory
+    webhookPort: 12000
+    # Secret (in argo-events ns) with keys: token (GitHub API), webhook-secret (HMAC).
+    githubSecret: dark-factory-github
+    # Expose the EventSource via the platform ALB ingress for GitHub to reach it.
+    ingress:
+      enabled: true
+      host: idp.elamaras.people.aws.dev
+      path: /dark-factory

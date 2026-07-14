@@ -1,0 +1,126 @@
+{{- if .Values.trigger.argoEvents.enabled }}
+{{- /*
+Sensor — the Flow B trigger brain. Subscribes to the GitHub EventSource on the
+EventBus, filters for the events Flow B acts on, and submits the matching
+Argo Workflow. P1 wires the issue-labeled → df-run path; the iterate / merge
+triggers (PR comment, review approved) are stubbed for P2+.
+
+The Sensor's own ServiceAccount needs to CREATE Workflows in the argo namespace
+(and read WorkflowTemplates). That SA + RBAC are defined below.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dark-factory-sensor
+  namespace: {{ .Values.trigger.argoEvents.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+---
+# The Sensor submits Workflows into the argo namespace → needs create there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-sensor
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtemplates"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-sensor
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-sensor
+    namespace: {{ .Values.trigger.argoEvents.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-sensor
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: dark-factory
+  namespace: {{ .Values.trigger.argoEvents.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+spec:
+  template:
+    serviceAccountName: dark-factory-sensor
+  dependencies:
+    - name: issue-labeled
+      eventSourceName: dark-factory-github
+      eventName: dark-factory
+      filters:
+        data:
+          # Only fire when the `dark-factory` label was ADDED to an issue.
+          - path: headers.X-Github-Event
+            type: string
+            value: ["issues"]
+          - path: body.action
+            type: string
+            value: ["labeled"]
+          - path: body.label.name
+            type: string
+            value: ["dark-factory"]
+  triggers:
+    - template:
+        name: submit-df-run
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: df-run-
+                namespace: {{ .Values.argo.namespace }}
+              spec:
+                workflowTemplateRef:
+                  name: df-run
+                arguments:
+                  parameters:
+                    - name: issue-id
+                    - name: issue-number
+                    - name: repo
+                    - name: issue-title
+                    - name: issue-body
+                    - name: base-branch
+          # Map GitHub webhook fields → workflow parameters.
+          parameters:
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.issue.id
+              dest: spec.arguments.parameters.0.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.issue.number
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.repository.full_name
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.issue.title
+              dest: spec.arguments.parameters.3.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.issue.body
+              dest: spec.arguments.parameters.4.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.repository.default_branch
+              dest: spec.arguments.parameters.5.value
+{{- end }}
