@@ -102,6 +102,7 @@ spec:
               - { containerName: coder, name: DF_BASE_BRANCH, value: "{{`{{workflow.parameters.base-branch}}`}}" }
               - { containerName: coder, name: DF_ISSUE_TITLE, value: "{{`{{workflow.parameters.issue-title}}`}}" }
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.profile }}" }
+              - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
     # The coder image (baked into the SandboxTemplate) auto-runs on VM start,

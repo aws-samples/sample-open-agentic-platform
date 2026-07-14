@@ -147,7 +147,7 @@ poolManager:
 # ── Coder SandboxTemplate (podTemplate the warm pool clones) ─────────────────
 coderTemplate:
   # Allow Flow B to inject per-claim env (SPEC/repo/branch/profile) via SandboxClaim.
-  envVarsInjectionPolicy: Allowed
+  envVarsInjectionPolicy: Overrides
   # Mount a k8s Secret at /etc/secrets (mode 0400) so the coder can read the
   # short-TTL gh-token (+ optional bifrost key). Secret must exist in the
   # capability namespace with key 'gh-token'.

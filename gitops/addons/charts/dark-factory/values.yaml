@@ -24,7 +24,7 @@ coder:
   runTimeoutMinutes: 30
 
 bifrost:
-  url: http://bifrost.bifrost.svc.cluster.local:8080
+  url: http://172.20.181.17:8080  # ClusterIP (Kata VM guest DNS cannot resolve svc names)
 
 github:
   # Secret (in .namespace) holding the GitHub App / token the workflow uses to
