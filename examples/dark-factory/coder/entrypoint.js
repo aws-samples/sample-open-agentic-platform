@@ -23,7 +23,7 @@ const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const { URL } = require("url");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 
 const WORKSPACE = process.env.WORKSPACE || "/workspace";
 const BIFROST_URL = process.env.BIFROST_URL || "http://bifrost.bifrost.svc.cluster.local:8080";
@@ -98,27 +98,37 @@ function checkout() {
 // UA to a generic value and transparently forwards everything else — including
 // SSE streams (Claude Code sends stream:true). Claude Code points at this shim
 // via ANTHROPIC_BASE_URL; the shim proxies to the real Bifrost /anthropic route.
+//
+// The shim MUST run in its OWN process: we launch the coder CLI with the
+// synchronous execFileSync (so we can await its exit), which blocks this Node
+// event loop for the whole run — an in-process http.Server would never accept a
+// connection (observed: ConnectionRefused). So we write the shim to a temp file
+// and spawn `node` on it in the background, then wait for its port to open.
+const SHIM_PORT = 8791;
 function startBifrostUaShim(upstreamBase) {
-  const up = new URL(upstreamBase);
-  const agent = up.protocol === "https:" ? https : http;
-  const server = http.createServer((cReq, cRes) => {
-    const headers = { ...cReq.headers, host: up.host };
-    // The single field Bifrost's UA router keys off of. Neutralize it.
-    headers["user-agent"] = "dark-factory-coder";
-    const pReq = agent.request(
-      { protocol: up.protocol, hostname: up.hostname, port: up.port || (up.protocol === "https:" ? 443 : 80),
-        method: cReq.method, path: up.pathname.replace(/\/+$/, "") + cReq.url, headers },
-      (pRes) => { cRes.writeHead(pRes.statusCode, pRes.headers); pRes.pipe(cRes); },
-    );
-    pReq.on("error", (e) => { cRes.writeHead(502); cRes.end(String(e.message)); });
-    cReq.pipe(pReq);
-  });
-  // Fixed localhost port (listen(0)'s ephemeral port isn't readable synchronously
-  // — server.address() is null until the 'listening' event fires).
-  const port = 8791;
-  server.listen(port, "127.0.0.1");
-  server.unref();
-  return `http://127.0.0.1:${port}`;
+  const shimSrc = `
+const http=require("http"),https=require("https"),{URL}=require("url");
+const up=new URL(${JSON.stringify(upstreamBase)});
+const agent=up.protocol==="https:"?https:http;
+http.createServer((cReq,cRes)=>{
+  const headers={...cReq.headers,host:up.host,"user-agent":"dark-factory-coder"};
+  const pReq=agent.request({protocol:up.protocol,hostname:up.hostname,port:up.port||(up.protocol==="https:"?443:80),method:cReq.method,path:up.pathname.replace(/\\/+$/,"")+cReq.url,headers},
+    pRes=>{cRes.writeHead(pRes.statusCode,pRes.headers);pRes.pipe(cRes);});
+  pReq.on("error",e=>{cRes.writeHead(502);cRes.end(String(e.message));});
+  cReq.pipe(pReq);
+}).listen(${SHIM_PORT},"127.0.0.1",()=>console.log("[ua-shim] listening on ${SHIM_PORT} -> "+up.href));
+`;
+  const shimPath = "/tmp/ua-shim.js";
+  fs.writeFileSync(shimPath, shimSrc);
+  const child = spawn("node", [shimPath], { stdio: "inherit", detached: false });
+  child.unref();
+  // Block until the shim's port is accepting (execFileSync below can't yield).
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try { execFileSync("node", ["-e", `require("net").connect(${SHIM_PORT},"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))`], { stdio: "ignore" }); break; }
+    catch { execFileSync("sleep", ["0.2"]); }
+  }
+  return `http://127.0.0.1:${SHIM_PORT}`;
 }
 
 function runCoder(repoDir) {
