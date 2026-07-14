@@ -41,3 +41,11 @@ maxConcurrentRuns: 3
 
 # Safety-net TTL on a SandboxClaim (reaper backstop if teardown never runs).
 claimTtlSeconds: 10800
+
+# Trigger — how a GitHub issue starts a df-run workflow.
+trigger:
+  # WorkflowEventBinding on the argo-server events endpoint. A thin GitHub Action
+  # (label-gated) POSTs the issue payload here. Swap for an Argo Events Sensor
+  # when Argo Events is installed (B.3) — the WorkflowTemplate is unchanged.
+  eventBinding:
+    enabled: true

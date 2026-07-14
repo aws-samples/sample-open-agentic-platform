@@ -1,0 +1,49 @@
+{{- if .Values.trigger.eventBinding.enabled }}
+{{- /*
+WorkflowEventBinding — lets an external caller submit df-run by POSTing to the
+argo-server events endpoint:
+
+  POST https://<argo-server>/api/v1/events/{{ .Values.argo.namespace }}/dark-factory
+  { "issue": {"id": "...", "number": 42, "title": "...", "body": "...",
+    "repo": "owner/name", "base": "main"} }
+
+This is the thin, GitOps-native trigger for P1: a small GitHub Action (see
+.github/workflows/dark-factory.yml) gated on the `dark-factory` label mints a
+short-TTL token and calls this endpoint. When Argo Events is enabled later, a
+Sensor replaces the Action (B.3) — the WorkflowTemplate itself is unchanged.
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowEventBinding
+metadata:
+  name: dark-factory
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+spec:
+  event:
+    # Only fire for the dark-factory discriminator on the events endpoint.
+    selector: metadata["x-dark-factory"] == "true" && payload.issue != nil
+  submit:
+    workflowTemplateRef:
+      name: df-run
+    arguments:
+      parameters:
+        - name: issue-id
+          valueFrom:
+            event: payload.issue.id
+        - name: issue-number
+          valueFrom:
+            event: payload.issue.number
+        - name: repo
+          valueFrom:
+            event: payload.issue.repo
+        - name: issue-title
+          valueFrom:
+            event: payload.issue.title
+        - name: issue-body
+          valueFrom:
+            event: payload.issue.body
+        - name: base-branch
+          valueFrom:
+            event: payload.issue.base
+{{- end }}
