@@ -1,46 +1,72 @@
 {{- /*
 RBAC for the Dark Factory (Flow B) Argo workflows.
 
-The workflow SA is the trusted orchestrator: it manages SandboxClaims (claim /
-inspect / release the warm pool), reads the bound Sandbox + its pod, and writes
-its own Argo workflowtaskresults. It deliberately has NO secrets access, no
-pod/exec, no cluster scope — the coder VM is credential-less and the workflow
-never shells into it. Scoped to the agent-sandbox namespace (where the pool,
-claims, and coder pods live) on the hub.
+Argo runs workflow pods in the ARGO namespace, so the workflow ServiceAccount
+lives there. It manages SandboxClaims + reads sandboxes/pods in the
+agent-sandbox namespace (where the warm pool + coder pods live) via a Role
+bound cross-namespace. It deliberately has NO secrets access, no pod/exec, no
+cluster scope — the coder VM is credential-less and the workflow never shells
+into it.
 */ -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: dark-factory-workflow
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Values.argo.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 ---
+# In the ARGO namespace: the Argo executor needs to write its task results.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dark-factory-workflow
-  namespace: {{ .Values.namespace }}
+  namespace: {{ .Values.argo.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 rules:
-  # Claim / inspect / release warm sandboxes.
-  - apiGroups: ["extensions.agents.x-k8s.io"]
-    resources: ["sandboxclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
-  # Read the bound Sandbox (status.sandbox.name / podIPs) — read-only.
-  - apiGroups: ["agents.x-k8s.io"]
-    resources: ["sandboxes"]
-    verbs: ["get", "list", "watch"]
-  # Read the coder pod (status/IP) to drive it and watch completion — read-only.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
-  # Argo executor needs to write its task results + patch its own workflows.
   - apiGroups: ["argoproj.io"]
     resources: ["workflowtaskresults", "workflowtasksets"]
     verbs: ["create", "get", "list", "watch", "patch"]
-  # Per-issue state ConfigMaps (iteration counter, sticky-comment id).
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-workflow
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-workflow
+    namespace: {{ .Values.argo.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-workflow
+---
+# In the AGENT-SANDBOX namespace: manage claims + read the bound sandbox/pods +
+# per-issue state ConfigMaps. Bound to the SA that lives in the argo namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-workflow-sandbox
+  namespace: {{ .Values.warmPool.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "create", "update", "patch"]
@@ -48,15 +74,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: dark-factory-workflow
-  namespace: {{ .Values.namespace }}
+  name: dark-factory-workflow-sandbox
+  namespace: {{ .Values.warmPool.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: dark-factory-workflow
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Values.argo.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: dark-factory-workflow
+  name: dark-factory-workflow-sandbox
