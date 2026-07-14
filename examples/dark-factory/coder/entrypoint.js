@@ -48,8 +48,14 @@ function sh(cmd, args, opts = {}) {
   });
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Minimal GitHub REST helper (self-report bus — no k8s API available).
-function gh(method, path, body) {
+// GitHub is the completion bus the df-run workflow polls, so a transient network
+// blip on a report call (observed: "socket hang up" on the final success POST)
+// must NOT be allowed to mark a good run as failed. Retry transient transport
+// errors (ECONNRESET / socket hang up) and 5xx with a short backoff.
+function ghOnce(method, path, body) {
   const token = readSecret(GH_TOKEN_PATH);
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
@@ -64,13 +70,28 @@ function gh(method, path, body) {
         let buf = ""; res.on("data", (c) => (buf += c));
         res.on("end", () => {
           if (res.statusCode >= 200 && res.statusCode < 300) resolve(buf ? JSON.parse(buf) : {});
-          else reject(new Error(`GitHub ${method} ${path} → ${res.statusCode}: ${buf}`));
+          else { const e = new Error(`GitHub ${method} ${path} → ${res.statusCode}: ${buf}`); e.statusCode = res.statusCode; reject(e); }
         });
       });
     req.on("error", reject);
     if (data) req.write(data);
     req.end();
   });
+}
+
+async function gh(method, path, body) {
+  let lastErr;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try { return await ghOnce(method, path, body); }
+    catch (e) {
+      // Retry only transient failures — never a 4xx (bad request / already exists).
+      const transient = e.statusCode === undefined || e.statusCode >= 500 || e.statusCode === 429;
+      if (!transient || attempt === 4) throw e;
+      lastErr = e;
+      await sleep(500 * attempt);
+    }
+  }
+  throw lastErr;
 }
 
 async function fetchIssueSpec() {
