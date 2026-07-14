@@ -113,8 +113,10 @@ function startBifrostUaShim(upstreamBase) {
     pReq.on("error", (e) => { cRes.writeHead(502); cRes.end(String(e.message)); });
     cReq.pipe(pReq);
   });
-  server.listen(0, "127.0.0.1");
-  const port = server.address().port;
+  // Fixed localhost port (listen(0)'s ephemeral port isn't readable synchronously
+  // — server.address() is null until the 'listening' event fires).
+  const port = 8791;
+  server.listen(port, "127.0.0.1");
   server.unref();
   return `http://127.0.0.1:${port}`;
 }
