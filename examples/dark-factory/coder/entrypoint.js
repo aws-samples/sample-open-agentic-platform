@@ -154,9 +154,21 @@ function runCoder(repoDir) {
     // an unknown identifier.
     ANTHROPIC_MODEL: process.env.CODER_MODEL || "claude-sonnet",
     ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+    // The sandbox runs with readOnlyRootFilesystem, so $HOME (/home/node) is NOT
+    // writable. Claude Code writes its config, session state, and — critically —
+    // per-invocation SHELL SNAPSHOT files that its Bash tool sources before every
+    // command into ~/.claude. If that dir can't be created, every Bash call (npm
+    // install/test, git) fails and the agent loops retrying forever (observed:
+    // a trivial change ran >15min with no commit). Point HOME + config dir at the
+    // writable /tmp tmpfs so the CLI can persist and run shell commands.
+    HOME: "/tmp/coder-home",
+    CLAUDE_CONFIG_DIR: "/tmp/coder-home/.claude",
+    XDG_CONFIG_HOME: "/tmp/coder-home/.config",
+    XDG_CACHE_HOME: "/tmp/coder-home/.cache",
     // Non-interactive: never open a browser / prompt for login in headless mode.
     CI: "1",
   };
+  fs.mkdirSync("/tmp/coder-home/.claude", { recursive: true });
   delete env.CLAUDE_CODE_USE_BEDROCK;
   console.log(`[coder] LLM: base=${base} model=${env.ANTHROPIC_MODEL}`);
   // Inherit stdio so the coder CLI's own output + errors stream into the pod
