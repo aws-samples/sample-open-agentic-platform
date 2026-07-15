@@ -449,16 +449,20 @@ Each workflow declares Prometheus metrics via Argo's `metrics:` blocks (scraped 
 kube-prometheus-stack); a `grafana_dashboard`-labelled ConfigMap renders them, and **Langfuse** (on
 the hub) captures the LLM-level token/cost/latency traces for per-issue drill-down.
 
-| Metric | Meaning |
-|---|---|
-| `df_lead_time_seconds` | Issue labelled → PR opened (histogram) |
-| `df_claim_latency_seconds` | `SandboxClaim` create → Ready (warm-pool health) |
-| `df_holdout_pass_pct` | Holdout satisfaction per run |
-| `df_iteration_rounds` | Human comment loops per issue (convergence) |
-| `df_vm_minutes` | Kata VM lifetime per run — the cost proxy |
-| `df_teardown_success` | Teardown completed (leak detection) |
-| throughput | `rate(argo_workflows_count{workflowtemplate=~"df-.*", status="Succeeded"})` |
-| change-failure rate | merged `df` PRs later reverted (post-merge signal) |
+**Built (P4):** `df-run` emits `df_runs_total{status}` and `df_run_duration_seconds` (lead-time proxy)
+via its `metrics:` block (`metrics.enabled`). The richer per-signal metrics below and the Grafana
+dashboard ConfigMap are the next increment.
+
+| Metric | Meaning | Status |
+|---|---|---|
+| `df_runs_total{status}` | df-run outcomes by status (throughput + outcome mix) | ✅ built |
+| `df_run_duration_seconds` | df-run wall-clock (lead-time proxy) | ✅ built |
+| `df_claim_latency_seconds` | `SandboxClaim` create → Ready (warm-pool health) | ⬜ next |
+| `df_holdout_pass_pct` | Holdout satisfaction per run | ⬜ next |
+| `df_iteration_rounds` | Human comment loops per issue (convergence) | ⬜ next |
+| `df_vm_minutes` | Kata VM lifetime per run — the cost proxy | ⬜ next |
+| `df_teardown_success` | Teardown completed (leak detection) | ⬜ next |
+| change-failure rate | merged `df` PRs later reverted (post-merge signal) | ⬜ next |
 
 > This mirrors the Dark Factory deck's **Metrics & Cost Attribution** model: token counters →
 > cost-tier routing → computed signals (items/hour, cycle time, queue depth) surfaced on a status
@@ -509,11 +513,20 @@ Level 3 means the **human approves the merge** — and can steer via comments:
   every `dark-factory/*` status is `success` before merging — so a stray approval on a red PR can't
   land. (GitHub also blocks the PR author from approving their own PR, so the approver is necessarily
   a different human.)
-- **Reaper CronJob** (adapted from openclaw `reaper-cronjob.yaml`) sweeps abandoned/timed-out runs
-  by TTL annotation — the crash-net for a workflow that dies before its `onExit` runs, and for
-  forgotten PRs.
-- **Ephemeral EKS test targets** (`deep-test`) are **gated behind a label** because they cost real
-  money and take ~15–20 min to provision; the default path is dry-run/namespace testing.
+- **Reaper CronJob** ✅ *built* — runs every 15 min (`reaper.schedule`) as a narrowly-scoped SA,
+  sweeping **stale ephemeral deploy-test namespaces** (`dark-factory.io/ephemeral=true`) and
+  **abandoned `df-run` `SandboxClaims`** older than `reaper.reapAfterSeconds` (3h) with no live
+  workflow. The crash-net behind the per-run `onExit` teardown and the claim's own TTL.
+- **Conditional deploy-test** ✅ *built (P4)* — for PRs that touch deployable artifacts
+  (`detect-deployable` greps the GitHub compare API for `Chart.yaml`/`k8s/`/`Dockerfile`), a
+  **trusted** step creates an **ephemeral namespace**, applies `deployTest.manifestPath`, waits for
+  workloads to become `Available` (and flags crashloops), then **tears the namespace down via a
+  `trap`** — always, even on failure. It is the **only step that holds K8s access** (a scoped
+  ClusterRole: namespaces + workload kinds, no secrets/RBAC), bound to the workflow SA — never the
+  coder. Posts `dark-factory/deploy-test`; advisory in v1 (`deployTest.blocking=false`). *(Verified:
+  a PR adding a `k8s/hello.yaml` nginx Deployment deployed Ready into `df-test-14-…` and was reaped.)*
+- **Ephemeral EKS test targets** (`deep-test` `PlatformCluster`) remain a **label-gated later tier**
+  (they provision a real cluster, ~15–20 min); the built default is the in-cluster ephemeral namespace.
 
 ---
 
@@ -636,7 +649,7 @@ Each phase is independently valuable — if you stop after any one, you're bette
 | **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
 | **P3** | **Security + DevOps review steps** — parallel hub-side reviewers, `auto` backend (linters + Nova), advisory, posting `dark-factory/{security,devops}` statuses (managed AWS-Agent backend swappable in when its API lands) | ✅ **done** (advisory) | ✅ Independent review evidence — verified: clean code 0 findings; adversarial diffs correctly flagged |
 | **P3b** | **Full event-driven lifecycle**: trigger dedup (one issue = one run) + live PR-body status + **`df-merge-teardown`** (approval → green-gated squash-merge + teardown) + **`df-iterate`** (PR comment → bounded revision on the existing branch) + coder no-diff guard | ✅ **done** | ✅ Hands-off label→run→verify→PR, comment→revise, approve→merge→teardown — all verified live |
-| **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
+| **P4** | Conditional **`deploy-test`** (gated on `detect-deployable`; ephemeral namespace deploy+probe+teardown, scoped ClusterRole) + **reaper CronJob** + **df-run Prometheus metrics**; *(deep-test `PlatformCluster` tier + Grafana dashboard remain)* | ✅ **done** (core) | ✅ Full lights-off lifecycle + measurement — deploy-test verified (nginx Ready + reaped) |
 | **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 
 ---
