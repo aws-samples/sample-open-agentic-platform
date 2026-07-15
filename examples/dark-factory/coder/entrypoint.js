@@ -251,6 +251,26 @@ async function main() {
     runCoder(repoDir);
     const test = buildAndTest(repoDir);
     if (!test.green) throw new Error(`tests not green: ${test.summary}`);
+
+    // Nothing-to-do guard: if the coder produced no commits ahead of the base,
+    // there's no diff — GitHub rejects the PR with 422 "No commits between…".
+    // This happens when the requested change already exists on base. Report the
+    // implementation status as success (the spec is satisfied) and exit cleanly
+    // instead of crash-looping. The df-run poller sees success on the base head.
+    let ahead = "1"; // default to "has changes" if we can't determine (fail open to PR)
+    try {
+      execFileSync("git", ["fetch", "--depth", "1", "origin", BASE], { cwd: repoDir, stdio: "ignore" });
+      ahead = sh("git", ["rev-list", "--count", `origin/${BASE}..HEAD`], { cwd: repoDir }).trim();
+    } catch { /* base unfetchable — proceed to PR, GitHub will validate */ }
+    if (ahead === "0") {
+      console.log(`[coder] no changes ahead of ${BASE} — the spec appears already satisfied; skipping PR`);
+      headSha = sh("git", ["rev-parse", "HEAD"], { cwd: repoDir }).trim();
+      await gh("POST", `/repos/${REPO}/statuses/${headSha}`, {
+        state: "success", context: "dark-factory/implementation",
+        description: "no changes needed — spec already satisfied on base",
+      });
+      process.exit(0);
+    }
     // df/issue-N is bot-owned and single-writer (the df-run workflow holds a
     // per-issue mutex), so a plain --force is safe and correct. --force-with-lease
     // can't be used: the depth-1 clone never fetched origin/df/issue-N, so its
