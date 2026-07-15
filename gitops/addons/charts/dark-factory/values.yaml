@@ -160,12 +160,22 @@ deployTest:
   # Advisory in v1 — posts dark-factory/deploy-test but never fails the run.
   blocking: false
 
-# ── P4: Success metrics (Argo-native Prometheus) ─────────────────────────────
+# ── Observability: metrics + Grafana dashboard ───────────────────────────────
 # df-run emits Prometheus metrics via its metrics: block (df_runs_total by status,
-# df_run_duration_seconds). Scraped from the Argo workflow-controller by the
-# platform Prometheus; Langfuse covers LLM-level cost/trace drill-down.
+# df_run_duration_seconds). A headless annotated Service (70-metrics-service) exposes
+# the Argo workflow-controller :9090/metrics so the platform's AMP scraper
+# (kubernetes-service-endpoints job, prometheus.io/scrape) picks it up. A
+# GrafanaDashboard CR (71-grafana-dashboard) renders the Dark Factory dashboard via
+# grafana-operator (same pattern as the agent-platform-* dashboards).
 metrics:
   enabled: true
+  grafana:
+    # grafana-operator watches this namespace for GrafanaDashboard CRs.
+    namespace: grafana-operator
+    # Which Grafana instance to import into + folder (matches agent-platform-* CRs).
+    instanceSelector:
+      dashboards: external-grafana
+    folder: "Agent Platform"
 
 # ── P4: Reaper CronJob ───────────────────────────────────────────────────────
 # Crash-net for teardown: sweeps stale ephemeral deploy-test namespaces and
