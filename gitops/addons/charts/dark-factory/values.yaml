@@ -107,21 +107,29 @@ iterate:
   enabled: true
   maxIterations: 3
 
-# ── P4: Conditional deploy-test ──────────────────────────────────────────────
-# For PRs that touch deployable artifacts, a TRUSTED hub step deploys the PR into
-# an ephemeral namespace, probes it, and tears it down (docs §9 / diagram B.4).
-# This is the ONLY step that holds K8s access — never the untrusted coder. Gated
-# by detect-deployable (greps the diff for deployablePatterns); advisory in v1.
+# ── P4: Conditional deploy-test (content-aware) ──────────────────────────────
+# For PRs that touch deployable artifacts, a TRUSTED hub step validates the change
+# with the RIGHT tool for the artifact type (docs §9 / diagram B.4). This is the
+# only step that holds K8s access — never the untrusted coder. detect-deployable
+# classifies the change and emits kind = k8s | terraform | none:
+#   - k8s       → deploy into an ephemeral namespace, wait Ready, teardown (trap).
+#   - terraform → terraform init -backend=false && terraform validate (+ fmt check).
+#                 Validation only — no AWS creds, no apply (no real infra created).
+# deploy-test runs only when kind != none; advisory in v1.
 deployTest:
   enabled: true
-  # Regex (grep -E) of changed-file paths that make a PR "deployable".
-  deployablePatterns: "(Chart\\.yaml|/templates/|k8s/|deployment\\.ya?ml|Dockerfile)"
-  # Where the applyable manifests live in the repo (dir or file). If absent, the
-  # step logs "nothing to deploy" and passes (advisory).
-  manifestPath: "k8s/"
-  # kubectl-capable image (alpine/k8s bundles kubectl + adds git/node at start).
-  image: alpine/k8s:1.31.0
-  # Overall step deadline and the per-workload readiness wait.
+  # Regex (grep -E) of changed files that mark each artifact kind. k8s takes
+  # precedence when a PR touches both.
+  k8sPatterns: "(Chart\\.yaml|/templates/|k8s/|deployment\\.ya?ml|Dockerfile)"
+  terraformPatterns: "\\.tf$"
+  # Where each kind's files live in the repo (dir or file). If absent, the step
+  # logs "nothing to test" and passes (advisory).
+  manifestPath: "k8s/"        # k8s apply target
+  terraformPath: "."          # terraform working dir (repo root by default)
+  # Purpose-built image with kubectl + terraform + node + git + curl (content-aware
+  # deploy-test needs both toolchains). Built from examples/dark-factory/deploy-test.
+  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0
+  # Overall step deadline and the per-workload readiness wait (k8s only).
   timeoutSeconds: 600
   readyTimeoutSeconds: 120
   # Advisory in v1 — posts dark-factory/deploy-test but never fails the run.

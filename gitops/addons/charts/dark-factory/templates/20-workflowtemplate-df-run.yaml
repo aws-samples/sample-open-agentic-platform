@@ -129,13 +129,17 @@ spec:
             template: detect-deployable
             dependencies: [drive-coder]
             when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
-          # P4 — deploy-test: THE ONLY step that holds K8s access. Deploys the PR
-          # into an ephemeral namespace, probes it, tears it down. Runs only when
-          # the diff is deployable (Chart.yaml / k8s manifests / Dockerfile).
+          # P4 — deploy-test: THE ONLY step that holds K8s access. Content-aware:
+          # k8s → ephemeral-namespace apply+probe+teardown; terraform → init+validate.
+          # Runs only when detect classified the change (kind != none).
           - name: deploy-test
             template: deploy-test
             dependencies: [detect-deployable]
-            when: "{{`{{tasks.detect-deployable.outputs.parameters.deployable}}`}} == true"
+            when: "{{`{{tasks.detect-deployable.outputs.parameters.kind}}`}} != none"
+            arguments:
+              parameters:
+                - name: kind
+                  value: "{{`{{tasks.detect-deployable.outputs.parameters.kind}}`}}"
 {{- end }}
           - name: status
             template: sticky-status
@@ -421,6 +425,9 @@ spec:
           - name: review-script
             mountPath: /review/review.js
             subPath: review.js
+          - name: review-script
+            mountPath: /review/comment.js
+            subPath: comment.js
         source: |
           set -eu
           ROLE="{{`{{inputs.parameters.role}}`}}"
@@ -461,6 +468,12 @@ spec:
               req.write(body);req.end();
             })();
           ' || true
+
+          # Post the full findings to the PR as a marker comment (edited in place).
+          PR="$(node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].number||"")}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
+          if [ -n "$PR" ] && [ -f /tmp/review-${ROLE}.md ]; then
+            GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /review/comment.js "dark-factory:review-${ROLE}" < /tmp/review-${ROLE}.md
+          fi
           # Advisory in v1: exit 0 unless review.blockSeverity made review.js exit non-zero.
           exit ${RC}
       outputs:
@@ -493,8 +506,10 @@ spec:
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
           - name: BASE
             value: "{{`{{workflow.parameters.base-branch}}`}}"
-          - name: PATTERNS
-            value: {{ .Values.deployTest.deployablePatterns | quote }}
+          - name: K8S_PATTERNS
+            value: {{ .Values.deployTest.k8sPatterns | quote }}
+          - name: TF_PATTERNS
+            value: {{ .Values.deployTest.terraformPatterns | quote }}
         source: |
           set -eu
           FILES="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BASE="$BASE" BRANCH="$BRANCH" node -e '
@@ -504,26 +519,43 @@ spec:
               r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{const j=JSON.parse(b);(j.files||[]).forEach(f=>console.log(f.filename));}catch(e){process.exit(0);}});}).on("error",()=>process.exit(0));
           ')"
           echo "[detect] changed files:"; echo "$FILES" | sed 's/^/  /'
-          if echo "$FILES" | grep -qE "$PATTERNS"; then echo true > /tmp/deployable; else echo false > /tmp/deployable; fi
-          echo "[detect] deployable=$(cat /tmp/deployable)"
+          # Classify: k8s takes precedence over terraform when both are present.
+          if echo "$FILES" | grep -qE "$K8S_PATTERNS"; then KIND=k8s
+          elif echo "$FILES" | grep -qE "$TF_PATTERNS"; then KIND=terraform
+          else KIND=none; fi
+          echo "$KIND" > /tmp/kind
+          echo "[detect] kind=$KIND"
       outputs:
         parameters:
-          - name: deployable
+          - name: kind
             valueFrom:
-              path: /tmp/deployable
-              default: "false"
+              path: /tmp/kind
+              default: "none"
 
-    # ---- 2e. deploy-test (P4) — THE ONLY step with K8s access ----
-    # Trusted hub step: creates an ephemeral namespace, applies the PR's rendered
-    # manifests, waits for the workload to become Ready, probes it, and tears the
-    # namespace down (always, via a trap). Posts dark-factory/deploy-test. Advisory
-    # in v1 (deployTest.blocking=false → never fails the run). The untrusted coder
-    # never has this access — it only produces the manifests; this step runs them.
+    # ---- 2e. deploy-test (P4) — content-aware; THE ONLY step with K8s access ----
+    # Trusted hub step. Validates the change with the RIGHT tool for its kind:
+    #   kind=k8s       → ephemeral namespace apply + wait Ready + teardown (trap).
+    #   kind=terraform → terraform init -backend=false + validate (+ fmt check).
+    #                    Validation only — NO AWS creds, NO apply (no real infra).
+    # Posts the dark-factory/deploy-test commit status AND a marker PR comment with
+    # the details. Advisory in v1 (deployTest.blocking=false). The untrusted coder
+    # never has K8s access — it only produces the artifacts; this step runs them.
     - name: deploy-test
+      inputs:
+        parameters:
+          - name: kind
       activeDeadlineSeconds: {{ .Values.deployTest.timeoutSeconds }}
+      volumes:
+        - name: review-script
+          configMap:
+            name: df-review
       script:
         image: {{ .Values.deployTest.image }}
         command: [bash]
+        volumeMounts:
+          - name: review-script
+            mountPath: /review/comment.js
+            subPath: comment.js
         env:
           - name: GH_TOKEN
             valueFrom:
@@ -536,55 +568,98 @@ spec:
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
           - name: ISSUE_NUMBER
             value: "{{`{{workflow.parameters.issue-number}}`}}"
+          - name: KIND
+            value: "{{`{{inputs.parameters.kind}}`}}"
           - name: MANIFEST_PATH
             value: {{ .Values.deployTest.manifestPath | quote }}
+          - name: TF_PATH
+            value: {{ .Values.deployTest.terraformPath | quote }}
           - name: READY_TIMEOUT
             value: {{ .Values.deployTest.readyTimeoutSeconds | quote }}
           - name: BLOCKING
             value: {{ .Values.deployTest.blocking | quote }}
         source: |
           set -eu
-          command -v git >/dev/null 2>&1 || apk add --no-cache git >/dev/null 2>&1
-          NS="df-test-{{`{{workflow.parameters.issue-number}}`}}-{{`{{workflow.name}}`}}"
-          NS="$(echo "$NS" | tr '[:upper:]' '[:lower:]' | cut -c1-63)"
-          cleanup() { echo "[deploy-test] tearing down namespace $NS"; kubectl delete namespace "$NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
           WORK=/tmp/dt; rm -rf "$WORK"; mkdir -p "$WORK"
           git clone --quiet --depth 1 --branch "$BRANCH" \
             "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK/repo"
           cd "$WORK/repo"
-          STATE=success; DESC="deploy-test passed"
-          RC=0
-          if [ ! -e "$MANIFEST_PATH" ]; then
-            echo "[deploy-test] no manifests at '$MANIFEST_PATH' — nothing to deploy (skip, advisory)"
-            STATE=success; DESC="no deployable manifests at $MANIFEST_PATH"
-          else
-            echo "[deploy-test] creating ephemeral namespace $NS + applying $MANIFEST_PATH"
-            kubectl create namespace "$NS" >/dev/null 2>&1 || true
-            kubectl label namespace "$NS" dark-factory.io/ephemeral=true dark-factory.io/issue-number="$ISSUE_NUMBER" --overwrite >/dev/null 2>&1 || true
-            if kubectl apply -n "$NS" -f "$MANIFEST_PATH" >/tmp/apply.log 2>&1; then
-              cat /tmp/apply.log
-              echo "[deploy-test] waiting up to ${READY_TIMEOUT}s for workloads to become Ready..."
-              if kubectl wait -n "$NS" --for=condition=Available --timeout="${READY_TIMEOUT}s" deploy --all >/dev/null 2>&1; then
-                echo "[deploy-test] all Deployments Available"
+          STATE=success; DESC="deploy-test passed"; RC=0; DETAIL=""
+
+          if [ "$KIND" = "terraform" ]; then
+            # ---- Terraform: init (no backend) + validate + fmt check. No creds. ----
+            cd "$TF_PATH"
+            echo "[deploy-test] terraform validate in $(pwd) ($(terraform version | head -1))"
+            if terraform init -backend=false -input=false -no-color >/tmp/tf.log 2>&1; then
+              if terraform validate -no-color >>/tmp/tf.log 2>&1; then
+                FMT="$(terraform fmt -check -recursive -no-color 2>/dev/null || true)"
+                echo "[deploy-test] terraform validate OK"
+                STATE=success; DESC="terraform validate passed"
+                DETAIL="\`terraform init -backend=false\` + \`validate\` passed."
+                [ -n "$FMT" ] && DETAIL="${DETAIL} (fmt: $(echo "$FMT" | wc -l | tr -d ' ') file(s) not formatted)"
               else
-                # No Deployments, or not all Available — check pods didn't crashloop.
-                BAD="$(kubectl get pods -n "$NS" --no-headers 2>/dev/null | grep -cE 'CrashLoopBackOff|Error|ImagePullBackOff' || true)"
-                if [ "${BAD:-0}" != "0" ]; then STATE=failure; DESC="deploy-test: ${BAD} pod(s) not healthy"; RC=1; fi
+                echo "[deploy-test] terraform validate FAILED"; tail -30 /tmp/tf.log
+                STATE=failure; DESC="terraform validate failed"; RC=1
+                DETAIL="\`terraform validate\` failed:
+          \`\`\`
+          $(tail -20 /tmp/tf.log)
+          \`\`\`"
               fi
             else
-              cat /tmp/apply.log; STATE=failure; DESC="deploy-test: kubectl apply failed"; RC=1
+              echo "[deploy-test] terraform init FAILED"; tail -30 /tmp/tf.log
+              STATE=failure; DESC="terraform init failed"; RC=1
+              DETAIL="\`terraform init\` failed:
+          \`\`\`
+          $(tail -20 /tmp/tf.log)
+          \`\`\`"
+            fi
+            cd "$WORK/repo"
+
+          else
+            # ---- Kubernetes: ephemeral namespace apply + readiness + teardown ----
+            NS="df-test-${ISSUE_NUMBER}-{{`{{workflow.name}}`}}"
+            NS="$(echo "$NS" | tr '[:upper:]' '[:lower:]' | cut -c1-63)"
+            cleanup() { echo "[deploy-test] tearing down namespace $NS"; kubectl delete namespace "$NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+            trap cleanup EXIT
+            if [ ! -e "$MANIFEST_PATH" ]; then
+              echo "[deploy-test] no manifests at '$MANIFEST_PATH' — nothing to deploy (advisory)"
+              STATE=success; DESC="no manifests at $MANIFEST_PATH"; DETAIL="No manifests found at \`$MANIFEST_PATH\`."
+            else
+              echo "[deploy-test] ephemeral namespace $NS + apply $MANIFEST_PATH"
+              kubectl create namespace "$NS" >/dev/null 2>&1 || true
+              kubectl label namespace "$NS" dark-factory.io/ephemeral=true dark-factory.io/issue-number="$ISSUE_NUMBER" --overwrite >/dev/null 2>&1 || true
+              if kubectl apply -n "$NS" -f "$MANIFEST_PATH" >/tmp/apply.log 2>&1; then
+                cat /tmp/apply.log
+                echo "[deploy-test] waiting up to ${READY_TIMEOUT}s for workloads Available..."
+                if kubectl wait -n "$NS" --for=condition=Available --timeout="${READY_TIMEOUT}s" deploy --all >/dev/null 2>&1; then
+                  echo "[deploy-test] all Deployments Available"; DETAIL="Deployed to an ephemeral namespace; all Deployments became Available."
+                else
+                  BAD="$(kubectl get pods -n "$NS" --no-headers 2>/dev/null | grep -cE 'CrashLoopBackOff|Error|ImagePullBackOff' || true)"
+                  if [ "${BAD:-0}" != "0" ]; then STATE=failure; DESC="deploy-test: ${BAD} pod(s) not healthy"; RC=1; DETAIL="${BAD} pod(s) not healthy after apply."; fi
+                fi
+              else
+                cat /tmp/apply.log; STATE=failure; DESC="kubectl apply failed"; RC=1
+                DETAIL="\`kubectl apply\` failed:
+          \`\`\`
+          $(tail -20 /tmp/apply.log)
+          \`\`\`"
+              fi
             fi
           fi
 
           SHA="$(git rev-parse HEAD)"
-          # alpine/k8s bundles curl; post the deploy-test commit status with it.
-          command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null 2>&1
+          # 1) commit status
           curl -fsS -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${REPO}/statuses/${SHA}" \
             -d "{\"state\":\"${STATE}\",\"context\":\"dark-factory/deploy-test\",\"description\":\"${DESC}\"}" >/dev/null 2>&1 \
-            && echo "[deploy-test] posted dark-factory/deploy-test=${STATE}: ${DESC}" \
-            || echo "[deploy-test] WARN: status post failed (non-fatal)"
+            && echo "[deploy-test] posted dark-factory/deploy-test=${STATE}" || echo "[deploy-test] WARN: status post failed"
+          # 2) findings PR comment (marker-based upsert via comment.js)
+          ICON=$([ "$STATE" = success ] && echo "✅" || echo "❌")
+          PR="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/${REPO}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s)[0].number||"")}catch(e){}})' 2>/dev/null || echo "")
+          if [ -n "$PR" ]; then
+            printf '### %s Deploy test (%s)\n**%s**\n\n%s\n' "$ICON" "$KIND" "$DESC" "$DETAIL" \
+              | GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /review/comment.js "dark-factory:deploy-test"
+          fi
           if [ "$BLOCKING" = "true" ]; then exit $RC; else exit 0; fi
 {{- end }}
 
