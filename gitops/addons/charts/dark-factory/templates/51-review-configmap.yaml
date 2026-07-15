@@ -1,0 +1,17 @@
+{{- /*
+Review script (P3) — the shared Security/DevOps reviewer, in a ConfigMap in the
+argo namespace, mounted only into the hub-side review steps. Read-only on the
+coder's diff; never runs in the Kata VM. One script, parameterized by ROLE.
+*/ -}}
+{{- if .Values.review.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: df-review
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+data:
+  review.js: |
+{{ .Files.Get "review/review.js" | indent 4 }}
+{{- end }}
