@@ -24,3 +24,5 @@ data:
 {{ .Files.Get "review/iterate.js" | indent 4 }}
   comment.js: |
 {{ .Files.Get "review/comment.js" | indent 4 }}
+  deploy-test.sh: |
+{{ .Files.Get "review/deploy-test.sh" | indent 4 }}
