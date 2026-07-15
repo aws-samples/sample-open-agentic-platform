@@ -61,6 +61,25 @@ spec:
               parameters:
                 - name: sandbox
                   value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+{{- if .Values.holdout.enabled }}
+          # P2 — holdout gate: hub-side eval of the coder's PR against hidden
+          # scenarios + a different-family judge. Runs only once a PR exists.
+          - name: holdout-gate
+            template: holdout-gate
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: pr-number
+                  value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
+          - name: status
+            template: sticky-status
+            dependencies: [holdout-gate]
+            arguments:
+              parameters:
+                - name: phase
+                  value: "pr-open"
+{{- else }}
           - name: status
             template: sticky-status
             dependencies: [drive-coder]
@@ -68,6 +87,7 @@ spec:
               parameters:
                 - name: phase
                   value: "pr-open"
+{{- end }}
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
@@ -160,6 +180,129 @@ spec:
             valueFrom:
               path: /tmp/pr
               default: ""
+
+{{- if .Values.holdout.enabled }}
+    # ---- 2b. Holdout gate (P2) — train/test separation for code ----
+    # Runs on the HUB (a trusted step, NOT the Kata VM). Checks out the coder's
+    # PR branch, diffs it vs base, then runs evaluate.js: each hidden scenario
+    # gets its executable test run against the built code AND a different-family
+    # judge (Nova) vote (2-of-3). Gate = passRatio >= threshold. The hidden
+    # scenarios come from the df-holdout-* ConfigMaps mounted here — they are
+    # NEVER mounted into the sandbox, so the coder cannot see or edit them.
+    # v1 is advisory: the gate result is posted as the dark-factory/holdout commit
+    # status; the workflow only fails on a red gate when holdout.blocking=true.
+    - name: holdout-gate
+      inputs:
+        parameters:
+          - name: pr-number
+      activeDeadlineSeconds: 900
+      volumes:
+        - name: holdout-eval
+          configMap:
+            name: df-holdout-eval
+        {{- range $repo := .Values.trigger.argoEvents.repositories }}
+        {{- range $name := $repo.names }}
+        - name: holdout-{{ printf "%s-%s" $repo.owner $name | lower }}
+          configMap:
+            name: df-holdout-{{ printf "%s-%s" $repo.owner $name | lower }}
+        {{- end }}
+        {{- end }}
+      script:
+        image: {{ .Values.holdout.evalImage }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+          - name: BIFROST_URL
+            value: {{ .Values.holdout.bifrostUrl | quote }}
+          - name: JUDGE_MODEL
+            value: {{ .Values.holdout.judgeModel | quote }}
+          - name: JUDGE_RUNS
+            value: {{ .Values.holdout.judgeRuns | quote }}
+          - name: JUDGE_QUORUM
+            value: {{ .Values.holdout.judgeQuorum | quote }}
+          - name: THRESHOLD
+            value: {{ .Values.holdout.threshold | quote }}
+        volumeMounts:
+          - name: holdout-eval
+            mountPath: /holdout/evaluate.js
+            subPath: evaluate.js
+          {{- range $repo := .Values.trigger.argoEvents.repositories }}
+          {{- range $name := $repo.names }}
+          - name: holdout-{{ printf "%s-%s" $repo.owner $name | lower }}
+            mountPath: /holdout/{{ printf "%s-%s" $repo.owner $name }}
+          {{- end }}
+          {{- end }}
+        source: |
+          set -eu
+          REPO="{{`{{workflow.parameters.repo}}`}}"
+          BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          BASE="{{`{{workflow.parameters.base-branch}}`}}"
+          SLUG="$(echo "${REPO}" | tr '/' '-')"
+          API="https://api.github.com/repos/${REPO}"
+          WORK=/tmp/holdout-work
+          rm -rf "${WORK}"; mkdir -p "${WORK}"
+          echo "[holdout] cloning ${REPO}@${BRANCH} for evaluation..."
+          git clone --quiet --branch "${BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${WORK}/repo"
+          cd "${WORK}/repo"
+          # Diff vs base for the judge (fetch base if the shallow clone lacks it).
+          git fetch --quiet --depth 1 origin "${BASE}" || true
+          git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || git diff HEAD~1 > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch
+          # Build/install so executable tests can require the module.
+          if [ -f package.json ]; then npm install --no-audit --no-fund >/dev/null 2>&1 || true; fi
+          SHA="$(git rev-parse HEAD)"
+
+          SCEN="/holdout/${SLUG}/scenarios.json"
+          if [ ! -f "${SCEN}" ]; then
+            echo "[holdout] no hidden scenarios for ${SLUG} — skipping gate (advisory)."
+            exit 0
+          fi
+
+          echo "[holdout] evaluating against hidden scenarios..."
+          set +e
+          REPO_DIR="${WORK}/repo" DIFF=/tmp/diff.patch SCENARIOS="${SCEN}" \
+            OUT=/tmp/holdout-result.json node /holdout/evaluate.js
+          GATE=$?
+          set -e
+
+          RATIO="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(Math.round(r.ratio*100))' 2>/dev/null || echo 0)"
+          PASSED="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(r.passed+"/"+r.total)' 2>/dev/null || echo '?/?')"
+          if [ "${GATE}" -eq 0 ]; then STATE=success; DESC="holdout ${PASSED} (${RATIO}%) — gate passed"; else STATE=failure; DESC="holdout ${PASSED} (${RATIO}%) — below threshold"; fi
+
+          # Post the holdout verdict as a commit status on the PR head SHA. The
+          # coder image has no curl, so use node's https (always present). Retry
+          # transient failures so a blip doesn't drop the verdict.
+          GH_TOKEN="${GH_TOKEN}" REPO="${REPO}" SHA="${SHA}" STATE="${STATE}" DESC="${DESC}" node -e '
+            const https=require("https");
+            const body=JSON.stringify({state:process.env.STATE,context:"dark-factory/holdout",description:process.env.DESC});
+            let n=0;
+            (function post(){
+              const req=https.request({host:"api.github.com",method:"POST",path:"/repos/"+process.env.REPO+"/statuses/"+process.env.SHA,
+                headers:{"User-Agent":"dark-factory-holdout","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json","Content-Type":"application/json","Content-Length":Buffer.byteLength(body)}},
+                r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{if(r.statusCode>=300&&r.statusCode<500){console.error("status post "+r.statusCode+": "+b.slice(0,120))}else if(r.statusCode>=500&&++n<4){setTimeout(post,500*n);return} console.log("[holdout] posted dark-factory/holdout="+process.env.STATE)});});
+              req.on("error",e=>{if(++n<4){setTimeout(post,500*n)}else{console.error("status post error: "+e.message)}});
+              req.write(body);req.end();
+            })();
+          ' || true
+
+          {{- if .Values.holdout.blocking }}
+          echo "[holdout] blocking mode — gate result gates the workflow."
+          exit ${GATE}
+          {{- else }}
+          echo "[holdout] advisory mode — gate result reported, workflow continues."
+          exit 0
+          {{- end }}
+      outputs:
+        parameters:
+          - name: ratio
+            valueFrom:
+              path: /tmp/holdout-result.json
+              default: "{}"
+{{- end }}
 
     # ---- 3. Sticky status (workflow-side backstop; the coder posts primary) ----
     - name: sticky-status
