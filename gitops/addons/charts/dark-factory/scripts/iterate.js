@@ -14,7 +14,7 @@
 const fs = require("fs");
 const https = require("https");
 
-const { GH_TOKEN, REPO, PR, COMMENT_BODY, ARGO_NAMESPACE } = process.env;
+const { GH_TOKEN, REPO, PR, COMMENT_BODY, COMMENT_AUTHOR, ARGO_NAMESPACE } = process.env;
 const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || "3", 10);
 const GH = { "User-Agent": "dark-factory-iterate", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 const ITER_LABEL_PREFIX = "df-iterations/";
@@ -59,9 +59,20 @@ async function main() {
   // 3 commits + split statuses on one issue). All factory-authored comments carry a
   // "dark-factory:" HTML marker; skip any comment that has one.
   if (COMMENT_BODY && /<!--\s*dark-factory:/.test(COMMENT_BODY)) {
-    console.log("[df-iterate] comment is a Dark Factory automated comment (marker present) — skipping (no self-trigger)");
+    console.log("[df-iterate] comment carries a Dark Factory marker — skipping (no self-trigger)");
     return;
   }
+  // Second, IDENTITY-based guard (airtight): the factory posts comments as the
+  // token owner. If the comment author IS that identity, it's the factory talking
+  // to itself → skip. Catches any factory comment even if it lacks a marker. A real
+  // human reviewer is necessarily a different login.
+  try {
+    const me = await gh("GET", "/user");
+    if (COMMENT_AUTHOR && me.login && COMMENT_AUTHOR === me.login) {
+      console.log(`[df-iterate] comment author (${COMMENT_AUTHOR}) is the factory identity — skipping (no self-trigger)`);
+      return;
+    }
+  } catch { /* if /user fails, fall back to the marker guard above */ }
   const pr = await gh("GET", `/repos/${REPO}/pulls/${PR}`);
   if (pr.state !== "open") { console.log(`[df-iterate] PR #${PR} is ${pr.state} — skipping`); return; }
   const ref = pr.head.ref;                       // df/issue-<n>

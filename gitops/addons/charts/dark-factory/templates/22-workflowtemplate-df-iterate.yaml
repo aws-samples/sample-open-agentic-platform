@@ -32,6 +32,8 @@ spec:
       - name: pr-number
       - name: comment-body
       - name: comment-id
+      - name: comment-author
+        value: ""
   ttlStrategy:
     secondsAfterCompletion: 3600
   templates:
@@ -64,6 +66,8 @@ spec:
             value: "{{`{{workflow.parameters.pr-number}}`}}"
           - name: COMMENT_BODY
             value: "{{`{{workflow.parameters.comment-body}}`}}"
+          - name: COMMENT_AUTHOR
+            value: "{{`{{workflow.parameters.comment-author}}`}}"
           - name: MAX_ITERATIONS
             value: {{ .Values.iterate.maxIterations | quote }}
           - name: ARGO_NAMESPACE

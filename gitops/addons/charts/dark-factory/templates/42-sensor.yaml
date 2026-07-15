@@ -254,6 +254,7 @@ spec:
                     - name: pr-number
                     - name: comment-body
                     - name: comment-id
+                    - name: comment-author
           parameters:
             - src:
                 dependencyName: pr-commented
@@ -275,5 +276,9 @@ spec:
                 dependencyName: pr-commented
                 dataKey: body.comment.id
               dest: spec.arguments.parameters.3.value
+            - src:
+                dependencyName: pr-commented
+                dataKey: body.comment.user.login
+              dest: spec.arguments.parameters.4.value
 {{- end }}
 {{- end }}
