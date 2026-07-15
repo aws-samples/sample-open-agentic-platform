@@ -93,6 +93,28 @@ spec:
             type: string
             # Only Dark Factory branches (df/issue-<n>); string values are regex.
             value: ["df/issue-.*"]
+{{- if .Values.iterate.enabled }}
+    - name: pr-commented
+      eventSourceName: dark-factory-github
+      eventName: dark-factory
+      filters:
+        data:
+          # A human commented on a PR → bounded df-iterate. issue_comment fires for
+          # both issues and PRs; require the PR link and exclude Bot comments so the
+          # factory's own sticky/status comments never self-trigger a loop.
+          - path: headers.X-Github-Event
+            type: string
+            value: ["issue_comment"]
+          - path: body.action
+            type: string
+            value: ["created"]
+          - path: body.issue.pull_request.url
+            type: string
+            value: ["https://.*"]
+          - path: body.comment.user.type
+            type: string
+            value: ["User"]
+{{- end }}
   triggers:
     - template:
         name: submit-df-run
@@ -202,4 +224,50 @@ spec:
                 dependencyName: pr-approved
                 dataKey: body.pull_request.number
               dest: spec.arguments.parameters.2.value
+{{- if .Values.iterate.enabled }}
+    # ---- PR comment → df-iterate (bounded revision loop) ----
+    - template:
+        name: submit-df-iterate
+        conditions: "pr-commented"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                # Dedup per comment id so a duplicate webhook is a no-op.
+                name: df-iterate-pending
+                namespace: {{ .Values.argo.namespace }}
+              spec:
+                workflowTemplateRef:
+                  name: df-iterate
+                arguments:
+                  parameters:
+                    - name: repo
+                    - name: pr-number
+                    - name: comment-body
+                    - name: comment-id
+          parameters:
+            - src:
+                dependencyName: pr-commented
+                dataTemplate: "df-iterate-{{ `{{ .Input.body.comment.id | int64 }}` }}"
+              dest: metadata.name
+            - src:
+                dependencyName: pr-commented
+                dataKey: body.repository.full_name
+              dest: spec.arguments.parameters.0.value
+            - src:
+                dependencyName: pr-commented
+                dataKey: body.issue.number
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: pr-commented
+                dataKey: body.comment.body
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: pr-commented
+                dataKey: body.comment.id
+              dest: spec.arguments.parameters.3.value
+{{- end }}
 {{- end }}

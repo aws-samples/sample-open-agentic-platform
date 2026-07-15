@@ -97,6 +97,16 @@ review:
   # Reuse the coder image (has node + npm audit + git).
   reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.10
 
+# ── P3b: Iterate on PR comment ───────────────────────────────────────────────
+# A human comment on a Dark Factory PR routes back to the coder as a revision
+# request (docs §8). df-iterate resolves the PR → df/issue-<n>, then re-submits
+# df-run with iterate-note = the comment (coder appends it to SPEC.md and revises
+# the existing branch). Bounded to maxIterations rounds (label counter on the PR);
+# past the cap, a human breaks the tie.
+iterate:
+  enabled: true
+  maxIterations: 3
+
 # Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
   argoEvents:
