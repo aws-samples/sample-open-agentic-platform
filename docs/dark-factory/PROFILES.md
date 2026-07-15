@@ -1,8 +1,10 @@
 # Dark Factory — Profiles (generic infra + app support)
 
-> **Status:** design (targeting implementation). Terraform and Kubernetes verification
-> are already built; this doc defines the **profile abstraction** that generalizes the
-> pipeline to any stack (infra *and* app microservices) without new pipeline code.
+> **Status:** ✅ **built** (terraform + node profiles). The profile abstraction generalizes the
+> pipeline to any stack (infra *and* app microservices) without new pipeline code. Adding a
+> language is a `stackProfiles:` values entry (+ a coder image with the toolchain if needed).
+> **Note:** the profile NAME is resolved in the `resolve-profile` step by reading the issue's
+> `dark-factory-<name>` label via the GitHub API (robust) — not by parsing the webhook in the Sensor.
 
 ## The problem
 
