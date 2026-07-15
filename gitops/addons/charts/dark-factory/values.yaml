@@ -42,6 +42,35 @@ maxConcurrentRuns: 3
 # Safety-net TTL on a SandboxClaim (reaper backstop if teardown never runs).
 claimTtlSeconds: 10800
 
+# ── P2: Holdout gate ─────────────────────────────────────────────────────────
+# Train/test separation for code (docs/dark-factory §6.1). Hidden BDD scenarios
+# + executable tests the coder NEVER sees are stored in a ConfigMap ON THE HUB
+# (rendered from holdout/<repo>/ below). A hub-side eval step (NOT the Kata VM)
+# checks out the coder's df/issue-N branch, runs the hidden executable tests, and
+# asks a DIFFERENT-FAMILY LLM judge (Nova, vs the coder's Claude — defeats
+# self-preference bias) whether each plain-English scenario is satisfied. A
+# scenario PASSES iff its executable test is green AND the judge says yes >=2/3
+# runs. Gate = passRatio >= threshold. The coder is credential-less to the k8s
+# API and never clones the holdout path, so it provably cannot read or edit it.
+holdout:
+  enabled: true
+  # Fraction of scenarios that must pass for the gate to be green.
+  threshold: 0.90
+  # 2-of-3 majority per scenario smooths judge non-determinism.
+  judgeRuns: 3
+  judgeQuorum: 2
+  # The judge model — MUST be a different family than the coder (claude-sonnet).
+  # Bifrost passes Bedrock model IDs through directly (models: ["*"]); verified
+  # us.amazon.nova-pro-v1:0 → 200 on /anthropic.
+  judgeModel: us.amazon.nova-pro-v1:0
+  # Bifrost gateway the judge reaches (ClusterIP — same reason as the coder).
+  bifrostUrl: http://172.20.181.17:8080
+  # v1: report-only (advisory). Set true to make a failed gate fail the workflow.
+  blocking: false
+  # Node image for the eval step: needs git + node + the languages the executable
+  # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.8
+
 # Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
   argoEvents:
