@@ -390,35 +390,48 @@ retention caveat to clear before enabling.
 
 ---
 
-## 7. Live status in the PR
+## 7. Live status in the PR  ✅ *built*
 
-The human **watches the factory work** (the Gas City idea) through **one sticky PR comment** the
-workflow edits in place — no comment spam, one canonical surface (the pattern Copilot, Devin, and
-Factory all converge on).
+The human **watches the factory work** through **two coordinated surfaces on the PR** — no comment
+spam, one canonical board.
 
+**1. Commit statuses = the live check surface (per-step, verifiable).** Each step posts a GitHub
+**commit status** on the PR head SHA as it finishes — the coder posts `dark-factory/implementation`,
+and the hub-side verify steps post `dark-factory/{holdout,security,devops}`. These render as the PR's
+**Checks** and roll up into a single combined state. Because they're pinned to the exact SHA, they're
+tamper-evident evidence, not prose.
+
+**2. The PR body = the one sticky status board (marker-managed).** The coder opens the PR with a
+`<!-- dark-factory:status -->` marker block; since it opens the PR *before* verification runs, it can
+only mark the checks **running**:
+
+```markdown
+### 🏭 Dark Factory — verification
+- ✅ Build + unit tests: implemented, built + tests green
+- ⏳ Holdout gate: running…
+- ⏳ Security review: running…
+- ⏳ DevOps review: running…
 ```
-## 🏭 Dark Factory — issue #42
-✅ Claimed sandbox (hub)            12:01
-✅ Branch df/issue-42               12:01
-✅ Implement                        12:04
-✅ Build + unit tests               12:07   📄 log
-✅ PR opened  #128                  12:07
-⏳ Security review…
-⬜ DevOps review
-⬜ Holdout gate (0/12)
-⬜ Ready for review
+
+The workflow's **`sticky-status` step** (`review/status.js`) runs *after* every verify step, reads
+the authoritative `dark-factory/*` commit statuses back from GitHub, and **rewrites the marker block
+in place** with the real verdicts + overall state:
+
+```markdown
+### 🏭 Dark Factory — verification
+- ✅ Build + unit tests: implemented, built + tests green
+- ✅ Holdout gate: holdout 4/4 (100%) — gate passed
+- ✅ Security review: security: no findings
+- ✅ DevOps review: devops: no findings
+
+_Overall: **success**. … Awaiting human review._
 ```
 
-**Two status homes, one canonical board.** Until the coder's tests are green there is no PR, so the
-pre-PR acknowledgement (claimed / branch / implementing) lives on the **issue**. Once the workflow
-opens the PR (step 4), the sticky comment moves to the **PR** and becomes the canonical board.
-
-**Single writer = the workflow.** Every stage is reported by the Argo workflow (never the coder),
-which **upserts one marker-based comment** (`<!-- dark-factory:status -->`) — edited in place. The
-parallel review steps (security ∥ devops ∥ holdout) are serialized by a **per-issue mutex** so they
-never race on the comment. Each line links to raw logs / the Argo run / the Langfuse trace
-(**verifiability-by-citation**). The PR **body** carries the final report: what changed, test
-results, holdout satisfaction %, and the Security/DevOps findings.
+**Single writer, idempotent.** Only the workflow rewrites the block (never the coder); it regenerates
+the block from the commit statuses each run, so re-runs and the per-issue mutex never produce
+duplicate or racing edits. Commit statuses are the source of truth; the body is the human-readable
+rollup. *(Future: link each line to raw logs / the Argo run / the Langfuse trace —
+verifiability-by-citation.)*
 
 ---
 
