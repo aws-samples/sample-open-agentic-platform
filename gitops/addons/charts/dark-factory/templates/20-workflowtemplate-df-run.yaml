@@ -51,6 +51,23 @@ spec:
   onExit: teardown
   ttlStrategy:
     secondsAfterCompletion: 3600
+{{- if .Values.metrics.enabled }}
+  # Success metrics (Argo-native Prometheus). Argo exposes these on the workflow
+  # controller's :9090/metrics — scraped into the platform Prometheus. Gives the
+  # GitOps-native view of the factory: throughput, outcome mix, and lead time.
+  metrics:
+    prometheus:
+      - name: df_runs_total
+        help: "Dark Factory df-run workflows by status"
+        labels:
+          - { key: status, value: "{{`{{workflow.status}}`}}" }
+        counter:
+          value: "1"
+      - name: df_run_duration_seconds
+        help: "df-run wall-clock duration (lead time proxy)"
+        gauge:
+          value: "{{`{{workflow.duration}}`}}"
+{{- end }}
   templates:
 
     # ---- DAG ----
@@ -105,16 +122,34 @@ spec:
                 - name: backend
                   value: "{{ .Values.review.devops.backend }}"
 {{- end }}
+{{- if .Values.deployTest.enabled }}
+          # P4 — detect whether the PR touches deployable artifacts (cheap grep of
+          # the diff). Its output gates the (expensive, K8s-touching) deploy-test.
+          - name: detect-deployable
+            template: detect-deployable
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+          # P4 — deploy-test: THE ONLY step that holds K8s access. Deploys the PR
+          # into an ephemeral namespace, probes it, tears it down. Runs only when
+          # the diff is deployable (Chart.yaml / k8s manifests / Dockerfile).
+          - name: deploy-test
+            template: deploy-test
+            dependencies: [detect-deployable]
+            when: "{{`{{tasks.detect-deployable.outputs.parameters.deployable}}`}} == true"
+{{- end }}
           - name: status
             template: sticky-status
             dependencies:
-              {{- if or .Values.holdout.enabled .Values.review.enabled }}
+              {{- if or .Values.holdout.enabled .Values.review.enabled .Values.deployTest.enabled }}
               {{- if .Values.holdout.enabled }}
               - holdout-gate
               {{- end }}
               {{- if .Values.review.enabled }}
               - security-review
               - devops-review
+              {{- end }}
+              {{- if .Values.deployTest.enabled }}
+              - deploy-test
               {{- end }}
               {{- else }}
               - drive-coder
@@ -434,6 +469,125 @@ spec:
             valueFrom:
               path: /tmp/review-{{`{{inputs.parameters.role}}`}}.json
               default: "{}"
+{{- end }}
+
+{{- if .Values.deployTest.enabled }}
+    # ---- 2d. detect-deployable (P4) — does the diff touch deployable artifacts? ----
+    # Cheap grep of the changed file list. Emits `deployable = true|false`, which
+    # gates the expensive deploy-test step. Uses the coder image (git + node).
+    - name: detect-deployable
+      volumes:
+        - name: review-script
+          configMap:
+            name: df-review
+      script:
+        image: {{ .Values.review.reviewImage }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+          - name: REPO
+            value: "{{`{{workflow.parameters.repo}}`}}"
+          - name: BRANCH
+            value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          - name: BASE
+            value: "{{`{{workflow.parameters.base-branch}}`}}"
+          - name: PATTERNS
+            value: {{ .Values.deployTest.deployablePatterns | quote }}
+        source: |
+          set -eu
+          WORK=/tmp/detect; rm -rf "$WORK"; mkdir -p "$WORK"
+          git clone --quiet --depth 1 --branch "$BRANCH" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK/repo"
+          cd "$WORK/repo"
+          git fetch --quiet --depth 1 origin "$BASE" || true
+          FILES="$(git diff --name-only "origin/${BASE}...HEAD" 2>/dev/null || git diff --name-only HEAD~1 2>/dev/null || echo "")"
+          echo "[detect] changed files:"; echo "$FILES" | sed 's/^/  /'
+          if echo "$FILES" | grep -qE "$PATTERNS"; then echo true > /tmp/deployable; else echo false > /tmp/deployable; fi
+          echo "[detect] deployable=$(cat /tmp/deployable)"
+      outputs:
+        parameters:
+          - name: deployable
+            valueFrom:
+              path: /tmp/deployable
+              default: "false"
+
+    # ---- 2e. deploy-test (P4) — THE ONLY step with K8s access ----
+    # Trusted hub step: creates an ephemeral namespace, applies the PR's rendered
+    # manifests, waits for the workload to become Ready, probes it, and tears the
+    # namespace down (always, via a trap). Posts dark-factory/deploy-test. Advisory
+    # in v1 (deployTest.blocking=false → never fails the run). The untrusted coder
+    # never has this access — it only produces the manifests; this step runs them.
+    - name: deploy-test
+      activeDeadlineSeconds: {{ .Values.deployTest.timeoutSeconds }}
+      script:
+        image: {{ .Values.deployTest.image }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+          - name: REPO
+            value: "{{`{{workflow.parameters.repo}}`}}"
+          - name: BRANCH
+            value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          - name: ISSUE_NUMBER
+            value: "{{`{{workflow.parameters.issue-number}}`}}"
+          - name: MANIFEST_PATH
+            value: {{ .Values.deployTest.manifestPath | quote }}
+          - name: READY_TIMEOUT
+            value: {{ .Values.deployTest.readyTimeoutSeconds | quote }}
+          - name: BLOCKING
+            value: {{ .Values.deployTest.blocking | quote }}
+        source: |
+          set -eu
+          command -v git >/dev/null 2>&1 || apk add --no-cache git >/dev/null 2>&1
+          NS="df-test-{{`{{workflow.parameters.issue-number}}`}}-{{`{{workflow.name}}`}}"
+          NS="$(echo "$NS" | tr '[:upper:]' '[:lower:]' | cut -c1-63)"
+          cleanup() { echo "[deploy-test] tearing down namespace $NS"; kubectl delete namespace "$NS" --ignore-not-found --wait=false >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          WORK=/tmp/dt; rm -rf "$WORK"; mkdir -p "$WORK"
+          git clone --quiet --depth 1 --branch "$BRANCH" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK/repo"
+          cd "$WORK/repo"
+          STATE=success; DESC="deploy-test passed"
+          RC=0
+          if [ ! -e "$MANIFEST_PATH" ]; then
+            echo "[deploy-test] no manifests at '$MANIFEST_PATH' — nothing to deploy (skip, advisory)"
+            STATE=success; DESC="no deployable manifests at $MANIFEST_PATH"
+          else
+            echo "[deploy-test] creating ephemeral namespace $NS + applying $MANIFEST_PATH"
+            kubectl create namespace "$NS" >/dev/null 2>&1 || true
+            kubectl label namespace "$NS" dark-factory.io/ephemeral=true dark-factory.io/issue-number="$ISSUE_NUMBER" --overwrite >/dev/null 2>&1 || true
+            if kubectl apply -n "$NS" -f "$MANIFEST_PATH" >/tmp/apply.log 2>&1; then
+              cat /tmp/apply.log
+              echo "[deploy-test] waiting up to ${READY_TIMEOUT}s for workloads to become Ready..."
+              if kubectl wait -n "$NS" --for=condition=Available --timeout="${READY_TIMEOUT}s" deploy --all >/dev/null 2>&1; then
+                echo "[deploy-test] all Deployments Available"
+              else
+                # No Deployments, or not all Available — check pods didn't crashloop.
+                BAD="$(kubectl get pods -n "$NS" --no-headers 2>/dev/null | grep -cE 'CrashLoopBackOff|Error|ImagePullBackOff' || true)"
+                if [ "${BAD:-0}" != "0" ]; then STATE=failure; DESC="deploy-test: ${BAD} pod(s) not healthy"; RC=1; fi
+              fi
+            else
+              cat /tmp/apply.log; STATE=failure; DESC="deploy-test: kubectl apply failed"; RC=1
+            fi
+          fi
+
+          SHA="$(git rev-parse HEAD)"
+          # alpine/k8s bundles curl; post the deploy-test commit status with it.
+          command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null 2>&1
+          curl -fsS -X POST -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/statuses/${SHA}" \
+            -d "{\"state\":\"${STATE}\",\"context\":\"dark-factory/deploy-test\",\"description\":\"${DESC}\"}" >/dev/null 2>&1 \
+            && echo "[deploy-test] posted dark-factory/deploy-test=${STATE}: ${DESC}" \
+            || echo "[deploy-test] WARN: status post failed (non-fatal)"
+          if [ "$BLOCKING" = "true" ]; then exit $RC; else exit 0; fi
 {{- end }}
 
     # ---- 3. Sticky status — rewrite the PR body from the live verdicts ----

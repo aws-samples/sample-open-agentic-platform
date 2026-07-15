@@ -47,6 +47,9 @@ async function main() {
     row("holdout", "Holdout gate"),
     row("security", "Security review"),
     row("devops", "DevOps review"),
+    // deploy-test only appears when the PR was deployable; omit the row otherwise
+    // so non-deployable PRs don't show a confusing "not run" line.
+    ...(by["dark-factory/deploy-test"] ? [row("deploy-test", "Deploy test")] : []),
     "",
     `_Overall: **${st.state}**. Autonomously implemented in a hardware-isolated Kata micro-VM; verification ran as independent hub-side steps (see the checks above). Awaiting human review._`,
   ].join("\n");
