@@ -1,10 +1,11 @@
 # Dark Factory — Autonomous Agent Coding Pattern
 
-> **Status:** Design **+ implementation**. Phases **P0–P3** are built and running on the hub, plus
-> P3b trigger-dedup and the live PR-body status (see [§12](#12-phased-delivery) for the phase table).
-> The pipeline runs hands-off end-to-end: a labeled issue → coder → holdout gate + Security/DevOps
-> reviews → PR with live status, awaiting human approval. This doc describes the architecture, the
-> reuse map onto the platform, and what remains (approve/merge/iterate lifecycle, deploy-test).
+> **Status:** Design **+ implementation**. Phases **P0–P3b** are built and running on the hub (see
+> [§12](#12-phased-delivery)). The **full event-driven lifecycle** works hands-off: a labeled issue →
+> coder → holdout gate + Security/DevOps reviews → PR with live status; a **PR comment → bounded
+> revision** (`df-iterate`); a **human approval → green-gated merge + teardown** (`df-merge-teardown`).
+> All verified end-to-end on a live cluster. This doc describes the architecture, the reuse map onto
+> the platform, and what remains (P4: conditional deploy-test + reaper + metrics; P5).
 
 A **dark factory** is a manufacturing plant that runs *with the lights off* — no humans on the
 floor, robots do everything. Applied to software: **a human writes an issue (a spec); AI agents
@@ -465,20 +466,26 @@ the hub) captures the LLM-level token/cost/latency traces for per-issue drill-do
 
 ---
 
-## 8. Human-in-the-loop & the iterative comment loop
+## 8. Human-in-the-loop & the iterative comment loop  ✅ *built (P3b)*
 
 Level 3 means the **human approves the merge** — and can steer via comments:
 
-- A PR comment (change requested) → the Argo Events Sensor submits a **`df-iterate` workflow** →
-  which **resumes the scaled-to-zero sandbox** (same retained workspace PVC, re-bound by the issue-id
-  label) → the coder applies the change → pushes → the sticky status updates.
-- **Bounded convergence:** the loop is capped at **N rounds** (the counter lives in a per-issue state
-  ConfigMap, enforced statelessly across workflows); after that a human must break the tie. Comments
-  are **batched into one agent run** (don't fire the agent per un-batched comment — it thrashes).
+- **Comment → revision (`df-iterate`).** A human comment on a Dark Factory PR fires the Argo Events
+  Sensor (`pr-commented` dependency: `issue_comment` created, on a PR, **non-bot** — so the factory's
+  own sticky/status comments can't self-trigger a loop). It submits a **`df-iterate` workflow** that
+  resolves the PR → `df/issue-<n>` → issue number, then re-submits **`df-run`** with `iterate-note` =
+  the comment. `df-run` injects it as `DF_ITERATE_NOTE`; the coder **checks out the existing branch**
+  (building on prior work — no PVC needed), appends the note to `SPEC.md`, revises, and force-pushes
+  → the same PR updates in place and re-verifies. *(Verified: "add multiply" comment → coder kept
+  `subtract` and added `multiply` in a new commit on the same branch.)*
+- **Bounded convergence:** capped at `iterate.maxIterations` rounds (default 3), tracked by a
+  `df-iterations/<n>` label on the PR (stateless across workflows); past the cap `df-iterate`
+  comments that a human must break the tie. Each revision is deduped by the comment id
+  (`df-iterate-<comment-id>`), and each round's run by `df-run-<issue>-i<round>`.
 - The agent **never self-merges**; it only pushes to its own `df/issue-<n>` branch. Merge happens
   only in the `df-merge-teardown` workflow, and *only* in response to a genuine **human PR-approval
-  event** — there is no path where the pipeline's own output produces an approval. Branch protections
-  and CI still apply.
+  event** (`pr-approved`) — there is no path where the pipeline's own output produces an approval
+  (GitHub also blocks author self-approval). Branch protections and CI still apply.
 
 ---
 
@@ -628,7 +635,7 @@ Each phase is independently valuable — if you stop after any one, you're bette
 | **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ **done** | ✅ A working autonomous-PR loop on Argo |
 | **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
 | **P3** | **Security + DevOps review steps** — parallel hub-side reviewers, `auto` backend (linters + Nova), advisory, posting `dark-factory/{security,devops}` statuses (managed AWS-Agent backend swappable in when its API lands) | ✅ **done** (advisory) | ✅ Independent review evidence — verified: clean code 0 findings; adversarial diffs correctly flagged |
-| **P3b** | **Trigger dedup** (one issue = one run) + **live PR-body status** rewrite + **`df-merge-teardown`** (human-approval → green-gated squash-merge + branch/claim teardown); *(next: `df-iterate` on PR comment — coder DF_ITERATE_NOTE support is already shipped)* | 🟡 mostly | ✅ Hands-off run + accurate PR board + approve→merge→teardown; iterate-on-comment still to wire |
+| **P3b** | **Full event-driven lifecycle**: trigger dedup (one issue = one run) + live PR-body status + **`df-merge-teardown`** (approval → green-gated squash-merge + teardown) + **`df-iterate`** (PR comment → bounded revision on the existing branch) + coder no-diff guard | ✅ **done** | ✅ Hands-off label→run→verify→PR, comment→revise, approve→merge→teardown — all verified live |
 | **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
 | **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 
