@@ -55,9 +55,10 @@ retained workspace PVC + GitHub, not a parked process.
 
 ## B.4 — The `df-run` DAG (as built) & how step-gating works
 
-This is the **implemented** pipeline (P1 + P2), with the P3/P4 steps drawn dashed so the target
-shape is legible. It answers the two questions the higher-level diagrams don't: **where each step
-runs** (trust boundary) and **how Argo decides whether a step runs** (the `when:` gate).
+This is the **implemented** pipeline (P1 + P2 holdout + P3 Security/DevOps reviewers, all solid
+emerald), with the P4 `deploy-test` steps drawn dashed so the target shape is legible. It answers the
+two questions the higher-level diagrams don't: **where each step runs** (trust boundary) and **how
+Argo decides whether a step runs** (the `when:` gate).
 
 ![Flow B — the df-run DAG as built](./img/flow-b-df-run-dag.png)
 
@@ -92,9 +93,11 @@ So "the PR touched a Deployment manifest → deploy-test runs; it only touched a
 
 **Executable tests decide; LLM/agents advise.** The holdout's hidden tests are the ground truth (a
 stub can't pass a real test); the Nova judge is a *reviewer* that catches gaming the tests can't see
-(hard-coded inputs, `return true`). The P3 Security/DevOps agents are the same shape — advisory
-reviewers, not the gate. For deploy-work, the `deploy-test` executable probes are ground truth and
-the DevOps agent is the advisory second opinion.
+(hard-coded inputs, `return true`). The **P3 Security/DevOps reviewers** are the same shape — their
+deterministic linters (secret scan, `npm audit`; Dockerfile/k8s hygiene) are the hard signal and the
+Nova reviewer is the advisory second opinion; both are read-only on the diff and post
+`dark-factory/{security,devops}` statuses (advisory in v1). For deploy-work, the `deploy-test`
+executable probes will be ground truth and the DevOps agent the advisory second opinion.
 
 ---
 
