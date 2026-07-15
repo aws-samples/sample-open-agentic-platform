@@ -49,6 +49,11 @@ spec:
   templates:
 
     # ---- DAG ----
+    # claim → coder → [ verify fan: holdout-gate ∥ security-review ∥ devops-review ]
+    # → status. Every verify step runs OUTSIDE the coder (trusted hub pod), is gated
+    # on a PR existing, and is advisory in v1 (posts a commit status; never fails the
+    # run unless its *.blocking / blockSeverity is raised). `status` waits for all
+    # enabled verify steps via its dependencies list.
     - name: main
       dag:
         tasks:
@@ -62,8 +67,7 @@ spec:
                 - name: sandbox
                   value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
 {{- if .Values.holdout.enabled }}
-          # P2 — holdout gate: hub-side eval of the coder's PR against hidden
-          # scenarios + a different-family judge. Runs only once a PR exists.
+          # P2 — holdout gate: hidden scenarios + a different-family judge.
           - name: holdout-gate
             template: holdout-gate
             dependencies: [drive-coder]
@@ -72,22 +76,48 @@ spec:
               parameters:
                 - name: pr-number
                   value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
-          - name: status
-            template: sticky-status
-            dependencies: [holdout-gate]
-            arguments:
-              parameters:
-                - name: phase
-                  value: "pr-open"
-{{- else }}
-          - name: status
-            template: sticky-status
-            dependencies: [drive-coder]
-            arguments:
-              parameters:
-                - name: phase
-                  value: "pr-open"
 {{- end }}
+{{- if .Values.review.enabled }}
+          # P3 — independent, read-only reviewers. Parallel with the holdout gate.
+          - name: security-review
+            template: review-role
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: role
+                  value: security
+                - name: backend
+                  value: "{{ .Values.review.security.backend }}"
+          - name: devops-review
+            template: review-role
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: role
+                  value: devops
+                - name: backend
+                  value: "{{ .Values.review.devops.backend }}"
+{{- end }}
+          - name: status
+            template: sticky-status
+            dependencies:
+              {{- if or .Values.holdout.enabled .Values.review.enabled }}
+              {{- if .Values.holdout.enabled }}
+              - holdout-gate
+              {{- end }}
+              {{- if .Values.review.enabled }}
+              - security-review
+              - devops-review
+              {{- end }}
+              {{- else }}
+              - drive-coder
+              {{- end }}
+            arguments:
+              parameters:
+                - name: phase
+                  value: "pr-open"
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
@@ -301,6 +331,98 @@ spec:
           - name: ratio
             valueFrom:
               path: /tmp/holdout-result.json
+              default: "{}"
+{{- end }}
+
+{{- if .Values.review.enabled }}
+    # ---- 2c. Review role (P3) — Security / DevOps, parameterized by `role` ----
+    # A trusted hub-side, READ-ONLY reviewer on the coder's diff (docs §6.2). It
+    # clones df/issue-N, diffs vs base, and runs review.js with the given role +
+    # backend (auto = deterministic linters as the hard signal + a different-family
+    # Nova LLM reviewer as advisory). Posts dark-factory/<role> commit status.
+    # Advisory in v1: only fails the workflow if review.blockSeverity is raised and
+    # a finding meets that bar. Never runs in the coder VM; the coder never grades
+    # itself (separation of concerns — anti-pattern #4).
+    - name: review-role
+      inputs:
+        parameters:
+          - name: role
+          - name: backend
+      activeDeadlineSeconds: 600
+      volumes:
+        - name: review-script
+          configMap:
+            name: df-review
+      script:
+        image: {{ .Values.review.reviewImage }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+          - name: ROLE
+            value: "{{`{{inputs.parameters.role}}`}}"
+          - name: BACKEND
+            value: "{{`{{inputs.parameters.backend}}`}}"
+          - name: BIFROST_URL
+            value: {{ .Values.review.bifrostUrl | quote }}
+          - name: REVIEW_MODEL
+            value: {{ .Values.review.reviewModel | quote }}
+          - name: BLOCK_SEVERITY
+            value: {{ .Values.review.blockSeverity | quote }}
+        volumeMounts:
+          - name: review-script
+            mountPath: /review/review.js
+            subPath: review.js
+        source: |
+          set -eu
+          ROLE="{{`{{inputs.parameters.role}}`}}"
+          REPO="{{`{{workflow.parameters.repo}}`}}"
+          BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          BASE="{{`{{workflow.parameters.base-branch}}`}}"
+          WORK=/tmp/review-${ROLE}
+          rm -rf "${WORK}"; mkdir -p "${WORK}"
+          echo "[review:${ROLE}] cloning ${REPO}@${BRANCH} (read-only review)..."
+          git clone --quiet --branch "${BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${WORK}/repo"
+          cd "${WORK}/repo"
+          git fetch --quiet --depth 1 origin "${BASE}" || true
+          git diff "origin/${BASE}...HEAD" > /tmp/diff-${ROLE}.patch 2>/dev/null || git diff HEAD~1 > /tmp/diff-${ROLE}.patch 2>/dev/null || echo "" > /tmp/diff-${ROLE}.patch
+          SHA="$(git rev-parse HEAD)"
+
+          set +e
+          REPO_DIR="${WORK}/repo" DIFF=/tmp/diff-${ROLE}.patch OUT=/tmp/review-${ROLE}.json \
+            node /review/review.js
+          RC=$?
+          set -e
+
+          TOP="$(node -e 'const r=require("/tmp/review-'"${ROLE}"'.json");console.log(r.topSeverity+" | "+r.total)' 2>/dev/null || echo 'none | 0')"
+          TOPSEV="${TOP%% *}"; NUM="${TOP##* }"
+          if [ "${RC}" -eq 0 ]; then STATE=success; else STATE=failure; fi
+          if [ "${NUM}" = "0" ]; then DESC="${ROLE}: no findings"; else DESC="${ROLE}: ${NUM} finding(s), top=${TOPSEV}"; fi
+
+          # Post dark-factory/<role> commit status (node https — no curl in image).
+          GH_TOKEN="${GH_TOKEN}" REPO="${REPO}" SHA="${SHA}" STATE="${STATE}" DESC="${DESC}" ROLE="${ROLE}" node -e '
+            const https=require("https");
+            const body=JSON.stringify({state:process.env.STATE,context:"dark-factory/"+process.env.ROLE,description:process.env.DESC});
+            let n=0;
+            (function post(){
+              const req=https.request({host:"api.github.com",method:"POST",path:"/repos/"+process.env.REPO+"/statuses/"+process.env.SHA,
+                headers:{"User-Agent":"dark-factory-review","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json","Content-Type":"application/json","Content-Length":Buffer.byteLength(body)}},
+                r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{if(r.statusCode>=300&&r.statusCode<500){console.error("status post "+r.statusCode+": "+b.slice(0,120))}else if(r.statusCode>=500&&++n<4){setTimeout(post,500*n);return} console.log("[review:"+process.env.ROLE+"] posted dark-factory/"+process.env.ROLE+"="+process.env.STATE)});});
+              req.on("error",e=>{if(++n<4){setTimeout(post,500*n)}else{console.error("status post error: "+e.message)}});
+              req.write(body);req.end();
+            })();
+          ' || true
+          # Advisory in v1: exit 0 unless review.blockSeverity made review.js exit non-zero.
+          exit ${RC}
+      outputs:
+        parameters:
+          - name: report
+            valueFrom:
+              path: /tmp/review-{{`{{inputs.parameters.role}}`}}.json
               default: "{}"
 {{- end }}
 

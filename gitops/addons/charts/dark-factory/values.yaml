@@ -71,6 +71,32 @@ holdout:
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
   evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.8
 
+# ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
+# Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
+# the coder VM — the coder never grades itself). Each role is a pluggable slot
+# (docs §6.2). v1 backend "auto" = deterministic linters (the hard signal:
+# npm audit, secret scan, dangerous sinks; devops: Dockerfile/k8s hygiene) PLUS a
+# different-family LLM reviewer (Nova, advisory) — same test+judge split as the
+# holdout. The managed "aws-agent" backend is a swappable option for when that API
+# is available. Fable-5 deep-sec is deliberately NOT used here (400 via Bifrost +
+# data-retention caveat — see docs §6.2). Advisory in v1: posts commit statuses,
+# never fails the workflow unless blockSeverity is raised above "none".
+review:
+  enabled: true
+  # Backend per role: auto | linters | llm | aws-agent.
+  security:
+    backend: auto
+  devops:
+    backend: auto
+  # LLM reviewer model — MUST be a different family than the coder (claude-sonnet).
+  reviewModel: us.amazon.nova-pro-v1:0
+  bifrostUrl: http://172.20.181.17:8080
+  # Advisory by default. Raise to low|medium|high|critical to make a finding at or
+  # above that severity fail the workflow (per-severity blocking, docs §6.2).
+  blockSeverity: none
+  # Reuse the coder image (has node + npm audit + git).
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.8
+
 # Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
   argoEvents:
