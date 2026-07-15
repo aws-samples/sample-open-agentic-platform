@@ -100,8 +100,7 @@ spec:
       filters:
         data:
           # A human commented on a PR → bounded df-iterate. issue_comment fires for
-          # both issues and PRs; require the PR link and exclude Bot comments so the
-          # factory's own sticky/status comments never self-trigger a loop.
+          # both issues and PRs; require the PR link.
           - path: headers.X-Github-Event
             type: string
             value: ["issue_comment"]
@@ -114,6 +113,13 @@ spec:
           - path: body.comment.user.type
             type: string
             value: ["User"]
+          # SELF-TRIGGER GUARD (important): the factory's OWN comments (sticky status,
+          # findings, iteration notices) are posted with a real PAT → user.type="User",
+          # so the check above does NOT exclude them, and each would re-fire df-iterate
+          # → new commit → more comments → runaway loop. All factory comments carry a
+          # "<!-- dark-factory:... -->" HTML marker. RE2 (Argo Events regex) has no
+          # negative lookahead to exclude-by-substring at the filter, so the DEFINITIVE
+          # guard lives in iterate.js (it drops any comment containing the marker).
 {{- end }}
   triggers:
     - template:

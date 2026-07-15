@@ -51,6 +51,17 @@ function submitWorkflow(wf) {
 }
 
 async function main() {
+  // SELF-TRIGGER GUARD (critical): the factory posts its OWN comments to the PR
+  // (sticky status, review findings, iteration notices) using a real user's PAT —
+  // so GitHub reports comment.user.type="User", and the Sensor's "exclude Bot"
+  // filter does NOT exclude them. Without this guard, EVERY factory comment fires
+  // df-iterate → new commit → more comments → runaway loop (observed: 3 runs +
+  // 3 commits + split statuses on one issue). All factory-authored comments carry a
+  // "dark-factory:" HTML marker; skip any comment that has one.
+  if (COMMENT_BODY && /<!--\s*dark-factory:/.test(COMMENT_BODY)) {
+    console.log("[df-iterate] comment is a Dark Factory automated comment (marker present) — skipping (no self-trigger)");
+    return;
+  }
   const pr = await gh("GET", `/repos/${REPO}/pulls/${PR}`);
   if (pr.state !== "open") { console.log(`[df-iterate] PR #${PR} is ${pr.state} — skipping`); return; }
   const ref = pr.head.ref;                       // df/issue-<n>
