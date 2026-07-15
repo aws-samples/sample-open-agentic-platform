@@ -31,6 +31,16 @@ github:
   # open the PR + maintain the sticky status comment. Key: token.
   tokenSecret: dark-factory-github
   tokenKey: token
+  # Sync the token from AWS Secrets Manager via ExternalSecret (same mechanism as
+  # the rest of the platform) instead of a manual kubectl-created secret — so it's
+  # GitOps-managed, reproducible on rebuild, and auto-rotated. The SM secret is a
+  # JSON blob with keys: token, webhook-secret. Creates dark-factory-github in the
+  # argo / argo-events / agent-sandbox-system namespaces (see 05-externalsecret).
+  externalSecret:
+    enabled: true
+    clusterSecretStore: aws-secrets-manager
+    secretsManagerKey: dark-factory/github
+    refreshInterval: 1h
 
 # Step-container image: needs kubectl + curl + jq to drive claims, poll the
 # coder, and call the GitHub API. alpine/k8s bundles kubectl; curl/jq added at start.
