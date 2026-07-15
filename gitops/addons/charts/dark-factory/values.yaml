@@ -107,6 +107,43 @@ iterate:
   enabled: true
   maxIterations: 3
 
+# ── P4: Conditional deploy-test ──────────────────────────────────────────────
+# For PRs that touch deployable artifacts, a TRUSTED hub step deploys the PR into
+# an ephemeral namespace, probes it, and tears it down (docs §9 / diagram B.4).
+# This is the ONLY step that holds K8s access — never the untrusted coder. Gated
+# by detect-deployable (greps the diff for deployablePatterns); advisory in v1.
+deployTest:
+  enabled: true
+  # Regex (grep -E) of changed-file paths that make a PR "deployable".
+  deployablePatterns: "(Chart\\.yaml|/templates/|k8s/|deployment\\.ya?ml|Dockerfile)"
+  # Where the applyable manifests live in the repo (dir or file). If absent, the
+  # step logs "nothing to deploy" and passes (advisory).
+  manifestPath: "k8s/"
+  # kubectl-capable image (alpine/k8s bundles kubectl + adds git/node at start).
+  image: alpine/k8s:1.31.0
+  # Overall step deadline and the per-workload readiness wait.
+  timeoutSeconds: 600
+  readyTimeoutSeconds: 120
+  # Advisory in v1 — posts dark-factory/deploy-test but never fails the run.
+  blocking: false
+
+# ── P4: Success metrics (Argo-native Prometheus) ─────────────────────────────
+# df-run emits Prometheus metrics via its metrics: block (df_runs_total by status,
+# df_run_duration_seconds). Scraped from the Argo workflow-controller by the
+# platform Prometheus; Langfuse covers LLM-level cost/trace drill-down.
+metrics:
+  enabled: true
+
+# ── P4: Reaper CronJob ───────────────────────────────────────────────────────
+# Crash-net for teardown: sweeps stale ephemeral deploy-test namespaces and
+# abandoned df-run SandboxClaims older than reapAfterSeconds. Backs up the per-run
+# onExit teardown + the claim's own TTL.
+reaper:
+  enabled: true
+  schedule: "*/15 * * * *"      # every 15 min
+  reapAfterSeconds: 10800       # 3h — matches claimTtlSeconds
+  image: alpine/k8s:1.31.0      # kubectl + coreutils date
+
 # Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
   argoEvents:
