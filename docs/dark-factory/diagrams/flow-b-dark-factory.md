@@ -53,7 +53,52 @@ retained workspace PVC + GitHub, not a parked process.
 
 ---
 
-## B.4 — The one sticky PR comment
+## B.4 — The `df-run` DAG (as built) & how step-gating works
+
+This is the **implemented** pipeline (P1 + P2), with the P3/P4 steps drawn dashed so the target
+shape is legible. It answers the two questions the higher-level diagrams don't: **where each step
+runs** (trust boundary) and **how Argo decides whether a step runs** (the `when:` gate).
+
+![Flow B — the df-run DAG as built](./img/flow-b-df-run-dag.png)
+
+*Edit: [`src/flow-b-df-run-dag.drawio`](./src/flow-b-df-run-dag.drawio)*
+
+**How a step is gated — `when:` on a prior step's output.** Argo is a declarative orchestrator, not
+an agent: it does not "improvise" steps. Every task is *defined* in the DAG, and each carries an
+optional `when:` expression that Argo evaluates at runtime against a value an earlier step emitted.
+The `holdout-gate` step already does this:
+
+```yaml
+- name: holdout-gate
+  dependencies: [drive-coder]
+  when: "{{tasks.drive-coder.outputs.parameters.pr-number}} != \"\""   # run only if a PR exists
+```
+
+`drive-coder` writes the PR number to a file → Argo captures it as an output parameter → Argo
+substitutes the real value into the `when:` string (`"7" != ""` → **run**; `"" != ""` → **skip**,
+no pod is created). Deterministic, file/value-based — no AI in the decision.
+
+**Conditional deploy-test (P4) uses the same mechanism, keyed on the diff.** A cheap `detect-deployable`
+step runs `git diff --name-only` and greps for deployable files (`Chart.yaml`, `k8s/`, `deployment.yaml`,
+`Dockerfile`); it emits `deployable = true|false`; `deploy-test` is gated `when: deployable == true`.
+So "the PR touched a Deployment manifest → deploy-test runs; it only touched app code → skip."
+
+**Two levels of testing, two homes (the trust boundary):**
+
+| Test level | What it checks | Where it runs | K8s access |
+|---|---|---|---|
+| **Unit / build** | compiles, `subtract(5,3)==2`, `npm test`/`go test` green | inside the **coder** (Kata VM) + re-run by **holdout-gate** | **none** (correct — the VM is untrusted) |
+| **Deploy / integration** (P4) | deploys to an ephemeral namespace, endpoint returns 200, pod healthy | a **trusted hub step** (`deploy-test`), never the VM | **yes** — held by the workflow SA, never the coder |
+
+**Executable tests decide; LLM/agents advise.** The holdout's hidden tests are the ground truth (a
+stub can't pass a real test); the Nova judge is a *reviewer* that catches gaming the tests can't see
+(hard-coded inputs, `return true`). The P3 Security/DevOps agents are the same shape — advisory
+reviewers, not the gate. For deploy-work, the `deploy-test` executable probes are ground truth and
+the DevOps agent is the advisory second opinion.
+
+---
+
+## B.5 — The one sticky PR comment
 
 The workflow maintains **one** comment, edited in place via a hidden marker — no comment spam. Until
 tests are green there is no PR, so pre-PR status lives on the **issue**; from PR-open onward the
