@@ -97,11 +97,9 @@ async function gh(method, path, body) {
 async function fetchIssueSpec() {
   const issue = await gh("GET", `/repos/${REPO}/issues/${ISSUE}`);
   let spec = `# ${issue.title}\n\n${issue.body || ""}\n`;
-  // Profile scaffold hint (df-run injects DF_SCAFFOLD_HINT from the selected
-  // profile, e.g. "Spring Boot, Maven, JUnit") — steers the coder to generate
-  // idiomatic code + the right project layout for the stack.
-  const hint = (process.env.DF_SCAFFOLD_HINT || "").trim();
-  if (hint) spec += `\n---\n\n## Stack / conventions\n\nUse this stack and idiomatic layout: ${hint}\n`;
+  // No profile/scaffold-hint injection: the issue text states the stack ("a Spring
+  // Boot service", "Terraform for an S3 bucket"), the coder generates idiomatic
+  // code from that, and build/test is discovered from the resulting marker files.
   // Iterate mode (df-iterate): a human left a change request on the PR. Append it
   // so the coder revises the EXISTING branch to address the feedback, rather than
   // re-implementing from scratch. DF_ITERATE_NOTE is injected by the df-iterate
@@ -229,27 +227,23 @@ function runCoder(repoDir) {
 }
 
 function buildAndTest(repoDir) {
-  // Profile-driven (preferred): the df-run claim injects DF_BUILD_CMD / DF_TEST_CMD
-  // from the selected profile (e.g. terraform → 'terraform validate'; java →
-  // 'mvn test'). Run them via a shell so the profile can use pipes/&&. This makes
-  // the coder stack-agnostic — new languages are a profile entry, not code here.
-  const buildCmd = (process.env.DF_BUILD_CMD || "").trim();
-  const testCmd = (process.env.DF_TEST_CMD || "").trim();
-  if (buildCmd || testCmd) {
-    try {
-      if (buildCmd) { console.log(`[coder] build: ${buildCmd}`); sh("sh", ["-c", buildCmd], { cwd: repoDir }); }
-      if (testCmd) { console.log(`[coder] test: ${testCmd}`); sh("sh", ["-c", testCmd], { cwd: repoDir }); }
-      return { green: true, summary: testCmd ? "profile tests passed" : "profile build passed (no tests)" };
-    } catch (e) {
-      return { green: false, summary: (e.stdout || e.stderr || e.message || "").toString().slice(-400) };
-    }
-  }
-  // Fallback (profile=auto / unset): auto-detect by stack marker files.
+  // Build/test is DISCOVERED from the repo's own marker files — no per-language
+  // platform config. Devs control build/test by their repo layout; the toolchains
+  // live in the coder IMAGE (see coder/Dockerfile), not here. A repo Makefile with
+  // a `test` target is the explicit dev-controlled override, checked first.
+  const has = (f) => fs.existsSync(`${repoDir}/${f}`);
+  const makeHasTest = () => {
+    try { return has("Makefile") && /^test:/m.test(fs.readFileSync(`${repoDir}/Makefile`, "utf8")); } catch { return false; }
+  };
   try {
-    if (fs.existsSync(`${repoDir}/package.json`)) { sh("npm", ["install", "--no-audit", "--no-fund"], { cwd: repoDir }); sh("npm", ["test"], { cwd: repoDir }); }
-    else if (fs.existsSync(`${repoDir}/go.mod`)) sh("go", ["test", "./..."], { cwd: repoDir });
-    else if (fs.existsSync(`${repoDir}/pyproject.toml`) || fs.existsSync(`${repoDir}/setup.py`)) sh("python", ["-m", "pytest", "-q"], { cwd: repoDir });
-    else return { green: true, summary: "no recognized test suite — skipped" };
+    if (makeHasTest()) { console.log("[coder] Makefile test target"); sh("make", ["test"], { cwd: repoDir }); }
+    else if (has("package.json")) { sh("npm", ["install", "--no-audit", "--no-fund"], { cwd: repoDir }); sh("npm", ["test"], { cwd: repoDir }); }
+    else if (has("go.mod")) sh("go", ["test", "./..."], { cwd: repoDir });
+    else if (has("pyproject.toml") || has("setup.py") || has("requirements.txt")) sh("python", ["-m", "pytest", "-q"], { cwd: repoDir });
+    else if (has("Cargo.toml")) sh("cargo", ["test"], { cwd: repoDir });
+    else if (has("pom.xml")) sh("mvn", ["-q", "test"], { cwd: repoDir });
+    else if (has("build.gradle") || has("build.gradle.kts")) sh("./gradlew", ["test"], { cwd: repoDir });
+    else return { green: true, summary: "no recognized test suite — skipped (e.g. infra/config change)" };
     return { green: true, summary: "tests passed" };
   } catch (e) {
     return { green: false, summary: (e.stdout || e.stderr || e.message || "").toString().slice(-400) };
