@@ -148,6 +148,8 @@ spec:
                     - name: issue-title
                     - name: issue-body
                     - name: base-branch
+                    - name: profile
+                      value: "auto"
           # Map GitHub webhook fields → workflow parameters.
           parameters:
             # Deterministic workflow name = df-run-<issue-id> (the dedup key).
@@ -182,6 +184,14 @@ spec:
                 dependencyName: issue-labeled
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
+            # Stack profile: pick the first label matching `dark-factory-<name>`
+            # and strip the prefix → profile name (e.g. dark-factory-terraform →
+            # terraform). No such label → "auto". sprig over the labels array.
+            - src:
+                dependencyName: issue-labeled
+                dataTemplate: >-
+                  {{ `{{- $p := "auto" -}}{{- range .Input.body.issue.labels -}}{{- if and (hasPrefix "dark-factory-" .name) (ne .name "dark-factory") -}}{{- $p = trimPrefix "dark-factory-" .name -}}{{- end -}}{{- end -}}{{- $p -}}` }}
+              dest: spec.arguments.parameters.6.value
 
     # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
     - template:
