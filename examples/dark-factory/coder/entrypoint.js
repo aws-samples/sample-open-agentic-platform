@@ -240,11 +240,28 @@ async function main() {
     sh("git", ["push", "-u", "origin", BRANCH, "--force"], { cwd: repoDir });
     headSha = sh("git", ["rev-parse", "HEAD"], { cwd: repoDir }).trim();
 
-    // Open the PR (idempotent: ignore "already exists").
+    // Open the PR (idempotent: ignore "already exists"). The coder opens the PR
+    // BEFORE the hub-side verify steps run, so it can only mark them "running".
+    // The workflow's sticky-status step rewrites the block below (between the
+    // dark-factory:status marker) with the real verdicts once holdout/security/
+    // devops finish — the "one live sticky status" (README §7). Keep this block's
+    // shape in sync with that step.
+    const prBody = [
+      `Closes #${ISSUE}.`,
+      "",
+      "<!-- dark-factory:status -->",
+      "### 🏭 Dark Factory — verification",
+      `- ✅ **Build + unit tests:** ${test.summary}`,
+      "- ⏳ **Holdout gate:** _running…_",
+      "- ⏳ **Security review:** _running…_",
+      "- ⏳ **DevOps review:** _running…_",
+      "",
+      "_Autonomously implemented in a hardware-isolated Kata micro-VM; verification runs as independent hub-side steps (see the checks below)._",
+    ].join("\n");
     try {
       await gh("POST", `/repos/${REPO}/pulls`, {
         title: `Dark Factory: ${TITLE} (#${ISSUE})`, head: BRANCH, base: BASE,
-        body: `Closes #${ISSUE}.\n\n_Autonomously implemented in a hardware-isolated Kata micro-VM._\n\n- **Build + unit tests:** ✅ ${test.summary}\n- **Holdout gate:** _pending (P2)_\n- **Security / DevOps:** _pending (P3)_`,
+        body: prBody,
         maintainer_can_modify: true,
       });
     } catch (e) { if (!/already exists|A pull request already/i.test(e.message)) throw e; }
