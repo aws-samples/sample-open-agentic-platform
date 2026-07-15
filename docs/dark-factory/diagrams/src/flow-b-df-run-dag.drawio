@@ -6,7 +6,7 @@
         <mxCell id="1" parent="0" />
 
         <!-- Title -->
-        <mxCell id="title" value="Dark Factory  ·  the df-run DAG (as built: P1–P3)" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontFamily=Helvetica;fontColor=#16232E;" vertex="1" parent="1">
+        <mxCell id="title" value="Dark Factory  ·  the df-run DAG (as built: P1–P3b)" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontFamily=Helvetica;fontColor=#16232E;" vertex="1" parent="1">
           <mxGeometry x="70" y="28" width="1300" height="40" as="geometry" />
         </mxCell>
         <mxCell id="subtitle" value="Argo orchestrates; each step is gated by a when: condition on a prior step's output. The coder is untrusted (Kata VM, no K8s); every grader/reviewer runs OUTSIDE it, in a trusted hub step. Executable tests decide; LLM/agents advise." style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontFamily=Helvetica;fontColor=#6B7885;" vertex="1" parent="1">
@@ -93,6 +93,15 @@
         <mxCell id="done" value="&lt;b&gt;df-merge-teardown&lt;/b&gt; &lt;font color=&quot;#0E9A6C&quot;&gt;✓ built&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;green-gated squash-merge · del branch + claim&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#12C88B;strokeColor=none;fontColor=#FFFFFF;fontSize=13;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="2820" y="234" width="180" height="72" as="geometry" />
         </mxCell>
+
+        <!-- df-iterate: comment → bounded revision loop back to the coder -->
+        <mxCell id="iterate" value="&lt;b&gt;df-iterate&lt;/b&gt; &lt;font color=&quot;#0E9A6C&quot;&gt;✓ built&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;PR comment → revise existing branch · ≤3 rounds&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#12C88B;strokeWidth=2.5;fontColor=#16232E;fontSize=13;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="2470" y="404" width="300" height="60" as="geometry" />
+        </mxCell>
+        <!-- human comment → df-iterate -->
+        <mxCell id="i1" value="comment" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#FBA919;strokeWidth=2;endArrow=block;endFill=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontColor=#C77F0A;fontSize=11;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="human" target="iterate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <!-- df-iterate loops back to re-run the coder (df-run with iterate-note) -->
+        <mxCell id="i2" value="re-submit df-run (iterate-note)" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2;dashed=0;endArrow=block;endFill=1;exitX=0;exitY=0.5;entryX=0.5;entryY=1;fontColor=#0E9A6C;fontSize=10;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="iterate" target="await"><mxGeometry relative="1" as="geometry" /></mxCell>
 
         <!-- ===== Spine edges ===== -->
         <mxCell id="e1" style="html=1;rounded=0;strokeColor=#B7C0C9;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="issue" target="events"><mxGeometry relative="1" as="geometry" /></mxCell>
