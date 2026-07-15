@@ -1,7 +1,10 @@
 # Dark Factory — Autonomous Agent Coding Pattern
 
-> **Status:** Design document (doc-only). This describes the target architecture, the reuse
-> map onto the existing platform, and a phased delivery plan. No runtime code ships in this PR.
+> **Status:** Design **+ implementation**. Phases **P0–P3** are built and running on the hub, plus
+> P3b trigger-dedup and the live PR-body status (see [§12](#12-phased-delivery) for the phase table).
+> The pipeline runs hands-off end-to-end: a labeled issue → coder → holdout gate + Security/DevOps
+> reviews → PR with live status, awaiting human approval. This doc describes the architecture, the
+> reuse map onto the platform, and what remains (approve/merge/iterate lifecycle, deploy-test).
 
 A **dark factory** is a manufacturing plant that runs *with the lights off* — no humans on the
 floor, robots do everything. Applied to software: **a human writes an issue (a spec); AI agents
@@ -181,9 +184,12 @@ Runs on the **hub**, orchestrated by **Argo Workflows** (already deployed on the
 End to end:
 
 1. **Trigger** — an issue labeled `dark-factory` fires a GitHub **webhook** into an **Argo Events**
-   Sensor, which submits a `df-run` Workflow keyed on the issue id. *(Argo Events is the native
-   Kubernetes eventing path; a thin GitHub Action → `argo-server /api/v1/events` is the fallback if
-   Argo Events isn't enabled.)*
+   Sensor, which submits a `df-run` Workflow. **Dedup:** the workflow is named deterministically
+   `df-run-<issue-id>`, so GitHub's duplicate webhook deliveries (retries + rapid re-labels) collide
+   (`AlreadyExists`) and are harmless no-ops — **one issue = one in-flight run**. Without this, each
+   delivery spawned a competing run that force-pushed its own commit and split the `dark-factory/*`
+   statuses across SHAs. *(Argo Events is the native Kubernetes eventing path; a thin GitHub Action →
+   `argo-server /api/v1/events` is the fallback if Argo Events isn't enabled.)*
 2. **Claim** — the workflow's `claim` step creates a `SandboxClaim(warmPoolRef: coder-warmpool)` and
    **binds a warm sandbox**; the operator refills the buffer. Because Argo and the pool are on the
    **same cluster**, the step watches the claim's `status.conditions[Ready]` directly — no
@@ -615,7 +621,7 @@ Each phase is independently valuable — if you stop after any one, you're bette
 | **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ **done** | ✅ A working autonomous-PR loop on Argo |
 | **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
 | **P3** | **Security + DevOps review steps** — parallel hub-side reviewers, `auto` backend (linters + Nova), advisory, posting `dark-factory/{security,devops}` statuses (managed AWS-Agent backend swappable in when its API lands) | ✅ **done** (advisory) | ✅ Independent review evidence — verified: clean code 0 findings; adversarial diffs correctly flagged |
-| **P3b** | Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry (`RETRY.md` → re-bind retained PVC) | ⬜ next | ✅ Full event-driven lifecycle + human-in-the-loop iteration |
+| **P3b** | **Trigger dedup** (one issue = one run) + **live PR-body status** rewrite; *(next: Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry `RETRY.md` → re-bind retained PVC)* | 🟡 partial | ✅ Hands-off single run + accurate PR board; approve/iterate still to come |
 | **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
 | **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 

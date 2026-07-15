@@ -87,7 +87,7 @@ spec:
                 # DEDUP: deterministic name keyed on the GitHub issue id (globally
                 # unique). GitHub delivers the `labeled` webhook more than once
                 # (delivery retries + rapid re-labels), so without this each
-                # delivery span­ed a competing df-run that force-pushed its own
+                # delivery spawned a competing df-run that force-pushed its own
                 # commit and split the commit statuses across SHAs. With a fixed
                 # name, the 2nd+ submit collides (AlreadyExists) and is a harmless
                 # no-op — one issue = one in-flight run. The name is overwritten by
