@@ -69,7 +69,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.8
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.9
 
 # ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
 # Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
@@ -95,7 +95,7 @@ review:
   # above that severity fail the workflow (per-severity blocking, docs §6.2).
   blockSeverity: none
   # Reuse the coder image (has node + npm audit + git).
-  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.8
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.9
 
 # Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
 trigger:
