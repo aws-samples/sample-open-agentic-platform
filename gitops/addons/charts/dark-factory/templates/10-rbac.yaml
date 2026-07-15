@@ -31,6 +31,11 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch"]
+  # df-iterate (runs as this SA) submits a df-run Workflow via the k8s API to
+  # route a PR comment back to the coder as a bounded revision.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

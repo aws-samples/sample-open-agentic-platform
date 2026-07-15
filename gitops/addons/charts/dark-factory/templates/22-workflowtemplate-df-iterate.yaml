@@ -21,7 +21,10 @@ metadata:
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 spec:
-  serviceAccountName: dark-factory-sensor
+  # Runs in the argo ns as dark-factory-workflow (the sensor SA lives in
+  # argo-events, not here). iterate.js submits a df-run Workflow via the k8s API
+  # using this pod's SA token, so the role needs workflows:create (added in 10-rbac).
+  serviceAccountName: dark-factory-workflow
   entrypoint: main
   arguments:
     parameters:
