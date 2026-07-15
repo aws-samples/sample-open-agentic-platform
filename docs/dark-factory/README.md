@@ -492,9 +492,16 @@ Level 3 means the **human approves the merge** — and can steer via comments:
 | Merged / closed | **Deleted** (Sandbox + PVC + test infra + eval job) | Zero |
 
 - **Scale-to-zero between activity** keeps the (possibly long) review window cheap.
-- **Teardown is an Argo `onExit` handler** on the `df-merge-teardown` workflow — it fires on success
-  *or* failure, deleting the `SandboxClaim`, PVC, and eval Job. Because Argo and the pool are
-  co-located on the hub, owner-references cascade cleanup for in-workflow-created objects.
+- **Teardown happens two ways (both built):** (1) every `df-run` has an **`onExit` handler** that
+  releases its `SandboxClaim` on success *or* failure (pool refills); (2) on human approval,
+  **`df-merge-teardown`** squash-merges the (green-verified) PR, deletes the coder branch, and reaps
+  the claim by its `dark-factory.io/issue-number` label. Because Argo and the pool are co-located on
+  the hub, owner-references cascade cleanup for in-workflow-created objects.
+- **Merge is human-gated, never self-merge.** `df-merge-teardown` fires *only* from a
+  `pull_request_review` **approved** event on a `df/issue-*` branch, and `merge.js` re-checks that
+  every `dark-factory/*` status is `success` before merging — so a stray approval on a red PR can't
+  land. (GitHub also blocks the PR author from approving their own PR, so the approver is necessarily
+  a different human.)
 - **Reaper CronJob** (adapted from openclaw `reaper-cronjob.yaml`) sweeps abandoned/timed-out runs
   by TTL annotation — the crash-net for a workflow that dies before its `onExit` runs, and for
   forgotten PRs.
@@ -621,7 +628,7 @@ Each phase is independently valuable — if you stop after any one, you're bette
 | **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ **done** | ✅ A working autonomous-PR loop on Argo |
 | **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
 | **P3** | **Security + DevOps review steps** — parallel hub-side reviewers, `auto` backend (linters + Nova), advisory, posting `dark-factory/{security,devops}` statuses (managed AWS-Agent backend swappable in when its API lands) | ✅ **done** (advisory) | ✅ Independent review evidence — verified: clean code 0 findings; adversarial diffs correctly flagged |
-| **P3b** | **Trigger dedup** (one issue = one run) + **live PR-body status** rewrite; *(next: Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry `RETRY.md` → re-bind retained PVC)* | 🟡 partial | ✅ Hands-off single run + accurate PR board; approve/iterate still to come |
+| **P3b** | **Trigger dedup** (one issue = one run) + **live PR-body status** rewrite + **`df-merge-teardown`** (human-approval → green-gated squash-merge + branch/claim teardown); *(next: `df-iterate` on PR comment — coder DF_ITERATE_NOTE support is already shipped)* | 🟡 mostly | ✅ Hands-off run + accurate PR board + approve→merge→teardown; iterate-on-comment still to wire |
 | **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
 | **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 
