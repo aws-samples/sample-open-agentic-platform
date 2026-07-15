@@ -174,6 +174,10 @@ deployTest:
 # grafana-operator (same pattern as the agent-platform-* dashboards).
 metrics:
   enabled: true
+  # The Argo controller serves :9090/metrics over HTTPS with a self-signed cert,
+  # which the platform AMP scraper can't verify. A tiny socat proxy (this image)
+  # terminates that TLS and re-serves plain HTTP :9091 for the scraper.
+  proxyImage: alpine/socat:1.8.0.0
   grafana:
     # grafana-operator watches this namespace for GrafanaDashboard CRs.
     namespace: grafana-operator
