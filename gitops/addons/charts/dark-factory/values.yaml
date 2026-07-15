@@ -79,7 +79,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.13
 
 # ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
 # Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
@@ -105,7 +105,7 @@ review:
   # above that severity fail the workflow (per-severity blocking, docs §6.2).
   blockSeverity: none
   # Reuse the coder image (has node + npm audit + git).
-  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.13
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision
@@ -117,44 +117,20 @@ iterate:
   enabled: true
   maxIterations: 3
 
-# ── Stack profiles (generic infra + app support) ─────────────────────────────
-# A profile bundles everything stack-specific: the scaffold hint (steers the
-# coder), the build/test commands (run in the coder VM), and the deploy-test
-# verifyKind. A `dark-factory-<name>` label selects the profile; with only the
-# `dark-factory` label the profile is "auto" (coder infers stack; build/test
-# fall back to marker-file detection). Adding a language = a new entry here (+ a
-# coderImage with the toolchain if the default image lacks it) — no pipeline code.
-# See docs/dark-factory/PROFILES.md.
-stackProfiles:
-  # default when only `dark-factory` is applied — no injected cmds, coder auto-detects.
-  auto:
-    scaffoldHint: ""
-    build: ""
-    test: ""
-    verifyKind: auto
-  terraform:                          # label: dark-factory-terraform
-    scaffoldHint: "Terraform with the AWS provider; one resource per file; variables.tf + outputs.tf; minimal valid HCL"
-    build: ""
-    test: ""                          # deploy-test runs terraform validate — no in-VM tf toolchain needed
-    verifyKind: terraform
-  node:                               # label: dark-factory-node
-    scaffoldHint: "Node.js; package.json with a test script; small and idiomatic"
-    build: "npm install --no-audit --no-fund"
-    test: "npm test"
-    verifyKind: k8s
-  # Examples for later (need a coderImage with the toolchain; add when a real issue arrives):
-  # java:
-  #   scaffoldHint: "Spring Boot, Maven, JUnit"
-  #   build: "mvn -q -DskipTests package"
-  #   test: "mvn -q test"
-  #   verifyKind: k8s
-  #   coderImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder-java:v0.1.0
-  # rust:
-  #   scaffoldHint: "Cargo, axum"
-  #   build: "cargo build"
-  #   test: "cargo test"
-  #   verifyKind: k8s
-  #   coderImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder-rust:v0.1.0
+# ── Language / stack support ─────────────────────────────────────────────────
+# There is NO per-language profile config here — deliberately. Language support is
+# decoupled two ways:
+#   1. Toolchains live in the CODER IMAGE (examples/dark-factory/coder/Dockerfile) —
+#      a generic image carries git/node/python/go (+ add JDK/Cargo/terraform there
+#      when needed). Devs control the toolchain via the image, not platform config.
+#   2. Build/test commands are DISCOVERED from the repo's own marker files by the
+#      coder (package.json→npm, go.mod→go, pyproject→pytest, Cargo.toml→cargo,
+#      pom.xml/build.gradle→maven/gradle, Makefile test target→make test). Devs
+#      control build/test by their repo layout — no central profile to maintain.
+#   3. deploy-test verification kind is AUTO-DETECTED from the changed files
+#      (detect-deployable: *.tf→terraform, k8s manifests/Dockerfile→k8s).
+# So adding a language = extend the coder image + rely on its marker files. No
+# label, no stackProfiles, no pipeline change.
 
 # ── P4: Conditional deploy-test (content-aware) ──────────────────────────────
 # For PRs that touch deployable artifacts, a TRUSTED hub step validates the change

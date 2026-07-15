@@ -47,10 +47,6 @@ spec:
       # existing branch to address the feedback.
       - name: iterate-note
         value: ""
-      # Stack profile (from the dark-factory-<name> label; default "auto"). Selects
-      # the coder's build/test cmds + scaffold hint + deploy-test verifyKind.
-      - name: profile
-        value: "auto"
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
@@ -83,21 +79,8 @@ spec:
     - name: main
       dag:
         tasks:
-          # Resolve the stack profile (name → build/test/scaffold/verifyKind) so the
-          # rest of the DAG is profile-agnostic. Single source of truth = values.yaml.
-          - name: resolve-profile
-            template: resolve-profile
           - name: claim
             template: claim-sandbox
-            dependencies: [resolve-profile]
-            arguments:
-              parameters:
-                - name: build-cmd
-                  value: "{{`{{tasks.resolve-profile.outputs.parameters.build}}`}}"
-                - name: test-cmd
-                  value: "{{`{{tasks.resolve-profile.outputs.parameters.test}}`}}"
-                - name: scaffold-hint
-                  value: "{{`{{tasks.resolve-profile.outputs.parameters.scaffold}}`}}"
           - name: drive-coder
             template: await-coder
             dependencies: [claim]
@@ -182,11 +165,6 @@ spec:
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
-      inputs:
-        parameters:
-          - name: build-cmd
-          - name: test-cmd
-          - name: scaffold-hint
       outputs:
         parameters:
           - name: sandbox
@@ -224,69 +202,6 @@ spec:
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.profile }}" }
               - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
               - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
-              # Stack profile (resolved from the dark-factory-<name> label) → the
-              # coder runs these build/test cmds + uses this scaffold hint.
-              - { containerName: coder, name: DF_PROFILE, value: "{{`{{workflow.parameters.profile}}`}}" }
-              - { containerName: coder, name: DF_BUILD_CMD, value: "{{`{{inputs.parameters.build-cmd}}`}}" }
-              - { containerName: coder, name: DF_TEST_CMD, value: "{{`{{inputs.parameters.test-cmd}}`}}" }
-              - { containerName: coder, name: DF_SCAFFOLD_HINT, value: "{{`{{inputs.parameters.scaffold-hint}}`}}" }
-
-    # ---- 0. Resolve the stack profile (name → build/test/scaffold/verifyKind) ----
-    # Determines the profile NAME robustly by reading the issue's labels from the
-    # GitHub API (a dark-factory-<name> label → <name>), rather than parsing the
-    # webhook payload in the Sensor (fragile sprig). Then maps name → commands via
-    # a case-statement rendered from values.yaml stackProfiles (single source of
-    # truth). Unknown/absent → auto (empty cmds; coder auto-detects).
-    - name: resolve-profile
-      script:
-        image: {{ .Values.review.reviewImage }}
-        command: [bash]
-        env:
-          - name: GH_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.github.tokenSecret }}
-                key: {{ .Values.github.tokenKey }}
-          - name: REPO
-            value: "{{`{{workflow.parameters.repo}}`}}"
-          - name: ISSUE_NUMBER
-            value: "{{`{{workflow.parameters.issue-number}}`}}"
-          - name: PROFILE_PARAM
-            value: "{{`{{workflow.parameters.profile}}`}}"
-        source: |
-          set -eu
-          # Prefer an explicit profile param (e.g. from df-iterate); else derive from
-          # the issue's dark-factory-<name> label via the GitHub API.
-          PROFILE="$PROFILE_PARAM"
-          if [ -z "$PROFILE" ] || [ "$PROFILE" = "auto" ]; then
-            PROFILE="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" ISSUE_NUMBER="$ISSUE_NUMBER" node -e '
-              const https=require("https");
-              https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/issues/"+process.env.ISSUE_NUMBER,headers:{"User-Agent":"df-profile","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},
-                r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{const j=JSON.parse(b);const l=(j.labels||[]).map(x=>x.name).find(n=>n.startsWith("dark-factory-")&&n!=="dark-factory");console.log(l?l.slice("dark-factory-".length):"auto")}catch(e){console.log("auto")}})}).on("error",()=>console.log("auto"));
-            ' 2>/dev/null || echo auto)"
-          fi
-          echo "[resolve-profile] resolved profile name: $PROFILE"
-          case "$PROFILE" in
-          {{- range $name, $p := .Values.stackProfiles }}
-            {{ $name }})
-              printf '%s' {{ $p.build | default "" | quote }} > /tmp/build
-              printf '%s' {{ $p.test | default "" | quote }} > /tmp/test
-              printf '%s' {{ $p.scaffoldHint | default "" | quote }} > /tmp/scaffold
-              printf '%s' {{ $p.verifyKind | default "auto" | quote }} > /tmp/verifykind
-              ;;
-          {{- end }}
-            *)
-              echo "[resolve-profile] unknown profile '$PROFILE' → auto"
-              : > /tmp/build; : > /tmp/test; : > /tmp/scaffold; printf 'auto' > /tmp/verifykind
-              ;;
-          esac
-          echo "[resolve-profile] profile=$PROFILE build=[$(cat /tmp/build)] test=[$(cat /tmp/test)] verifyKind=$(cat /tmp/verifykind)"
-      outputs:
-        parameters:
-          - { name: build, valueFrom: { path: /tmp/build, default: "" } }
-          - { name: test, valueFrom: { path: /tmp/test, default: "" } }
-          - { name: scaffold, valueFrom: { path: /tmp/scaffold, default: "" } }
-          - { name: verifykind, valueFrom: { path: /tmp/verifykind, default: "auto" } }
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
     # The coder image (baked into the SandboxTemplate) auto-runs on VM start,

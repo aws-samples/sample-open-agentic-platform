@@ -1,116 +1,56 @@
-# Dark Factory — Profiles (generic infra + app support)
+# Dark Factory — language & stack support (no profiles)
 
-> **Status:** ✅ **built** (terraform + node profiles). The profile abstraction generalizes the
-> pipeline to any stack (infra *and* app microservices) without new pipeline code. Adding a
-> language is a `stackProfiles:` values entry (+ a coder image with the toolchain if needed).
-> **Note:** the profile NAME is resolved in the `resolve-profile` step by reading the issue's
-> `dark-factory-<name>` label via the GitHub API (robust) — not by parsing the webhook in the Sensor.
+> **Decision:** the Dark Factory does **not** use per-language "profiles" in platform config.
+> Language support is decoupled into the **coder image** (toolchains) and the **target repo**
+> (build/test discovered from marker files) — devs control it, the platform stays generic.
+> An earlier design added a `stackProfiles` map + a `dark-factory-<name>` label; it was removed as
+> redundant (the coder already auto-detects, and `detect-deployable` already classifies verification).
 
-## The problem
+## How a stack is supported — three decoupled layers
 
-The `df-run` pipeline had stack-specific assumptions baked into two places:
+1. **Toolchains → the coder image.** `examples/dark-factory/coder/Dockerfile` is a generic image that
+   carries `git`, `node`, `python3`, `go`. To support Java/Rust/etc., add the toolchain **to the
+   image** (or maintain a variant image) — not to platform config. This is the dev/image concern.
+   *(The trusted `deploy-test` image separately carries `kubectl` + `terraform`.)*
 
-1. **The coder's build/test** knew only `npm test` / `go test` / `pytest`. A Terraform PR got
-   *no* real build/test (it hit the "no recognized suite — skipped" branch).
-2. **deploy-test** originally only did `kubectl apply`. A Terraform PR can't be `kubectl apply`-ed.
+2. **Build/test → discovered from the repo.** The coder picks the build/test command from the repo's
+   own marker files — devs control it by their repo layout, with a `Makefile` as the explicit override:
 
-We fixed (2) by making `deploy-test` **content-aware** (`kind = terraform | k8s`). This doc
-generalizes that idea into **one concept — a profile — that drives every stack-specific step**, so
-adding Java/Rust/Python is a config entry, not a code change.
+   | Marker in the repo | Coder runs |
+   |---|---|
+   | `Makefile` with a `test:` target | `make test` *(explicit dev override — checked first)* |
+   | `package.json` | `npm install` + `npm test` |
+   | `go.mod` | `go test ./...` |
+   | `pyproject.toml` / `setup.py` / `requirements.txt` | `pytest -q` |
+   | `Cargo.toml` | `cargo test` |
+   | `pom.xml` | `mvn -q test` |
+   | `build.gradle[.kts]` | `./gradlew test` |
+   | *(none — e.g. Terraform/config change)* | skipped (no unit suite; `deploy-test` still validates) |
 
-## The core idea: a profile
+3. **Verification kind → auto-detected.** `detect-deployable` classifies the changed files and
+   `deploy-test` runs the right tool — `*.tf` → `terraform validate`; `Chart.yaml`/`k8s/`/`Dockerfile`
+   → deploy into an ephemeral namespace. No label, no config.
 
-A **profile** is a named bundle of everything the pipeline needs to know about a stack:
+## Why no profiles (the reasoning)
 
-```yaml
-# values.yaml
-profiles:
-  terraform:                          # dark-factory-terraform  (or -infra)
-    scaffoldHint: "Terraform, AWS provider, one resource per file"
-    build:   "terraform init -backend=false"
-    test:    "terraform validate && terraform fmt -check -recursive"
-    verifyKind: terraform             # deploy-test path
-  node:                               # dark-factory-node
-    scaffoldHint: "Node.js, package.json, a test script"
-    build:   "npm install --no-audit"
-    test:    "npm test"
-    verifyKind: k8s                   # if it emits k8s/, deploy-test applies it
-  java:                               # dark-factory-java
-    scaffoldHint: "Spring Boot, Maven, JUnit"
-    build:   "mvn -q -DskipTests package"
-    test:    "mvn -q test"
-    verifyKind: k8s
-    coderImage: <ecr>/dark-factory-coder-java:<tag>   # image w/ the JDK+Maven
-  rust:                               # dark-factory-rust
-    scaffoldHint: "Cargo, axum"
-    build:   "cargo build"
-    test:    "cargo test"
-    verifyKind: k8s
-    coderImage: <ecr>/dark-factory-coder-rust:<tag>
-```
+- The one thing a profile added over auto-detection was a `scaffoldHint` string — and the **issue text
+  already states the stack** ("Terraform for an S3 bucket", "a Spring Boot service"), which the coder
+  reads directly. The build/test commands and the verify kind were **already** covered by marker-file
+  detection and `detect-deployable`.
+- Keeping per-language build/test in Helm values meant the platform had to know every language — the
+  opposite of generic. Pushing it to the **image** (toolchains) and the **repo** (marker files) keeps
+  the platform language-agnostic and puts control where it belongs: with the devs/repo.
 
-Everything stack-specific is **data**. Adding a language = adding a `profiles:` entry (+ a base
-image with that toolchain if the default coder image lacks it). No pipeline YAML or JS changes.
+## Adding a new language
 
-## How a profile is selected
+1. Add its toolchain to the coder image (`coder/Dockerfile`) — e.g. `apk add openjdk maven`.
+2. Ensure `buildAndTest()`'s marker list covers it (most already are; add a marker if exotic).
+3. That's it — no values, no label, no pipeline change. A repo `Makefile test` target works for
+   anything without even a marker.
 
-A **second GitHub label** picks the profile: `dark-factory` (the trigger) **+** `dark-factory-<profile>`
-(the stack). The Sensor reads the profile label and passes `profile=<name>` into `df-run`.
+## Greenfield note
 
-```
-issue labeled: dark-factory + dark-factory-terraform
-   → Sensor extracts profile=terraform
-   → df-run(profile=terraform)
-```
-
-- **Default:** if only `dark-factory` is present, `profile=auto` — the coder infers the stack from
-  the issue text and the pipeline falls back to detection (what we do today).
-- **Why a label for the *scaffold* but auto-detect for *verify*:** the coder needs to know the stack
-  **up front** (to generate idiomatic code + run the right build/test). Verification can still
-  **auto-detect** from the produced files (already built as `detect-deployable`) — the profile just
-  provides the default `verifyKind`. Label sets intent; detection guards reality.
-
-## What each step does with the profile
-
-| Step | Uses the profile for |
-|---|---|
-| **claim** | inject `DF_PROFILE`, `DF_BUILD_CMD`, `DF_TEST_CMD`, `DF_SCAFFOLD_HINT` into the coder VM; pick `coderImage` if the profile overrides it |
-| **coder** (`entrypoint.js`) | append `scaffoldHint` to the SPEC so Claude scaffolds the right stack; run `DF_BUILD_CMD` + `DF_TEST_CMD` instead of the hardcoded npm/go/pytest guesses |
-| **holdout** | unchanged — executable tests + judge are stack-agnostic |
-| **security / devops** | unchanged — linters + LLM reviewer read the diff regardless of stack |
-| **detect-deployable** | classify by files; profile's `verifyKind` is the default when ambiguous |
-| **deploy-test** | already `kind`-driven (`terraform` → validate; `k8s` → ephemeral apply). New kinds add a `case` arm |
-
-The **only coder change**: replace the hardcoded `buildAndTest()` language guesses with "run
-`DF_BUILD_CMD` then `DF_TEST_CMD`" (falling back to the current auto-guess when unset). That single
-change makes the coder stack-agnostic.
-
-## Verification depth per profile (the honest ladder)
-
-"Test it" means different things and costs escalate — each profile picks a rung:
-
-| Rung | Terraform | App (node/java/rust) | Cost |
-|---|---|---|---|
-| **compile/validate** | `terraform validate` ✅ built | `mvn/cargo/npm build` | free |
-| **unit test** | (n/a) | `mvn test` / `cargo test` / `npm test` ✅ (coder VM) | cheap |
-| **deploy/run** | `terraform plan` (needs read creds) | build image → run → probe, or k8s apply ✅ built | medium |
-| **real provision** | `terraform apply` in sandbox acct | deploy to ephemeral EKS | high, opt-in |
-
-Profiles declare how far up the ladder they go; the default stops at validate/unit-test (free/cheap,
-un-gameable) and higher rungs are opt-in (creds / real infra).
-
-## Scope recommendation (avoid overkill)
-
-**Build now (high leverage):**
-1. The **profile abstraction** — label→profile, profile carries scaffoldHint + build/test + verifyKind.
-2. Make the **coder run `DF_BUILD_CMD`/`DF_TEST_CMD`** (the one real code change).
-3. Wire **2 profiles**: `terraform` (validate — done) and `node` (npm — works) to prove the frame.
-
-**Defer until a real issue needs it (cheap to add later):**
-- `java` / `rust` profiles — just a `profiles:` entry + a coder base image with the toolchain.
-- **App "runs locally"** (build container → run → curl) — real work (image build from untrusted
-  code); separate phase.
-- **`terraform plan`/`apply`** and **ephemeral-EKS** rungs — credential/real-infra decisions.
-
-The frame is the leverage. Individual profiles are YAML someone adds when a real issue demands them —
-so we don't pre-build Java/Rust speculatively.
+For a brand-new/empty repo with no marker files yet, the coder relies on the **issue text** to know
+the stack (usually sufficient) and creates the idiomatic project (which then has the marker files a
+re-run/iterate would detect). If a repo wants to be explicit, a committed `Makefile` (`build`/`test`
+targets) is the clean, dev-owned contract.

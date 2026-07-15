@@ -148,8 +148,6 @@ spec:
                     - name: issue-title
                     - name: issue-body
                     - name: base-branch
-                    - name: profile
-                      value: "auto"
           # Map GitHub webhook fields → workflow parameters.
           parameters:
             # Deterministic workflow name = df-run-<issue-id> (the dedup key).
@@ -184,10 +182,6 @@ spec:
                 dependencyName: issue-labeled
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
-            # NOTE: profile is left as its "auto" default here; the df-run
-            # resolve-profile step derives the real profile from the issue's
-            # dark-factory-<name> label via the GitHub API (robust, vs fragile
-            # sprig over the webhook payload).
 
     # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
     - template:
