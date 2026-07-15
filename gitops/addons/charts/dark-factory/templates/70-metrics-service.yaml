@@ -19,6 +19,9 @@ metadata:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9090"
     prometheus.io/path: /metrics
+    # The Argo workflow-controller serves metrics over HTTPS on :9090 (plain HTTP
+    # returns 400). The AMP scraper maps this annotation → __scheme__.
+    prometheus.io/scheme: https
 spec:
   type: ClusterIP
   clusterIP: None            # headless — we only want endpoint discovery for scraping

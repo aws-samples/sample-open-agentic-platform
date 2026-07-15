@@ -35,14 +35,15 @@ spec:
           "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
           "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
           "targets": [
-            { "expr": "sum by (status) (df_runs_total)", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
+            { "expr": "sum by (status) (argo_workflows_df_runs_total)", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
           ]
         },
         {
-          "id": 2, "type": "timeseries", "title": "df-run throughput (runs/hr by status)",
+          "id": 2, "type": "timeseries", "title": "df-run outcomes over time (cumulative by status)",
           "gridPos": { "h": 6, "w": 16, "x": 8, "y": 0 },
+          "description": "argo_workflows_df_runs_total is a gauge (cumulative count per status).",
           "targets": [
-            { "expr": "sum by (status) (rate(df_runs_total[1h])) * 3600", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
+            { "expr": "sum by (status) (argo_workflows_df_runs_total)", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
           ]
         },
         {
@@ -50,22 +51,22 @@ spec:
           "gridPos": { "h": 7, "w": 12, "x": 0, "y": 6 },
           "fieldConfig": { "defaults": { "unit": "s" } },
           "targets": [
-            { "expr": "df_run_duration_seconds", "legendFormat": "duration", "refId": "A" }
+            { "expr": "argo_workflows_df_run_duration_seconds", "legendFormat": "duration", "refId": "A" }
           ]
         },
         {
           "id": 4, "type": "piechart", "title": "Outcome mix",
           "gridPos": { "h": 7, "w": 6, "x": 12, "y": 6 },
           "targets": [
-            { "expr": "sum by (status) (df_runs_total)", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
+            { "expr": "sum by (status) (argo_workflows_df_runs_total)", "legendFormat": "{{`{{status}}`}}", "refId": "A" }
           ]
         },
         {
-          "id": 5, "type": "stat", "title": "Succeeded / Failed (24h)",
+          "id": 5, "type": "stat", "title": "Succeeded / Failed (cumulative)",
           "gridPos": { "h": 7, "w": 6, "x": 18, "y": 6 },
           "targets": [
-            { "expr": "sum(increase(df_runs_total{status=\"Succeeded\"}[24h]))", "legendFormat": "succeeded", "refId": "A" },
-            { "expr": "sum(increase(df_runs_total{status=\"Failed\"}[24h]))", "legendFormat": "failed", "refId": "B" }
+            { "expr": "sum(argo_workflows_df_runs_total{status=\"Succeeded\"})", "legendFormat": "succeeded", "refId": "A" },
+            { "expr": "sum(argo_workflows_df_runs_total{status=\"Failed\"})", "legendFormat": "failed", "refId": "B" }
           ]
         },
         {
