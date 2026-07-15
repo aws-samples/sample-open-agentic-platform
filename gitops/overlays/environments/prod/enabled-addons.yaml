@@ -23,6 +23,11 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  otel_collector: true
+  monitoring: true
+  agent_core: true
+  agent_gateway: true
+  oam_components: true
   # Agent Sandbox capability — DISABLED for now (same reason as dev): EKS Auto
   # Mode + Bottlerocket cannot host Kata. Re-enable once Auto Mode integration
   # is designed. When on, prod holds the capability but the pool stays dormant

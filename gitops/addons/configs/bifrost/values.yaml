@@ -1,6 +1,6 @@
 # Bifrost AI Gateway — addon value overrides.
 # Per-cluster values (podIdentity.clusterName/region) are injected by the
-# ApplicationSet valuesObject in gitops/addons/bootstrap/default/addons.yaml.
+# ApplicationSet valuesObject in gitops/addons/registry/gateway.yaml.
 
 # ── Pod Identity (Bedrock access) — umbrella chart ──────────────────────────
 podIdentity:

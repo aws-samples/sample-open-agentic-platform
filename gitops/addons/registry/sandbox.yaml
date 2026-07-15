@@ -1,0 +1,102 @@
+# Agent Sandbox domain — Kata micro-VM sandboxes for the Dark Factory.
+# Three coordinated addons, wave-ordered:
+#   wave 0  agent-sandbox-operator  (upstream controller + CRDs)
+#   wave 1  kata-deploy             (Kata runtime on kata-capable MNG nodes)
+#   wave 2  agent-sandbox           (RuntimeClasses, SandboxTemplate, warm pool)
+# Enabled on DEV only (gitops/overlays/environments/dev/enabled-addons.yaml).
+# The kata-capable node layer is NOT GitOps-managed — see
+# gitops/addons/charts/agent-sandbox/nodepool/README.md.
+
+# Upstream agent-sandbox operator (v0.5.1): the controller + CRDs. Must land
+# before the kata runtime (wave 1) and the capability chart's CRs (wave 2).
+agent-sandbox-operator:
+  namespace: agent-sandbox-system
+  defaultVersion: '0.5.1'
+  path: 'gitops/addons/charts/agent-sandbox/upstream'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  syncPolicyAppSet:
+    preserveResourcesOnDeletion: false
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox
+        operator: In
+        values: ['true']
+
+# kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
+# kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
+# agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by
+# enable_agent_sandbox_kata — only clusters with a kata-capable nested-virt MNG
+# (see docs/dark-factory §12a) should carry that label. Sync-wave 1: runtime is
+# installed on nodes before the Sandbox operator (wave 2) schedules VMs.
+kata-deploy:
+  namespace: kube-system
+  chartName: kata-deploy
+  defaultVersion: '3.32.0'
+  # OCI chart at oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy.
+  # Do NOT set chartNamespace — the appset would build chart=<ns>/<name>
+  # (kata-containers/kata-deploy) producing a wrong OCI path. The namespace is
+  # already part of chartRepository.
+  chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox_kata
+        operator: In
+        values: ['true']
+  valuesObject:
+    kata-deploy:
+      image:
+        reference: quay.io/kata-containers/kata-deploy
+        tag: '3.32.0'
+      nodeSelector:
+        kata-enabled: 'true'
+      tolerations:
+        - key: kata
+          operator: Equal
+          value: 'true'
+          effect: NoSchedule
+        - key: katacontainers.io/runtime-not-ready
+          operator: Exists
+          effect: NoSchedule
+      shims:
+        disableAll: true
+        qemu:
+          enabled: true
+        clh:
+          enabled: true
+
+# Agent Sandbox capability chart — RuntimeClasses, kata-readiness (removes the
+# runtime-not-ready startup taint), coder SandboxTemplate, SandboxWarmPool, and
+# the egress NetworkPolicy. Sync-wave 2: after the operator (wave 0) + kata
+# runtime (wave 1). Consumers (the Dark Factory, Flow B) then claim from the
+# warm pool via a SandboxClaim(warmPoolRef).
+agent-sandbox:
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-sandbox'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox
+        operator: In
+        values: ['true']
+  valuesObject:
+    coderTemplate:
+      bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+
+# Dark Factory — autonomous agent coding controller. Hub-only (consumes the
+# sandbox warm pool via SandboxClaim). Wave 3: after the capability chart
+# (wave 2). Hub-only pin uses selectorMatchLabels (applied unconditionally by
+# the appset-chart) rather than the old alwaysSelector — same effect: generated
+# only on control-plane, never on a spoke.
+dark-factory:
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/dark-factory'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  selectorMatchLabels:
+    environment: control-plane
