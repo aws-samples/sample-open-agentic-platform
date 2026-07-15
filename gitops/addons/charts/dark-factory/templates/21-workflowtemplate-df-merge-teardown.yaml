@@ -1,0 +1,87 @@
+{{- /*
+df-merge-teardown — fired by the Sensor when a HUMAN approves the PR review
+(pull_request_review, state=approved) on a df/issue-N PR. This is the ONLY path
+that merges: the agent never self-merges (anti-pattern #5) — merge strictly
+follows an explicit human approval event.
+
+Steps: verify the PR is green (all dark-factory/* checks succeeded) → merge →
+delete the SandboxClaim (frees the warm pool). Guarded so a stray approval on a
+non-green PR can't merge. Deterministic name df-merge-<issue-id> for dedup.
+
+Parameters (from the Sensor): issue-number (parsed from the PR branch df/issue-N),
+repo, pr-number. The PR-review payload carries no issue id, so this keys on the
+issue NUMBER and reaps the claim by label selector.
+*/ -}}
+{{- if .Values.trigger.argoEvents.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: df-merge-teardown
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+spec:
+  serviceAccountName: dark-factory-workflow
+  synchronization:
+    mutex:
+      name: "df-issue-num-{{`{{workflow.parameters.issue-number}}`}}"
+  entrypoint: main
+  arguments:
+    parameters:
+      - name: issue-number
+      - name: repo
+      - name: pr-number
+  ttlStrategy:
+    secondsAfterCompletion: 3600
+  templates:
+    - name: main
+      dag:
+        tasks:
+          - name: merge
+            template: merge-pr
+          - name: teardown
+            template: teardown-claim
+            dependencies: [merge]
+
+    # ---- Merge the PR — only if every dark-factory/* check is green ----
+    - name: merge-pr
+      volumes:
+        - name: review-script
+          configMap:
+            name: df-review
+      script:
+        image: {{ .Values.review.reviewImage }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
+          - name: REPO
+            value: "{{`{{workflow.parameters.repo}}`}}"
+          - name: PR
+            value: "{{`{{workflow.parameters.pr-number}}`}}"
+        volumeMounts:
+          - name: review-script
+            mountPath: /review/merge.js
+            subPath: merge.js
+        source: |
+          set -eu
+          echo "[df-merge] human-approved PR #${PR} in ${REPO} — verifying + merging"
+          node /review/merge.js
+
+    # ---- Teardown the claim (operator refills the pool) ----
+    # Delete by the issue-number label (the PR-review event has no issue id).
+    - name: teardown-claim
+      resource:
+        action: delete
+        flags:
+          - "--ignore-not-found"
+          - "--selector=dark-factory.io/issue-number={{`{{workflow.parameters.issue-number}}`}}"
+        manifest: |
+          apiVersion: extensions.agents.x-k8s.io/v1beta1
+          kind: SandboxClaim
+          metadata:
+            namespace: {{ .Values.warmPool.namespace }}
+{{- end }}
