@@ -6,7 +6,7 @@
         <mxCell id="1" parent="0" />
 
         <!-- Title -->
-        <mxCell id="title" value="Dark Factory  ·  the df-run DAG (as built: P1 + P2)" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontFamily=Helvetica;fontColor=#16232E;" vertex="1" parent="1">
+        <mxCell id="title" value="Dark Factory  ·  the df-run DAG (as built: P1–P3)" style="text;html=1;align=left;verticalAlign=middle;fontSize=28;fontStyle=1;fontFamily=Helvetica;fontColor=#16232E;" vertex="1" parent="1">
           <mxGeometry x="70" y="28" width="1300" height="40" as="geometry" />
         </mxCell>
         <mxCell id="subtitle" value="Argo orchestrates; each step is gated by a when: condition on a prior step's output. The coder is untrusted (Kata VM, no K8s); every grader/reviewer runs OUTSIDE it, in a trusted hub step. Executable tests decide; LLM/agents advise." style="text;html=1;align=left;verticalAlign=middle;fontSize=14;fontFamily=Helvetica;fontColor=#6B7885;" vertex="1" parent="1">
@@ -54,13 +54,13 @@
           <mxGeometry x="1620" y="150" width="290" height="60" as="geometry" />
         </mxCell>
 
-        <!-- security: planned (dashed) -->
-        <mxCell id="security" value="&lt;b&gt;security review&lt;/b&gt; &lt;font color=&quot;#9AA6B2&quot;&gt;P3&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;AWS Security Agent · advisory&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;dashPattern=6 4;fontColor=#6B7885;fontSize=13;fontFamily=Helvetica;verticalAlign=middle;" vertex="1" parent="1">
+        <!-- security: BUILT (solid emerald) -->
+        <mxCell id="security" value="&lt;b&gt;security review&lt;/b&gt; &lt;font color=&quot;#0E9A6C&quot;&gt;✓ built (P3)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;linters + Nova reviewer · advisory&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#12C88B;strokeWidth=2.5;fontColor=#16232E;fontSize=13;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="1620" y="228" width="290" height="60" as="geometry" />
         </mxCell>
 
-        <!-- devops: planned (dashed) -->
-        <mxCell id="devops" value="&lt;b&gt;devops review&lt;/b&gt; &lt;font color=&quot;#9AA6B2&quot;&gt;P3&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;AWS DevOps Agent · advisory&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;dashPattern=6 4;fontColor=#6B7885;fontSize=13;fontFamily=Helvetica;verticalAlign=middle;" vertex="1" parent="1">
+        <!-- devops: BUILT (solid emerald) -->
+        <mxCell id="devops" value="&lt;b&gt;devops review&lt;/b&gt; &lt;font color=&quot;#0E9A6C&quot;&gt;✓ built (P3)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;IaC linters + Nova reviewer · advisory&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#FFFFFF;strokeColor=#12C88B;strokeWidth=2.5;fontColor=#16232E;fontSize=13;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="1620" y="306" width="290" height="60" as="geometry" />
         </mxCell>
 
@@ -102,15 +102,15 @@
 
         <!-- await → verify fan (orthogonal) -->
         <mxCell id="f1" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.35;entryX=0;entryY=0.5;fontColor=#0E9A6C;fontSize=11;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="await" target="holdout"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="f2" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="await" target="security"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="f3" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="await" target="devops"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f2" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="await" target="security"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f3" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="await" target="devops"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="f4" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.9;entryX=0;entryY=0.5;" edge="1" parent="1" source="await" target="detect"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="f5" value="when: deployable == true" style="html=1;rounded=0;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#C77F0A;fontSize=10;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="detect" target="deploytest"><mxGeometry relative="1" as="geometry" /></mxCell>
 
         <!-- verify → gate -->
         <mxCell id="g1" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.2;" edge="1" parent="1" source="holdout" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="g2" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.42;" edge="1" parent="1" source="security" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="g3" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.6;" edge="1" parent="1" source="devops" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g2" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.42;" edge="1" parent="1" source="security" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g3" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.6;" edge="1" parent="1" source="devops" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="g4" style="html=1;edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#B7C0C9;strokeWidth=1.5;dashed=1;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.85;" edge="1" parent="1" source="deploytest" target="gate"><mxGeometry relative="1" as="geometry" /></mxCell>
 
         <!-- gate → pr → human → done -->
@@ -139,7 +139,7 @@
         <mxCell id="legTrust" value="•  Trust: the coder runs UNTRUSTED in a Kata VM with no K8s API and no cloud creds — it can't read the holdout (a hub ConfigMap it can't reach). Every grader/reviewer runs OUTSIDE the coder in a trusted hub step." style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontFamily=Helvetica;fontColor=#3A4652;" vertex="1" parent="1">
           <mxGeometry x="90" y="646" width="1260" height="22" as="geometry" />
         </mxCell>
-        <mxCell id="legKey" value="•  Key:   solid emerald = implemented (P1 + P2)      dashed grey = planned (P3 reviewers, P4 deploy-test)      amber+red box = untrusted Kata VM" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontStyle=0;fontFamily=Helvetica;fontColor=#3A4652;" vertex="1" parent="1">
+        <mxCell id="legKey" value="•  Key:   solid emerald = implemented (P1 + P2 holdout + P3 reviewers)      dashed grey = planned (P4 deploy-test)      amber+red box = untrusted Kata VM" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontStyle=0;fontFamily=Helvetica;fontColor=#3A4652;" vertex="1" parent="1">
           <mxGeometry x="90" y="672" width="1260" height="22" as="geometry" />
         </mxCell>
 
