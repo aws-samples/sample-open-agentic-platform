@@ -184,14 +184,10 @@ spec:
                 dependencyName: issue-labeled
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
-            # Stack profile: pick the first label matching `dark-factory-<name>`
-            # and strip the prefix → profile name (e.g. dark-factory-terraform →
-            # terraform). No such label → "auto". sprig over the labels array.
-            - src:
-                dependencyName: issue-labeled
-                dataTemplate: >-
-                  {{ `{{- $p := "auto" -}}{{- range .Input.body.issue.labels -}}{{- if and (hasPrefix "dark-factory-" .name) (ne .name "dark-factory") -}}{{- $p = trimPrefix "dark-factory-" .name -}}{{- end -}}{{- end -}}{{- $p -}}` }}
-              dest: spec.arguments.parameters.6.value
+            # NOTE: profile is left as its "auto" default here; the df-run
+            # resolve-profile step derives the real profile from the issue's
+            # dark-factory-<name> label via the GitHub API (robust, vs fragile
+            # sprig over the webhook payload).
 
     # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
     - template:
