@@ -26,6 +26,21 @@ coder:
 bifrost:
   url: http://172.20.181.17:8080  # ClusterIP (Kata VM guest DNS cannot resolve svc names)
 
+# ── Observability: Langfuse LLM tracing (coder → Langfuse) ───────────────────
+# The coder's UA-shim observes LLM token usage and posts one Langfuse trace per
+# run (issue/PR/repo metadata + tokens). Reaches Langfuse by ClusterIP (Kata VM
+# guest DNS can't resolve svc names). Ingestion keys are synced from AWS Secrets
+# Manager (dark-factory/langfuse: public-key, secret-key) into agent-sandbox-system
+# via ExternalSecret (06-externalsecret-langfuse) and injected per-claim.
+langfuse:
+  enabled: true
+  url: http://172.20.68.83:3000   # langfuse svc ClusterIP
+  secretName: dark-factory-langfuse
+  externalSecret:
+    clusterSecretStore: aws-secrets-manager
+    secretsManagerKey: dark-factory/langfuse
+    refreshInterval: 1h
+
 github:
   # Secret (in .namespace) holding the GitHub App / token the workflow uses to
   # open the PR + maintain the sticky status comment. Key: token.
@@ -79,7 +94,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.13
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.14
 
 # ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
 # Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
@@ -105,7 +120,7 @@ review:
   # above that severity fail the workflow (per-severity blocking, docs §6.2).
   blockSeverity: none
   # Reuse the coder image (has node + npm audit + git).
-  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.13
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.14
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision

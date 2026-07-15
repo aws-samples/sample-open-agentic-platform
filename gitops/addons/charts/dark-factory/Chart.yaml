@@ -6,5 +6,5 @@ description: >-
   status, tear down on merge. Consumes the Flow A agent-sandbox warm pool.
   Runs on the hub (control-plane) only.
 type: application
-version: 0.12.0
-appVersion: "0.12.0"
+version: 0.13.0
+appVersion: "0.13.0"

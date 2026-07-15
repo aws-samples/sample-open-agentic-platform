@@ -202,6 +202,10 @@ spec:
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.profile }}" }
               - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
               - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
+{{- if .Values.langfuse.enabled }}
+              # Langfuse endpoint (non-secret); keys read from /etc/secrets (obs).
+              - { containerName: coder, name: LANGFUSE_URL, value: "{{ .Values.langfuse.url }}" }
+{{- end }}
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
     # The coder image (baked into the SandboxTemplate) auto-runs on VM start,
