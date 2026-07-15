@@ -338,23 +338,40 @@ clones the coder's `df/issue-N`, diffs it vs base, and runs `evaluate.js`.
 > inputs go RED, and on the one narrow test it passes the judge votes 0/3 catching the lookup table →
 > **0/4 gate FAIL**. Neither signal alone is the gate; together they resist gaming.
 
-### 6.2 Review roles — independent, read-only reviewers (Security + DevOps)
+### 6.2 Review roles — independent, read-only reviewers (Security + DevOps)  ✅ *built (P3, advisory)*
 
 The **workflow** (not the coder) runs two independent review roles on the finished diff, as
-**parallel DAG steps**. Each role is a **pluggable slot with a swappable backend**, so we're not
-locked to any single service's GA status:
+**parallel DAG steps** (`security-review ∥ devops-review`, alongside the holdout gate). Each role is a
+**pluggable slot with a swappable backend**, so we're not locked to any single service's GA status:
 
-| Role | Answers | Primary backend | Fallback backend |
-|---|---|---|---|
-| **Security** | *"Can this code be attacked?"* — vulns, exploitability, injection, secrets, insecure deps | **AWS Security Agent** (managed, GA — autonomous pentest + validated exploitability) | Fable-5 deep-security sandbox *(deep tier)* |
-| **DevOps** | *"Will this code operate well?"* — reliability, deployability, cost, observability, IaC/config correctness | **AWS DevOps Agent** (managed) | Fable-5 DevOps reviewer / IaC linters (cfn-guard, kube-linter, tflint) |
+| Role | Answers | Backends (`review.<role>.backend`) |
+|---|---|---|
+| **Security** | *"Can this code be attacked?"* — vulns, exploitability, injection, secrets, insecure deps | `auto` **(v1 default)** = linters + Nova reviewer · `aws-agent` (managed AWS Security Agent, when available) · `llm` · `linters` |
+| **DevOps** | *"Will this code operate well?"* — reliability, deployability, cost, observability, IaC/config correctness | `auto` **(v1 default)** = linters + Nova reviewer · `aws-agent` (managed AWS DevOps Agent) · `llm` · `linters` |
 
-- The managed agents are **out-of-cluster, AWS-managed** services invoked with the **hub
-  orchestrator's IAM** — **not** kagent pods, never running in the coder VM.
-- They are **read-only reviewers on the finished diff** — never co-authors. Findings are folded into
-  the PR report; the coder only *reacts* to them via the comment loop.
-- **v1 = advisory** (report-only). Gate hooks are designed so **per-severity blocking** can be
-  switched on later (e.g. a critical CVE blocks the PR).
+**As built (v1 `auto` backend)** — same two-signal split as the holdout gate:
+- **Deterministic linters = the hard signal.** Security: `npm audit` (vulnerable deps), a
+  hard-coded-secret scan on the diff (AWS keys, credentials, private keys, GitHub tokens), and
+  dangerous-sink flags (`eval`, `exec`). DevOps: Dockerfile hygiene (unpinned base image, runs-as-root)
+  and k8s-manifest hygiene (missing `resources`/probes, `privileged: true`).
+- **A different-family Nova reviewer = advisory.** Reads only the diff, returns structured findings;
+  it's a second opinion, never the sole verdict (and never the coder's own Claude — no self-review).
+- The **managed `aws-agent` backend** is a stub for the out-of-cluster AWS Security/DevOps Agents
+  (invoked with the **hub orchestrator's IAM**, never in the coder VM) — wired in when that API is
+  available. **Fable-5 is deliberately not used here** (returns 400 via Bifrost today + a
+  data-retention caveat — see the deep-sec note below).
+
+- Both roles are **read-only reviewers on the finished diff** — never co-authors. Each posts a
+  `dark-factory/<role>` commit status; findings fold into the PR report; the coder only *reacts* via
+  the comment loop.
+- **v1 = advisory** (`review.blockSeverity: none`) — reported, never fails the run. Raise
+  `blockSeverity` to `low|medium|high|critical` to make a finding at/above that bar **block** the PR
+  (e.g. `critical` blocks on a hard-coded AWS key).
+
+> **Verified (2026-07-15):** clean `subtract` diff → both roles **0 findings** (no false positives),
+> statuses green. Adversarial diffs (a hard-coded AWS key + `eval` → security flags **2 critical + 1
+> low**; a `:latest` root Dockerfile + a probe-less/limit-less Deployment → devops flags **4
+> findings**), correctly caught by the linters.
 
 **Optional deep-security tier (gated, later phase).** For reasoning-heavy vulnerability discovery
 beyond the managed Security Agent, a `deep-sec`-labelled run spins a **second, isolated Kata sandbox**
@@ -584,7 +601,8 @@ Each phase is independently valuable — if you stop after any one, you're bette
 | **P0** | **Relocate the sandbox capability to the hub** — nested-virt MNG + control-plane isolation + dev→hub cutover (all GitOps) | ✅ **done** | ✅ Kata warm pool co-located with Argo on the build plane |
 | **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ **done** | ✅ A working autonomous-PR loop on Argo |
 | **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
-| **P3** | **Security + DevOps review steps** (managed AWS Security/DevOps Agents, advisory) folded into the PR report; Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry | ⬜ next | ✅ Independent review evidence + full event-driven lifecycle |
+| **P3** | **Security + DevOps review steps** — parallel hub-side reviewers, `auto` backend (linters + Nova), advisory, posting `dark-factory/{security,devops}` statuses (managed AWS-Agent backend swappable in when its API lands) | ✅ **done** (advisory) | ✅ Independent review evidence — verified: clean code 0 findings; adversarial diffs correctly flagged |
+| **P3b** | Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry (`RETRY.md` → re-bind retained PVC) | ⬜ next | ✅ Full event-driven lifecycle + human-in-the-loop iteration |
 | **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
 | **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 
