@@ -1,9 +1,11 @@
 {{- /*
-Review script (P3) — the shared Security/DevOps reviewer, in a ConfigMap in the
-argo namespace, mounted only into the hub-side review steps. Read-only on the
-coder's diff; never runs in the Kata VM. One script, parameterized by ROLE.
+Hub-side scripts for df-run, in a ConfigMap in the argo namespace, mounted into
+the workflow steps (never the Kata VM):
+  - review.js  — the shared Security/DevOps reviewer (P3), parameterized by ROLE.
+  - status.js  — the sticky-status updater (rewrites the PR body from live verdicts).
+Always rendered: the sticky-status step always runs and needs status.js, even if
+the review roles are disabled.
 */ -}}
-{{- if .Values.review.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,4 +16,5 @@ metadata:
 data:
   review.js: |
 {{ .Files.Get "review/review.js" | indent 4 }}
-{{- end }}
+  status.js: |
+{{ .Files.Get "review/status.js" | indent 4 }}
