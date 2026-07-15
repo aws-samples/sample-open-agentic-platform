@@ -508,10 +508,10 @@ spec:
             value: {{ .Values.review.blockSeverity | quote }}
         volumeMounts:
           - name: review-script
-            mountPath: /review/review.js
+            mountPath: /scripts/review.js
             subPath: review.js
           - name: review-script
-            mountPath: /review/comment.js
+            mountPath: /scripts/comment.js
             subPath: comment.js
         source: |
           set -eu
@@ -531,7 +531,7 @@ spec:
 
           set +e
           REPO_DIR="${WORK}/repo" DIFF=/tmp/diff-${ROLE}.patch OUT=/tmp/review-${ROLE}.json \
-            node /review/review.js
+            node /scripts/review.js
           RC=$?
           set -e
 
@@ -561,7 +561,7 @@ spec:
           PR="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BRANCH="$BRANCH" node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].number||"")}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
           echo "[review:${ROLE}] PR lookup for comment: ${PR:-none}"
           if [ -n "$PR" ] && [ -f /tmp/review-${ROLE}.md ]; then
-            GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /review/comment.js "dark-factory:review-${ROLE}" < /tmp/review-${ROLE}.md
+            GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /scripts/comment.js "dark-factory:review-${ROLE}" < /tmp/review-${ROLE}.md
           fi
           # Advisory in v1: exit 0 unless review.blockSeverity made review.js exit non-zero.
           exit ${RC}
@@ -643,10 +643,10 @@ spec:
         command: [bash]
         volumeMounts:
           - name: review-script
-            mountPath: /review/comment.js
+            mountPath: /scripts/comment.js
             subPath: comment.js
           - name: review-script
-            mountPath: /review/deploy-test.sh
+            mountPath: /scripts/deploy-test.sh
             subPath: deploy-test.sh
         env:
           - name: WF_NAME
@@ -677,7 +677,7 @@ spec:
           # All logic lives in review/deploy-test.sh (ConfigMap file) — keeping it out
           # of this YAML block scalar avoids the shell-quoting hazards that broke
           # inline multi-line markdown. Kind-driven so it generalizes to new profiles.
-          bash /review/deploy-test.sh
+          bash /scripts/deploy-test.sh
 {{- end }}
 
     # ---- 3. Sticky status — rewrite the PR body from the live verdicts ----
@@ -711,12 +711,12 @@ spec:
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
         volumeMounts:
           - name: review-script
-            mountPath: /review/status.js
+            mountPath: /scripts/status.js
             subPath: status.js
         source: |
           set -eu
           echo "[df-run] phase={{`{{inputs.parameters.phase}}`}} — updating PR body from live verdicts (${REPO} ${BRANCH})"
-          node /review/status.js
+          node /scripts/status.js
 
     # ---- onExit: release the claim (operator refills the pool) ----
     - name: teardown

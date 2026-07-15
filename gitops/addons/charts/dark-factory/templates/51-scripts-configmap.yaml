@@ -15,14 +15,14 @@ metadata:
     {{- include "dark-factory.labels" . | nindent 4 }}
 data:
   review.js: |
-{{ .Files.Get "review/review.js" | indent 4 }}
+{{ .Files.Get "scripts/review.js" | indent 4 }}
   status.js: |
-{{ .Files.Get "review/status.js" | indent 4 }}
+{{ .Files.Get "scripts/status.js" | indent 4 }}
   merge.js: |
-{{ .Files.Get "review/merge.js" | indent 4 }}
+{{ .Files.Get "scripts/merge.js" | indent 4 }}
   iterate.js: |
-{{ .Files.Get "review/iterate.js" | indent 4 }}
+{{ .Files.Get "scripts/iterate.js" | indent 4 }}
   comment.js: |
-{{ .Files.Get "review/comment.js" | indent 4 }}
+{{ .Files.Get "scripts/comment.js" | indent 4 }}
   deploy-test.sh: |
-{{ .Files.Get "review/deploy-test.sh" | indent 4 }}
+{{ .Files.Get "scripts/deploy-test.sh" | indent 4 }}

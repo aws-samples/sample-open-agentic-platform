@@ -96,7 +96,7 @@ PR="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
       | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s)[0].number||"")}catch(e){}})' 2>/dev/null || echo "")"
 if [ -n "$PR" ]; then
   { echo "### ${ICON} Deploy test (${KIND})"; echo "**${DESC}**"; echo; cat "$REPORT"; } \
-    | GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /review/comment.js "dark-factory:deploy-test"
+    | GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /scripts/comment.js "dark-factory:deploy-test"
 fi
 
 if [ "$BLOCKING" = "true" ]; then exit "$RC"; else exit 0; fi

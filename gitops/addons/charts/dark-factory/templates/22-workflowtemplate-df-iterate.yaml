@@ -74,10 +74,10 @@ spec:
             value: {{ .Values.coder.profile | quote }}
         volumeMounts:
           - name: review-script
-            mountPath: /review/iterate.js
+            mountPath: /scripts/iterate.js
             subPath: iterate.js
         source: |
           set -eu
           echo "[df-iterate] PR #${PR} in ${REPO} — resolving branch + submitting revision"
-          node /review/iterate.js
+          node /scripts/iterate.js
 {{- end }}

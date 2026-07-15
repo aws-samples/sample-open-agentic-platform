@@ -64,12 +64,12 @@ spec:
             value: "{{`{{workflow.parameters.pr-number}}`}}"
         volumeMounts:
           - name: review-script
-            mountPath: /review/merge.js
+            mountPath: /scripts/merge.js
             subPath: merge.js
         source: |
           set -eu
           echo "[df-merge] human-approved PR #${PR} in ${REPO} — verifying + merging"
-          node /review/merge.js
+          node /scripts/merge.js
 
     # ---- Teardown the claim (operator refills the pool) ----
     # Delete by the issue-number label (the PR-review event has no issue id).
