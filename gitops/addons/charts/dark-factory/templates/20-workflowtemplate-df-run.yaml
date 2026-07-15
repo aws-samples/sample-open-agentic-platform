@@ -139,6 +139,10 @@ spec:
             namespace: {{ .Values.warmPool.namespace }}
             labels:
               dark-factory.io/issue: "{{`{{workflow.parameters.issue-id}}`}}"
+              # issue NUMBER too: df-merge-teardown / df-iterate are fired by PR
+              # events whose payload carries the branch (df/issue-<number>) but NOT
+              # the issue id, so they select the claim to reap by this label.
+              dark-factory.io/issue-number: "{{`{{workflow.parameters.issue-number}}`}}"
               dark-factory.io/managed-by: df-run
           spec:
             warmPoolRef:
