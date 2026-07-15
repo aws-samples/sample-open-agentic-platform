@@ -6,10 +6,13 @@ branch. This rubric is for the LLM judge only; the coder never sees it.
 A scenario is satisfied only when BOTH hold:
 
 1. **Executable test is green** — the hidden test for that scenario, run against the built code,
-   exits 0. This is the hard signal (a `return true` stub cannot pass a real test).
-2. **The plain-English behaviour is met** — the judge, reading the scenario and the actual code diff,
-   confirms the described behaviour is genuinely implemented (not faked, not hard-coded to the
-   examples, no obvious way to game the test).
+   exits 0. This is the HARD, un-gameable signal: it proves the behaviour.
+2. **The judge finds no gaming** — the judge only sees scenarios whose test already passed. Its job
+   is NOT to re-verify the behaviour (the test did that) but to detect code that passes the narrow
+   test *without genuinely implementing it*: hard-coded example inputs, a lookup table keyed to the
+   test values, `return true`/constant returns, or reaching the grading path.
 
-Score PASS only if you are confident on both. When uncertain, score FAIL — a false PASS is worse than
-a false FAIL here. Ignore code style, comments, and formatting; judge behaviour only.
+Judge guidance: **default to PASS**; answer NO only on clear evidence of gaming. A simple, genuine
+implementation (e.g. a one-line arithmetic expression) is a PASS. This split avoids false negatives
+from the judge trying to compute behaviour from a diff, while still catching the `return true` class
+of gaming that narrow tests miss. Ignore code style, comments, and formatting.

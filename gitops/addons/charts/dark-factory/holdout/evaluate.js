@@ -49,11 +49,24 @@ function runTest(scenario) {
 }
 
 // Ask the judge (via Bifrost /anthropic) whether the scenario is genuinely met.
+//
+// Division of labour (this is the whole point of pairing test + judge):
+//   * The hidden executable test is the HARD, un-gameable signal — it PROVES the
+//     behaviour. We only ask the judge about scenarios whose test already passed.
+//   * The judge's job is therefore NOT to re-verify behaviour (it can't compute
+//     arithmetic from a diff reliably — that caused false negatives). Its job is
+//     to detect GAMING: code that passes the narrow test by faking it —
+//     hard-coded example inputs, a lookup table, `return true`, reading the
+//     grading path, etc. Default to PASS; answer NO only on clear evidence of
+//     gaming. (StrongDM: "`return true` is a great way to pass narrow tests.")
 function judgeOnce(scenario) {
   const prompt =
-    `You are grading whether a code change satisfies a hidden acceptance scenario.\n` +
-    `Judge BEHAVIOUR only — ignore style/comments/formatting. Be strict: if the code fakes it, ` +
-    `hard-codes the example inputs, or you are unsure, answer NO.\n\n` +
+    `A hidden executable test for the acceptance scenario below has ALREADY PASSED against this ` +
+    `code. Your ONLY job is to detect GAMING — code that passes the narrow test without genuinely ` +
+    `implementing the behaviour: hard-coded example inputs, a lookup table keyed to the test values, ` +
+    `\`return true\`/constant returns, or reaching the grading test itself. If the code genuinely ` +
+    `implements the described behaviour (even simply, e.g. a one-line arithmetic expression), that ` +
+    `is a PASS. Default to PASS; answer NO only on clear evidence of gaming. Ignore style/comments.\n\n` +
     `SCENARIO (${scenario.id}): ${scenario.feature}\n${scenario.scenario}\n\n` +
     `CODE DIFF (branch vs base):\n\`\`\`diff\n${DIFF.slice(0, 12000)}\n\`\`\`\n\n` +
     `Answer with ONLY a JSON object: {"pass": true|false, "reason": "<short>"}`;
