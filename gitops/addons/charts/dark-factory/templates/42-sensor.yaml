@@ -108,9 +108,12 @@ spec:
           # Map GitHub webhook fields → workflow parameters.
           parameters:
             # Deterministic workflow name = df-run-<issue-id> (the dedup key).
+            # sprig `int64` renders the large JSON number as a plain integer —
+            # without it Go templating emits scientific notation (4.88e+09),
+            # which is an invalid RFC-1123 metadata.name.
             - src:
                 dependencyName: issue-labeled
-                dataTemplate: "df-run-{{ `{{ .Input.body.issue.id }}` }}"
+                dataTemplate: "df-run-{{ `{{ .Input.body.issue.id | int64 }}` }}"
               dest: metadata.name
             - src:
                 dependencyName: issue-labeled
