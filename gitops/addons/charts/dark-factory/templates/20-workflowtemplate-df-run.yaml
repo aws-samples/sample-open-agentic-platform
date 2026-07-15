@@ -426,18 +426,75 @@ spec:
               default: "{}"
 {{- end }}
 
-    # ---- 3. Sticky status (workflow-side backstop; the coder posts primary) ----
+    # ---- 3. Sticky status — rewrite the PR body from the live verdicts ----
+    # Runs AFTER every verify step (its DAG deps). The coder wrote the PR body at
+    # PR-open time, before verification ran, so its holdout/security/devops lines
+    # are placeholders ("pending"). This step reads the authoritative
+    # dark-factory/* commit STATUSES from GitHub (the source of truth the verify
+    # steps posted) and rewrites the PR body in place with the real verdicts — the
+    # "one live sticky status" from the design (README §7). Idempotent: the body
+    # between the markers is fully regenerated each run.
     - name: sticky-status
       inputs:
         parameters:
           - name: phase
       script:
-        image: {{ .Values.stepImage }}
-        command: [sh]
+        image: {{ .Values.review.reviewImage }}
+        command: [bash]
+        env:
+          - name: GH_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: {{ .Values.github.tokenKey }}
         source: |
           set -eu
-          echo "[df-run] pipeline reached phase={{`{{inputs.parameters.phase}}`}} for issue #{{`{{workflow.parameters.issue-number}}`}}"
-          echo "[df-run] PR is open and awaiting human review (P1 stops here)."
+          REPO="{{`{{workflow.parameters.repo}}`}}"
+          BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          ISSUE="{{`{{workflow.parameters.issue-number}}`}}"
+          echo "[df-run] phase={{`{{inputs.parameters.phase}}`}} — updating PR body from live verdicts (issue #${ISSUE})"
+          GH_TOKEN="${GH_TOKEN}" REPO="${REPO}" BRANCH="${BRANCH}" ISSUE="${ISSUE}" node -e '
+            const https=require("https");
+            const {GH_TOKEN,REPO,BRANCH,ISSUE}=process.env;
+            const H={"User-Agent":"dark-factory-status","Authorization":"Bearer "+GH_TOKEN,"Accept":"application/vnd.github+json"};
+            const api=(method,path,body)=>new Promise((res,rej)=>{
+              const data=body?JSON.stringify(body):null;
+              const req=https.request({host:"api.github.com",method,path,headers:{...H,...(data?{"Content-Type":"application/json","Content-Length":Buffer.byteLength(data)}:{})}},
+                r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{ if(r.statusCode>=200&&r.statusCode<300) res(b?JSON.parse(b):{}); else rej(new Error(method+" "+path+" -> "+r.statusCode+": "+b.slice(0,150))); });});
+              req.on("error",rej); if(data)req.write(data); req.end();
+            });
+            const owner=REPO.split("/")[0];
+            const icon=s=>s==="success"?"✅":s==="failure"||s==="error"?"❌":s==="pending"?"⏳":"⬜";
+            (async()=>{
+              // Find the open PR for the coder branch + its head SHA.
+              const prs=await api("GET","/repos/"+REPO+"/pulls?head="+owner+":"+BRANCH+"&state=open");
+              if(!prs.length){console.log("[df-run] no open PR — nothing to update");return;}
+              const pr=prs[0], sha=pr.head.sha;
+              // Read the dark-factory/* commit statuses (latest per context).
+              const st=await api("GET","/repos/"+REPO+"/commits/"+sha+"/status");
+              const by={}; for(const s of (st.statuses||[])) if(!by[s.context]) by[s.context]={state:s.state,desc:s.description||""};
+              const row=(ctx,label)=>{const s=by["dark-factory/"+ctx]; return s?`- ${icon(s.state)} **${label}:** ${s.desc||s.state}`:`- ⬜ **${label}:** _not run_`;};
+              const marker="<!-- dark-factory:status -->";
+              const block=[marker,
+                "### 🏭 Dark Factory — verification",
+                row("implementation","Build + unit tests"),
+                row("holdout","Holdout gate"),
+                row("security","Security review"),
+                row("devops","DevOps review"),
+                "",
+                `_Overall: **${st.state}**. Autonomously implemented in a hardware-isolated Kata micro-VM; verification ran as independent hub-side steps (see the checks above). Awaiting human review._`
+              ].join("\n");
+              // Replace an existing marker block, else append; strip the coder's stale placeholder lines.
+              let body=pr.body||"";
+              if(body.includes(marker)){ body=body.replace(new RegExp(marker+"[\\s\\S]*$"),block); }
+              else {
+                body=body.replace(/\n?- \*\*Build \+ unit tests:\*\*.*(\n- \*\*Holdout gate:\*\*.*)?(\n- \*\*Security \/ DevOps:\*\*.*)?/,"").trimEnd();
+                body=(body?body+"\n\n":"")+block;
+              }
+              await api("PATCH","/repos/"+REPO+"/pulls/"+pr.number,{body});
+              console.log("[df-run] PR #"+pr.number+" body updated — overall="+st.state);
+            })().catch(e=>{console.error("[df-run] status update failed (non-fatal): "+e.message);process.exit(0);});
+          '
 
     # ---- onExit: release the claim (operator refills the pool) ----
     - name: teardown
