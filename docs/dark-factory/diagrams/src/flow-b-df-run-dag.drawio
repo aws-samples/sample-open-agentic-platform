@@ -90,7 +90,7 @@
         </mxCell>
 
         <!-- Merge + teardown (onExit) -->
-        <mxCell id="done" value="&lt;b&gt;merge + teardown&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;onExit: delete claim · pool refills&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#12C88B;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="done" value="&lt;b&gt;df-merge-teardown&lt;/b&gt; &lt;font color=&quot;#0E9A6C&quot;&gt;✓ built&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;green-gated squash-merge · del branch + claim&lt;/font&gt;" style="rounded=1;arcSize=16;html=1;whiteSpace=wrap;fillColor=#12C88B;strokeColor=none;fontColor=#FFFFFF;fontSize=13;fontFamily=Helvetica;shadow=1;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="2820" y="234" width="180" height="72" as="geometry" />
         </mxCell>
 
@@ -116,7 +116,7 @@
         <!-- gate → pr → human → done -->
         <mxCell id="h1" value="pass → open PR" style="html=1;rounded=0;strokeColor=#12C88B;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#0E9A6C;fontSize=11;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="gate" target="pr"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="h2" value="review" style="html=1;rounded=0;strokeColor=#B7C0C9;strokeWidth=2.5;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#6B7885;fontSize=11;fontFamily=Helvetica;" edge="1" parent="1" source="pr" target="human"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="h3" value="approve" style="html=1;rounded=0;strokeColor=#12C88B;strokeWidth=3;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#0E9A6C;fontSize=11;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="human" target="done"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="h3" value="approve review → Sensor" style="html=1;rounded=0;strokeColor=#12C88B;strokeWidth=3;endArrow=block;endFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#0E9A6C;fontSize=11;fontStyle=1;fontFamily=Helvetica;" edge="1" parent="1" source="human" target="done"><mxGeometry relative="1" as="geometry" /></mxCell>
 
         <!-- when: callout on holdout -->
         <mxCell id="whenNote" value="when: pr-number != ''&#10;(a PR exists)" style="rounded=1;arcSize=20;html=1;whiteSpace=wrap;fillColor=#FFFBEA;strokeColor=#FBA919;strokeWidth=1;dashed=0;fontColor=#8A5A0A;fontSize=10;fontFamily=Helvetica;align=center;" vertex="1" parent="1">
