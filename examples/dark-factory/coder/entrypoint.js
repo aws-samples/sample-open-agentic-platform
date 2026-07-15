@@ -36,6 +36,52 @@ const PROFILE = process.env.CODER_PROFILE || "claude-code";
 
 const GH_TOKEN_PATH = process.env.GH_TOKEN_PATH || "/etc/secrets/gh-token";
 const BIFROST_KEY_PATH = process.env.BIFROST_KEY_PATH || "/etc/secrets/bifrost-api-key";
+// Langfuse (obs): the shim accumulates LLM usage into /tmp/llm-usage.json; at
+// run-end we post ONE Langfuse trace (+ a generation observation) with the issue/
+// PR/repo metadata. Endpoint + keys injected by the df-run claim (LANGFUSE_URL is
+// the ClusterIP, keys from the langfuse-otel-keys secret via ExternalSecret).
+const LANGFUSE_URL = process.env.LANGFUSE_URL || "";
+// Keys read from projected tmpfs (mode 0400), like the other secrets — never env.
+const readFileSafe = (p) => { try { return require("fs").readFileSync(p, "utf8").trim(); } catch { return ""; } };
+const LANGFUSE_PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY || readFileSafe("/etc/secrets/langfuse-public-key");
+const LANGFUSE_SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || readFileSafe("/etc/secrets/langfuse-secret-key");
+
+// Post one Langfuse trace summarizing this run's LLM usage. Best-effort, never
+// throws into the run. Uses the batch ingestion API (/api/public/ingestion).
+function postLangfuseTrace(outcome) {
+  if (!LANGFUSE_URL || !LANGFUSE_PUBLIC_KEY || !LANGFUSE_SECRET_KEY) {
+    console.log("[langfuse] not configured (no URL/keys) — skipping trace"); return Promise.resolve();
+  }
+  let usage = { calls: 0, inputTokens: 0, outputTokens: 0, models: {} };
+  try { usage = JSON.parse(fs.readFileSync(LLM_USAGE_PATH, "utf8")); } catch { /* no calls captured */ }
+  const traceId = `df-issue-${ISSUE}-${BRANCH.replace(/[^a-zA-Z0-9]/g, "-")}`;
+  const now = new Date().toISOString();
+  const events = [
+    { id: `${traceId}-t`, type: "trace-create", timestamp: now,
+      body: { id: traceId, name: `dark-factory/issue-${ISSUE}`, userId: "dark-factory",
+        metadata: { repo: REPO, issue: ISSUE, branch: BRANCH, profile: process.env.DF_PROFILE || "auto", outcome,
+          calls: usage.calls, models: Object.keys(usage.models || {}) },
+        tags: ["dark-factory", "coder"] } },
+    { id: `${traceId}-g`, type: "generation-create", timestamp: now,
+      body: { id: `${traceId}-gen`, traceId, name: "coder-llm", model: Object.keys(usage.models || {})[0] || "claude-sonnet",
+        usage: { input: usage.inputTokens, output: usage.outputTokens, total: usage.inputTokens + usage.outputTokens, unit: "TOKENS" },
+        metadata: { calls: usage.calls } } },
+  ];
+  const auth = Buffer.from(`${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}`).toString("base64");
+  const data = JSON.stringify({ batch: events });
+  const u = new URL(LANGFUSE_URL.replace(/\/+$/, "") + "/api/public/ingestion");
+  const lib = u.protocol === "https:" ? https : http;
+  return new Promise((resolve) => {
+    const req = lib.request(
+      { hostname: u.hostname, port: u.port || (u.protocol === "https:" ? 443 : 80), path: u.pathname, method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data), Authorization: `Basic ${auth}` } },
+      (res) => { let b = ""; res.on("data", (c) => (b += c)); res.on("end", () => {
+        console.log(`[langfuse] trace ${traceId} → ${res.statusCode} (${usage.calls} calls, ${usage.inputTokens}+${usage.outputTokens} tok)`); resolve();
+      }); });
+    req.on("error", (e) => { console.log(`[langfuse] post failed (non-fatal): ${e.message}`); resolve(); });
+    req.write(data); req.end();
+  });
+}
 
 function readSecret(p) {
   try { return fs.readFileSync(p, "utf8").trim(); } catch { return null; }
@@ -148,15 +194,37 @@ function checkout() {
 // connection (observed: ConnectionRefused). So we write the shim to a temp file
 // and spawn `node` on it in the background, then wait for its port to open.
 const SHIM_PORT = 8791;
+const LLM_USAGE_PATH = "/tmp/llm-usage.json";
 function startBifrostUaShim(upstreamBase) {
+  // The shim also OBSERVES LLM usage for Langfuse (obs): it buffers each response,
+  // parses Anthropic usage (input/output tokens), and accumulates totals + per-call
+  // records into LLM_USAGE_PATH. The main process reads that at run-end and posts a
+  // Langfuse trace. Buffering is fine here — coder responses are small JSON (claude
+  // -p is non-streaming for our calls); on parse failure we pass the body through
+  // untouched, so observation never breaks the proxy.
   const shimSrc = `
-const http=require("http"),https=require("https"),{URL}=require("url");
+const http=require("http"),https=require("https"),fs=require("fs"),{URL}=require("url");
 const up=new URL(${JSON.stringify(upstreamBase)});
 const agent=up.protocol==="https:"?https:http;
+const USAGE=${JSON.stringify(LLM_USAGE_PATH)};
+let acc={calls:0,inputTokens:0,outputTokens:0,models:{},records:[]};
+function record(model,u){
+  acc.calls++; const it=(u&&(u.input_tokens||0))||0, ot=(u&&(u.output_tokens||0))||0;
+  acc.inputTokens+=it; acc.outputTokens+=ot; acc.models[model]=(acc.models[model]||0)+1;
+  if(acc.records.length<200) acc.records.push({model,input_tokens:it,output_tokens:ot});
+  try{fs.writeFileSync(USAGE,JSON.stringify(acc));}catch(e){}
+}
 http.createServer((cReq,cRes)=>{
   const headers={...cReq.headers,host:up.host,"user-agent":"dark-factory-coder"};
   const pReq=agent.request({protocol:up.protocol,hostname:up.hostname,port:up.port||(up.protocol==="https:"?443:80),method:cReq.method,path:up.pathname.replace(/\\/+$/,"")+cReq.url,headers},
-    pRes=>{cRes.writeHead(pRes.statusCode,pRes.headers);pRes.pipe(cRes);});
+    pRes=>{
+      const chunks=[]; cRes.writeHead(pRes.statusCode,pRes.headers);
+      pRes.on("data",c=>{chunks.push(c);cRes.write(c);});
+      pRes.on("end",()=>{cRes.end();
+        try{const j=JSON.parse(Buffer.concat(chunks).toString());
+          if(j&&j.usage) record(j.model||"unknown",j.usage);}catch(e){}
+      });
+    });
   pReq.on("error",e=>{cRes.writeHead(502);cRes.end(String(e.message));});
   cReq.pipe(pReq);
 }).listen(${SHIM_PORT},"127.0.0.1",()=>console.log("[ua-shim] listening on ${SHIM_PORT} -> "+up.href));
@@ -284,6 +352,7 @@ async function main() {
         state: "success", context: "dark-factory/implementation",
         description: "no changes needed — spec already satisfied on base",
       });
+      await postLangfuseTrace("no-change");
       process.exit(0);
     }
     // df/issue-N is bot-owned and single-writer (the df-run workflow holds a
@@ -326,11 +395,13 @@ async function main() {
       description: "implemented, built + tests green",
     });
     console.log(`[coder] done — PR opened, status success on ${headSha}`);
+    await postLangfuseTrace("success");
   } catch (e) {
     console.error(`[coder] failed: ${e.message}`);
     if (headSha) {
       try { await gh("POST", `/repos/${REPO}/statuses/${headSha}`, { state: "failure", context: "dark-factory/implementation", description: e.message.slice(0, 130) }); } catch (_) {}
     }
+    await postLangfuseTrace("failure");
     process.exit(1);
   }
   // Keep the VM alive briefly so logs are collectible; the claim TTL / teardown reaps it.
