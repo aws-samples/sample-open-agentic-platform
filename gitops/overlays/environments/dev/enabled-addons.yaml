@@ -22,6 +22,11 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  otel_collector: true
+  monitoring: true
+  agent_core: true
+  agent_gateway: true
+  oam_components: true
   # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool.
   # Enabled on DEV (where the Dark Factory runs). ArgoCD manages the IN-CLUSTER
   # pieces (operator, CRDs, RuntimeClasses, SandboxTemplate, pool-manager).

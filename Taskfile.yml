@@ -249,9 +249,14 @@ tasks:
       REVISION: "{{.AGENTIC_REPO_REVISION}}"
       BASEPATH: "{{.AGENTIC_REPO_BASEPATH}}"
       HUB_CLUSTER_NAME: "{{.HUB_CLUSTER_NAME}}"
+      # Reference model: the appset-chart generator is sourced from the platform
+      # repo (appmod-blueprints), not vendored here. These feed the bootstrap
+      # Application's source B.
+      PLATFORM_REPO_URL: "{{.PLATFORM_REPO}}"
+      PLATFORM_REPO_REVISION: "{{.PLATFORM_REF}}"
     cmds:
       - task: agentic:hub-oidc-annotation
-      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl --context {{.HUB_CLUSTER_NAME}} apply -f -
+      - envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME} ${PLATFORM_REPO_URL} ${PLATFORM_REPO_REVISION}' < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl --context {{.HUB_CLUSTER_NAME}} apply -f -
       - printf '\n✓ Agentic platform bootstrap applied. ArgoCD will sync components to clusters with enable_agent_platform=true label (set via fleet overlays).\n'
 
   # ─── Ingress / Domain Post-Install ───────────────────────────────────────────
