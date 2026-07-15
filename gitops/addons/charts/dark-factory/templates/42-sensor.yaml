@@ -84,7 +84,15 @@ spec:
               apiVersion: argoproj.io/v1alpha1
               kind: Workflow
               metadata:
-                generateName: df-run-
+                # DEDUP: deterministic name keyed on the GitHub issue id (globally
+                # unique). GitHub delivers the `labeled` webhook more than once
+                # (delivery retries + rapid re-labels), so without this each
+                # delivery span­ed a competing df-run that force-pushed its own
+                # commit and split the commit statuses across SHAs. With a fixed
+                # name, the 2nd+ submit collides (AlreadyExists) and is a harmless
+                # no-op — one issue = one in-flight run. The name is overwritten by
+                # the issue-id parameter below; this is a fallback if that is empty.
+                name: df-run-pending
                 namespace: {{ .Values.argo.namespace }}
               spec:
                 workflowTemplateRef:
@@ -99,6 +107,11 @@ spec:
                     - name: base-branch
           # Map GitHub webhook fields → workflow parameters.
           parameters:
+            # Deterministic workflow name = df-run-<issue-id> (the dedup key).
+            - src:
+                dependencyName: issue-labeled
+                dataTemplate: "df-run-{{ `{{ .Input.body.issue.id }}` }}"
+              dest: metadata.name
             - src:
                 dependencyName: issue-labeled
                 dataKey: body.issue.id
