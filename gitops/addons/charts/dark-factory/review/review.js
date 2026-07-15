@@ -163,6 +163,21 @@ async function main() {
   const summary = { role: ROLE, backend: BACKEND, total: findings.length, topSeverity: topSev, counts, blocked, findings };
   fs.writeFileSync(OUT, JSON.stringify(summary, null, 2));
 
+  // Also render a markdown report the workflow posts to the PR (findings on the
+  // PR itself, not just in logs). One section per role; details per finding.
+  const sevIcon = { critical: "🔴", high: "🟠", medium: "🟡", low: "🔵" };
+  const title = ROLE === "devops" ? "🛠️ DevOps review" : "🔒 Security review";
+  const lines = [`### ${findings.length ? "⚠️" : "✅"} ${title}`];
+  if (!findings.length) {
+    lines.push("No findings. _(linters + a different-family LLM reviewer, read-only on the diff; advisory)_");
+  } else {
+    const order = Object.entries(counts).sort((a, b) => (SEV[b[0]] || 0) - (SEV[a[0]] || 0)).map(([k, v]) => `${v} ${k}`).join(", ");
+    lines.push(`**${findings.length} finding(s)** — ${order}. _(advisory${blocked ? "; **would block** at " + BLOCK_SEVERITY : ""})_`, "");
+    lines.push("| Severity | Finding | Source | Detail |", "|---|---|---|---|");
+    for (const f of findings) lines.push(`| ${sevIcon[f.severity] || ""} ${f.severity} | ${(f.title || "").replace(/\|/g, "\\|")} | \`${f.source}\` | ${(f.detail || "").replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 200)} |`);
+  }
+  fs.writeFileSync(OUT.replace(/\.json$/, ".md"), lines.join("\n"));
+
   for (const f of findings) console.log(`[review:${ROLE}] ${f.severity.toUpperCase()} — ${f.title} (${f.source})`);
   console.log(`[review:${ROLE}] ${findings.length} finding(s), top=${topSev}${blocked ? " — BLOCKS (>= " + BLOCK_SEVERITY + ")" : " — advisory"}`);
   // Exit non-zero only when blocking is configured AND a finding meets the bar.
