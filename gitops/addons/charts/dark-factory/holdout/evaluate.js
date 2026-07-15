@@ -101,10 +101,30 @@ async function judgeQuorum(scenario) {
   return { yes, runs: JUDGE_RUNS, pass: yes >= JUDGE_QUORUM, reasons: votes.map((v) => v.reason) };
 }
 
+// A scenario may declare `appliesWhen`: a node expression evaluated with `repo`
+// (checkout dir) and `diff` (the PR's unified diff) in scope. If it returns false,
+// the scenario is SKIPPED (not failed) — so scenarios written for one kind of change
+// (e.g. a subtract function) don't mis-grade an unrelated PR (e.g. a Terraform
+// bucket). Prefer keying on the DIFF ("did THIS change touch index.js") over mere
+// file existence. No appliesWhen = always applicable (back-compat).
+// Example: "/index\\.js/.test(diff)".
+function applies(scenario, repoDir, diff) {
+  if (!scenario.appliesWhen) return true;
+  try { return !!Function("repo", "diff", `return (${scenario.appliesWhen});`)(repoDir, diff); }
+  catch { return true; } // predicate error → don't silently skip; treat as applicable
+}
+
 async function main() {
   const { scenarios } = JSON.parse(fs.readFileSync(SCENARIOS, "utf8"));
   const results = [];
+  let skipped = 0;
   for (const s of scenarios) {
+    if (!applies(s, REPO_DIR, DIFF)) {
+      skipped++;
+      console.log(`[holdout] ${s.id}: SKIP (appliesWhen=false — not relevant to this change)`);
+      results.push({ id: s.id, feature: s.feature, skipped: true });
+      continue;
+    }
     const test = runTest(s);
     // Only spend judge calls when the hard signal is green; a red test is an
     // automatic scenario FAIL (a stub that can't pass the test can't pass the gate).
@@ -113,12 +133,16 @@ async function main() {
     results.push({ id: s.id, feature: s.feature, pass, testGreen: test.green, testDetail: test.detail, judge });
     console.log(`[holdout] ${s.id}: ${pass ? "PASS" : "FAIL"} (test=${test.green ? "green" : "RED"}, judge=${judge.yes}/${judge.runs})`);
   }
-  const passed = results.filter((r) => r.pass).length;
-  const ratio = results.length ? passed / results.length : 0;
+  // Gate is computed over APPLICABLE scenarios only. Zero applicable → the holdout
+  // has nothing to say about this change → pass as n/a (advisory anyway).
+  const applicable = results.filter((r) => !r.skipped);
+  const passed = applicable.filter((r) => r.pass).length;
+  const ratio = applicable.length ? passed / applicable.length : 1;
   const green = ratio >= THRESHOLD;
-  const summary = { passed, total: results.length, ratio: Math.round(ratio * 1000) / 1000, threshold: THRESHOLD, green, results };
+  const summary = { passed, total: applicable.length, skipped, ratio: Math.round(ratio * 1000) / 1000, threshold: THRESHOLD, green, results };
   fs.writeFileSync(OUT, JSON.stringify(summary, null, 2));
-  console.log(`[holdout] GATE ${green ? "PASS" : "FAIL"} — ${passed}/${results.length} (${Math.round(ratio * 100)}%) vs threshold ${Math.round(THRESHOLD * 100)}%`);
+  if (!applicable.length) console.log(`[holdout] GATE PASS — no applicable scenarios for this change (${skipped} skipped, n/a)`);
+  else console.log(`[holdout] GATE ${green ? "PASS" : "FAIL"} — ${passed}/${applicable.length} (${Math.round(ratio * 100)}%) vs threshold ${Math.round(THRESHOLD * 100)}%${skipped ? `, ${skipped} skipped` : ""}`);
   // Exit code reflects the gate so the workflow step can branch on it.
   process.exit(green ? 0 : 1);
 }
