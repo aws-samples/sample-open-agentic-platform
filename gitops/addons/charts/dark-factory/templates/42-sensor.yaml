@@ -74,9 +74,30 @@ spec:
           - path: body.label.name
             type: string
             value: ["dark-factory"]
+    - name: pr-approved
+      eventSourceName: dark-factory-github
+      eventName: dark-factory
+      filters:
+        data:
+          # A human APPROVED a review on a df/issue-N PR → merge + teardown.
+          - path: headers.X-Github-Event
+            type: string
+            value: ["pull_request_review"]
+          - path: body.action
+            type: string
+            value: ["submitted"]
+          - path: body.review.state
+            type: string
+            value: ["approved"]
+          - path: body.pull_request.head.ref
+            type: string
+            # Only Dark Factory branches (df/issue-<n>); string values are regex.
+            value: ["df/issue-.*"]
   triggers:
     - template:
         name: submit-df-run
+        # With multiple dependencies, each trigger must name the one it fires on.
+        conditions: "issue-labeled"
         argoWorkflow:
           operation: submit
           source:
@@ -139,4 +160,46 @@ spec:
                 dependencyName: issue-labeled
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
+
+    # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
+    - template:
+        name: submit-df-merge
+        conditions: "pr-approved"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                # Dedup per PR head SHA so repeated approvals don't double-merge.
+                name: df-merge-pending
+                namespace: {{ .Values.argo.namespace }}
+              spec:
+                workflowTemplateRef:
+                  name: df-merge-teardown
+                arguments:
+                  parameters:
+                    - name: issue-number
+                    - name: repo
+                    - name: pr-number
+          parameters:
+            # Name = df-merge-<pr-head-sha> (unique per reviewed commit).
+            - src:
+                dependencyName: pr-approved
+                dataTemplate: "df-merge-{{ `{{ .Input.body.pull_request.head.sha | trunc 12 }}` }}"
+              dest: metadata.name
+            # issue-number parsed from the branch ref df/issue-<n>.
+            - src:
+                dependencyName: pr-approved
+                dataTemplate: "{{ `{{ .Input.body.pull_request.head.ref | trimPrefix \"df/issue-\" }}` }}"
+              dest: spec.arguments.parameters.0.value
+            - src:
+                dependencyName: pr-approved
+                dataKey: body.repository.full_name
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: pr-approved
+                dataKey: body.pull_request.number
+              dest: spec.arguments.parameters.2.value
 {{- end }}

@@ -18,3 +18,5 @@ data:
 {{ .Files.Get "review/review.js" | indent 4 }}
   status.js: |
 {{ .Files.Get "review/status.js" | indent 4 }}
+  merge.js: |
+{{ .Files.Get "review/merge.js" | indent 4 }}
