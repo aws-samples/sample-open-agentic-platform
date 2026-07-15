@@ -196,14 +196,22 @@ End to end:
    `/workspace/artifacts/result.json`) and **the workflow opens the PR** once tests are green. Before
    this point, status lives on the **issue**; from here on the canonical status board is the **PR**.
 5. **Independent verification** — *parallel* DAG steps, driven by the workflow, **never by the coder**
-   (see [§6](#6-independent-verification-the-heart-of-the-pattern)):
-   - **Holdout gate** — an isolated eval **Job** runs hidden BDD scenarios the coder can neither see
-     nor edit, judged by a **different model**, **paired with executable tests**, ≥90% to pass.
+   (see [§6](#6-independent-verification-the-heart-of-the-pattern) and
+   [diagram B.4](diagrams/flow-b-dark-factory.md#b4--the-df-run-dag-as-built--how-step-gating-works)).
+   Each step runs **outside** the coder in a trusted hub pod and is gated by a `when:` condition on a
+   prior step's output (Argo skips it if the condition is false — deterministic, not agentic):
+   - **Holdout gate** ✅ *built* — a hub-side step (scenarios in a ConfigMap the credential-less coder
+     cannot fetch) runs hidden BDD scenarios' **executable tests** (the un-gameable signal) plus a
+     **different-family Nova judge** that catches *gaming*; ≥90% to pass. Gated `when: pr-number != ""`.
    - **Security review** — the **AWS Security Agent** (managed, read-only on the diff) as the primary
      backend; an optional **Fable-5 deep-security sandbox** (a *second* isolated Kata VM) as a gated
      deep tier.
    - **DevOps review** — the **AWS DevOps Agent** (or a Fable-5 reviewer / IaC linters) for
      reliability, deployability, cost, observability, and IaC correctness. Advisory in v1.
+   - **Deploy-test** *(P4, conditional)* — for PRs that touch deployable artifacts (a `detect-deployable`
+     step greps the diff for `Chart.yaml`/`k8s/`/`Dockerfile`), a **trusted** step deploys to an
+     ephemeral namespace, probes it, and tears it down. This is the only step that holds **K8s access**
+     — never the coder. Its probes are ground truth; the DevOps agent is the advisory second opinion.
 6. **Gate + live status** — a `gate` step aggregates the findings; each step upserts the **one sticky
    PR comment** ⏳→✅/❌ with timestamps and log/trace links (single writer = the workflow, serialized
    by a per-issue mutex — see [§7](#7-live-status-in-the-pr)).
@@ -227,9 +235,10 @@ not in a parked process. This buys per-issue isolation, concurrency (bounded by 
 the kata nodepool capacity), retries, a durable run history, native Prometheus metrics, and the Argo
 UI — the substrate for scaling across many concurrent issues.
 
-> The earlier **P1 Node orchestrator** (`examples/dark-factory/`) is a working reference for the
-> claim/coder/sticky-comment logic; under this design its libraries become **Argo workflow
-> step-containers**, and the long-running Deployment is superseded by the DAG.
+> The earlier **P1 Node orchestrator** has been **removed** — its claim/coder/sticky-comment logic is
+> now the `df-run` DAG's steps (a `resource` template creates the `SandboxClaim`, a `script` step
+> polls GitHub, `onExit` tears down). Only the **coder image** remains under
+> [`examples/dark-factory/coder/`](../../examples/dark-factory/coder/).
 
 ### Two worked use-cases
 
@@ -280,31 +289,54 @@ OUTPUTS  (produced by the coder)
 This is the part most teams skip — and it's why their agents learn to *game the tests*. Two
 independent checks run **outside** the coder's control.
 
-### 6.1 Holdout gate — train/test separation for code
+### 6.1 Holdout gate — train/test separation for code  ✅ *built (P2, advisory)*
 
-Acceptance criteria are written as **plain-English BDD scenarios** that live in a location the
-coder **cannot see or edit**. A separate evaluator job runs them against the built code.
+Acceptance criteria are **plain-English BDD scenarios**, each paired with an **executable test**,
+stored where the coder **cannot see or edit** them. A separate hub-side step runs them against the
+built code. As built, the content lives in the chart under
+[`gitops/addons/charts/dark-factory/holdout/`](../../gitops/addons/charts/dark-factory/holdout/) and
+renders into **hub ConfigMaps** in the `argo` namespace:
 
 ```
 holdout/
-  scenarios/*.feature     # hidden acceptance scenarios (never mounted into the sandbox)
-  rubric.md               # how the judge scores
+  evaluate.js                        # the evaluator (→ ConfigMap df-holdout-eval)
+  <owner>-<repo>/scenarios.json      # hidden scenarios + executable tests (→ ConfigMap df-holdout-<slug>)
+  <owner>-<repo>/rubric.md           # how the judge scores
 ```
+
+The `holdout-gate` Argo step (see [diagram B.4](./diagrams/flow-b-dark-factory.md#b4--the-df-run-dag-as-built--how-step-gating-works))
+clones the coder's `df/issue-N`, diffs it vs base, and runs `evaluate.js`.
 
 **Hard rules (these are the whole point):**
 
-1. **The coder cannot read or write the holdout.** Scenarios are never mounted into the sandbox;
-   the coder's repo checkout **excludes the grading-test path**. On a failed run the coder gets
-   only **one-line reasons** in `RETRY.md` — never the scenario text.
-2. **A different model judges.** The evaluator's LLM judge must be a **different model/family than
-   the coder** (defeats self-preference bias — a model scores its own output higher).
-3. **The judge is never the sole gate.** Every scenario is paired with **executable tests**; the
-   LLM judgment is one signal, not the verdict. Each scenario runs **2-of-3** to smooth
-   non-determinism. Gate = **≥90%** satisfaction.
+1. **The coder cannot read or write the holdout — enforced by capability, not policy.** The scenarios
+   live in a Kubernetes ConfigMap; the coder runs in a Kata VM with **no K8s API access**
+   (`automountServiceAccountToken: false`, verified — no token, API times out), so it *cannot fetch
+   the ConfigMap even if it tried*. It only ever clones the target repo, never the holdout. On a
+   failed run the coder gets only **one-line reasons** (`RETRY.md`) — never the scenario text.
+2. **Two signals, both required to pass a scenario:**
+   - **The executable test** — run against the built code, this is the **hard, un-gameable** signal:
+     it *proves* the behaviour (a `return true` stub cannot pass a real test with unseen inputs).
+   - **A different-family LLM judge** — we judge Claude's code with **Amazon Nova**
+     (`us.amazon.nova-pro-v1:0`) to defeat self-preference bias (a model scores its own output
+     higher). **2-of-3** votes smooth non-determinism.
+3. **The judge detects *gaming*, not behaviour.** The test already proves behaviour; asking the judge
+   to re-derive it from a diff produced false negatives. So the judge's *only* job is to catch code
+   that passes the narrow test **without genuinely implementing it** — hard-coded example inputs,
+   lookup tables, `return true`, reaching the grading path — defaulting to PASS. It only sees
+   scenarios whose test already passed.
+4. **Gate = ≥90%** of scenarios pass (test-green **and** judge-quorum). Posts a `dark-factory/holdout`
+   commit status. **Advisory in v1** (`holdout.blocking=false`) — reported, not enforced; flip to
+   `blocking: true` to gate the workflow.
 
 > This mirrors ML holdout sets and is directly validated by StrongDM's "Software Factory," which
 > found *"`return true` is a great way to pass narrowly written tests"* and fixed it by storing
 > scenarios **outside** the codebase.
+>
+> **Verified both directions (2026-07-15):** honest `subtract` → all 4 hidden tests green, judge
+> confirms no gaming → **4/4 (100%) gate passed**. A hard-coded-lookup stub → tests with unseen
+> inputs go RED, and on the one narrow test it passes the judge votes 0/3 catching the lookup table →
+> **0/4 gate FAIL**. Neither signal alone is the gate; together they resist gaming.
 
 ### 6.2 Review roles — independent, read-only reviewers (Security + DevOps)
 
@@ -547,14 +579,14 @@ Jules, Cursor background agents, Factory.ai, and StrongDM's "Software Factory" a
 
 Each phase is independently valuable — if you stop after any one, you're better off than before.
 
-| Phase | Delivers | Independently useful? |
-|------:|----------|-----------------------|
-| **P0** | **Relocate the sandbox capability to the hub** — nested-virt MNG + control-plane isolation + dev→hub cutover (all GitOps) | ✅ Kata warm pool co-located with Argo on the build plane |
-| **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ A working autonomous-PR loop on Argo |
-| **P2** | Strict **holdout gate** (isolated eval Job, different-model judge, executable-test pairing) + bounded `df-iterate` retry | ✅ Quality gate that resists gaming |
-| **P3** | **Security + DevOps review steps** (managed AWS Security/DevOps Agents, advisory) folded into the PR report; Argo Events Sensor for approve/comment/merge | ✅ Independent review evidence + full event-driven lifecycle |
-| **P4** | Ephemeral test targets (namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ✅ Full lights-off lifecycle + measurement |
-| **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ✅ Vendor-plurality + higher autonomy + deep review |
+| Phase | Delivers | Status | Independently useful? |
+|------:|----------|:------:|-----------------------|
+| **P0** | **Relocate the sandbox capability to the hub** — nested-virt MNG + control-plane isolation + dev→hub cutover (all GitOps) | ✅ **done** | ✅ Kata warm pool co-located with Argo on the build plane |
+| **P1** | First `df-run` **WorkflowTemplate**: trigger → claim warm sandbox → Claude Code coder → build/test → workflow opens PR + sticky status → manual teardown | ✅ **done** | ✅ A working autonomous-PR loop on Argo |
+| **P2** | Strict **holdout gate** (hidden scenarios in a hub ConfigMap, executable tests + a different-family Nova judge, ≥90% gate) | ✅ **done** (advisory) | ✅ Quality gate that resists gaming — verified green (honest code 4/4) *and* adversarially (gamed stub 0/4) |
+| **P3** | **Security + DevOps review steps** (managed AWS Security/DevOps Agents, advisory) folded into the PR report; Argo Events Sensor for approve/comment/merge; bounded `df-iterate` retry | ⬜ next | ✅ Independent review evidence + full event-driven lifecycle |
+| **P4** | Conditional **`deploy-test`** (gated on a `detect-deployable` step: namespace default; `deep-test` `PlatformCluster`) + **`onExit` auto-teardown** + reaper + success-metrics dashboard | ⬜ planned | ✅ Full lights-off lifecycle + measurement |
+| **P5** | **Kiro** coder profile; per-severity **blocking** gate option; **Fable-5 deep-security sandbox** (`deep-sec`) | ⬜ planned | ✅ Vendor-plurality + higher autonomy + deep review |
 
 ---
 
