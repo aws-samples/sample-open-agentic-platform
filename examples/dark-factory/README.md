@@ -1,125 +1,109 @@
-# Dark Factory — Flow B, Phase P1 (reference implementation — superseded)
+# Dark Factory — Flow B coder image
 
-> ⚠️ **Superseded by the Argo Workflows design.** This directory is the **P1 reference**: a bespoke
-> long-running **Node orchestrator** that imperatively drives claim → coder → PR → teardown. The
-> current design orchestrates Flow B with **Argo Workflows on the hub** (see
-> [`docs/dark-factory/README.md`](../../docs/dark-factory/README.md) §4 and
-> [`diagrams/flow-b-dark-factory.md`](../../docs/dark-factory/diagrams/flow-b-dark-factory.md)).
-> Under that design this code is **not deployed as a service** — instead its pieces become **Argo
-> workflow step-containers**:
-> - `orchestrator/lib/github.js` — the sticky-comment upsert + PR creation (reused verbatim as a step).
-> - `orchestrator/lib/k8s.js` — the `SandboxClaim` shape / bind-poll (Argo does most of this
->   declaratively via a `resource` template; the shape is the reference).
-> - `coder/agent.js` — the in-VM coder workload, **unchanged** (it's behind the SandboxTemplate,
->   independent of who orchestrates).
->
-> Kept for reference and reuse; not deleted. The sections below describe the original P1 service.
+The **in-VM coder** for the Dark Factory (Flow B). This directory builds the container image that
+runs **inside the Kata micro-VM sandbox** — the untrusted side of the trust boundary. Orchestration
+(trigger → claim → drive → PR → teardown) is **not** here: it's done declaratively by **Argo
+Workflows on the hub** (see the [`dark-factory` Helm chart](../../gitops/addons/charts/dark-factory/)
+and [`docs/dark-factory/README.md`](../../docs/dark-factory/README.md) §4).
 
-**Trigger → claim warm sandbox → drive the coder → open a PR with a live sticky status → manual
-teardown.** The first independently-useful slice of the [Dark Factory pattern](../../docs/dark-factory/README.md)
-and the first real consumer of **[Flow A](../../docs/dark-factory/diagrams/flow-a-sandbox-capability.md)**'s
-Kata micro-VM warm pool.
+> **History:** an earlier P1 used a bespoke long-running **Node orchestrator** (`orchestrator/`) and
+> an HTTP-server coder (`coder/agent.js`). Both were removed once Flow B moved to Argo Workflows —
+> the orchestrator's responsibilities are now the `df-run` WorkflowTemplate's DAG steps (a `resource`
+> template creates the `SandboxClaim`; a `script` step polls GitHub; `onExit` releases the claim),
+> and the coder became **credential-less + self-reporting** (`entrypoint.js`).
 
-Autonomy is bounded here: P1 opens a PR and **stops** — a human still reviews and merges. The
-verification gates (holdout, Security/DevOps agents) arrive in P2/P3.
-
-## Components
+## What's here
 
 | Path | Role | Trust |
 |---|---|---|
-| `.github/workflows/dark-factory.yml` | GitHub Action — gates on the `dark-factory` label, mints a short-TTL token, POSTs to the orchestrator | trigger |
-| `orchestrator/server.js` | HTTP service: `/run` drives the pipeline, `/teardown` releases the sandbox | **trusted** (holds the GH token; in later phases, AWS IAM) |
-| `orchestrator/lib/k8s.js` | Claims a warm sandbox via a `SandboxClaim(warmPoolRef)`, waits for bind+Ready, releases on teardown | trusted |
-| `orchestrator/lib/github.js` | The **one** sticky PR status comment (edited in place) + PR creation | trusted |
-| `orchestrator/lib/coder.js` | Drives the pluggable coder inside the sandbox over its `:8080` control endpoint | trusted → boundary |
-| `coder/agent.js` | The in-VM coder agent: writes `SPEC.md`, checks out `df/issue-<n>`, runs Claude Code headless via Bifrost, builds+tests, returns `result.json` | **untrusted** (Kata VM, no cloud creds) |
-| `orchestrator/k8s/*` | Deployment + Service + narrowly-scoped RBAC (SandboxClaims only) | — |
-| `gitops-app.yaml` | ArgoCD Application pinning the orchestrator to **spoke-dev** | — |
+| `coder/entrypoint.js` | The in-VM coder. Auto-runs on VM start; reads the `DF_*` env the `SandboxClaim` injects, fetches the issue as `SPEC.md`, checks out `df/issue-<n>`, runs Claude Code headless via Bifrost, builds + tests, pushes the branch, opens the PR, and sets the `dark-factory/implementation` commit status. | **untrusted** (Kata VM, no cloud creds, no k8s API) |
+| `coder/Dockerfile` | Lean `node:20-alpine` + git/bash/python3/go + the Claude Code CLI. Carries **no** credentials. | — |
 
-## Request flow
+## How the coder is driven (single-cluster on the hub)
 
 ```
 GitHub issue (label: dark-factory)
-  → GitHub Action (gate on label, mint short-TTL token)
-  → orchestrator POST /run   ← trusted; holds GH token, narrow RBAC
-       ├─ SandboxClaim(warmPoolRef=coder-warmpool)   ← binds a warm Kata VM (Flow A)
-       ├─ wait for status.sandbox {name, podIPs} + Ready
-       ├─ POST run spec to coder agent in the VM (SPEC.md + branch df/issue-N)
-       │     coder: implement → build → unit tests until green → push branch
-       ├─ open PR + maintain ONE sticky status comment (⏳→✅)
-       └─ (P2/P3) holdout gate + Security/DevOps agents — pending
-  → human reviews evidence, approves, merges
-  → orchestrator POST /teardown → delete SandboxClaim (pool refills)
+  → Argo Events: GitHub webhook EventSource → Sensor
+  → df-run WorkflowTemplate (argo ns, per-issue mutex)
+       ├─ claim  : resource template creates SandboxClaim(warmPoolRef=coder-warmpool)
+       │            with the issue injected as env (DF_ISSUE_NUMBER/REPO/BRANCH/…)
+       │            → operator binds a warm Kata VM (Flow A), status Ready
+       │   ┌── coder VM (this image) auto-runs entrypoint.js on start:
+       │   │     issue → SPEC.md → checkout df/issue-N → claude implements →
+       │   │     build + unit tests → push branch → open PR →
+       │   │     POST commit status dark-factory/implementation = success|failure
+       │   └── credential-less to the k8s API → self-reports through GitHub
+       ├─ drive-coder : script step POLLS the GitHub API for a PR on df/issue-N and
+       │                reads the head commit's dark-factory/implementation status
+       ├─ status : sticky status (P1 stops here — PR open, awaiting human)
+       └─ onExit : teardown — delete the SandboxClaim (operator refills the pool)
+  → human reviews the PR, approves, merges
 ```
 
-## The SandboxClaim contract (verified against the live v1beta1 CRD)
+## The `DF_*` contract (env the claim injects)
 
-The orchestrator claims from Flow A's `SandboxWarmPool` rather than creating sandboxes:
+`entrypoint.js` is entirely env-driven. The `df-run` claim step sets these via `SandboxClaim.spec.env`
+(verified contract: the SandboxTemplate opts in with `envVarsInjectionPolicy: Overrides`):
 
-```yaml
-apiVersion: extensions.agents.x-k8s.io/v1beta1
-kind: SandboxClaim
-metadata: { name: df-issue-42, namespace: agent-sandbox-system }
-spec:
-  warmPoolRef: { name: coder-warmpool }   # bind a pre-warmed idle sandbox
-  env:                                     # per-container, NON-secret
-    - { containerName: coder, name: BIFROST_URL, value: http://bifrost.bifrost.svc.cluster.local:8080 }
-  lifecycle: { ttlSecondsAfterFinished: 10800 }   # safety-net TTL
-# status.sandbox.{name, podIPs[]} + status.conditions[Ready] → the bound VM
-```
+| Var | Purpose |
+|---|---|
+| `DF_REPO` | `owner/name` of the target repo |
+| `DF_ISSUE_NUMBER` | the GitHub issue number (the spec) |
+| `DF_BRANCH` | `df/issue-<n>` |
+| `DF_BASE_BRANCH` | base to branch from (default `main`) |
+| `DF_ISSUE_TITLE` | issue title (for the PR title) |
+| `CODER_PROFILE` | `claude-code` (primary) or `kiro` |
+| `BIFROST_URL` | LLM gateway — the **ClusterIP** (the Kata VM guest DNS can't resolve svc names) |
+
+Secrets are **not** in env: the short-TTL GitHub token (+ optional Bifrost key) are projected into
+the VM at `/etc/secrets` (tmpfs, mode 0400) and read at point of use.
+
+## Bifrost gotchas baked into `entrypoint.js`
+
+The Claude Code CLI talks to models only through the platform's **Bifrost** gateway. Four issues had
+to be solved to make `claude -p` work inside the locked-down VM (see the commit history + memory):
+
+1. **User-Agent routing** — Bifrost 400s (`Unexpected field type`) on any request whose UA starts
+   with `claude-cli`. `entrypoint.js` fronts Bifrost with a **localhost UA-shim** (a separate `node`
+   process on `127.0.0.1:8791`) that rewrites the UA and transparently forwards everything (incl. the
+   SSE stream). `ANTHROPIC_BASE_URL` points at the shim.
+2. **Writable HOME** — `readOnlyRootFilesystem` makes `$HOME` read-only, so Claude Code can't create
+   `~/.claude` (shell snapshots its Bash tool needs). `HOME`/`CLAUDE_CONFIG_DIR`/XDG are pointed at
+   the writable `/tmp` tmpfs.
+3. **Model alias** — use `ANTHROPIC_MODEL=claude-sonnet` (a Bifrost alias → `us.anthropic.claude-sonnet-4-5`).
+   Do **not** set `CLAUDE_CODE_USE_BEDROCK` (that bypasses the base URL and needs in-VM AWS creds).
+4. **`git push --force`** (not `--force-with-lease`) — the depth-1 clone can't satisfy the lease
+   check; `df/issue-N` is bot-owned + single-writer (per-issue workflow mutex), so `--force` is safe.
+
+The GitHub self-report helper retries transient failures (transport/5xx/429) so a blip on the report
+call can't mark a good run failed.
 
 ## Trust boundary (§10)
 
-- The **orchestrator** is trusted and runs on general Auto Mode nodes (not the kata MNG). It holds
-  the GitHub token (handed per-run by the Action) and — in later phases — AWS IAM. Its RBAC is
-  scoped to `sandboxclaims` (+ read `sandboxes`) in one namespace; no pod/exec, no secrets, no
-  cluster scope.
-- The **coder** is untrusted: it runs in a **Kata micro-VM**, holds only a Bifrost API key + a
-  short-TTL GitHub token via **projected tmpfs (mode 0400)** — read at point of use, never in env —
-  and reaches models only through **Bifrost**. Flow A's NetworkPolicy locks egress to
-  Bifrost + DNS + GitHub.
+- The **coder is untrusted**: Kata micro-VM (own kernel), `automountServiceAccountToken: false` (no
+  k8s API), no cloud IAM. Its only credentials are a Bifrost key + short-TTL GitHub token via
+  projected tmpfs (0400). Flow A's NetworkPolicy + node ClusterIP firewall lock egress to Bifrost +
+  DNS + GitHub. Because it holds no k8s creds, it **self-reports through GitHub** (the workflow polls).
+- The **AWS IAM stays with the hub orchestrator** (Argo), never in the VM.
 - This breaks the **lethal trifecta** (untrusted issue text + credentials + egress): credentials are
   never in the issue-ingesting sandbox context, and egress is denied by default.
 
-## Build & deploy (staged — not auto-deployed)
+## Build & deploy
+
+The image is built + pushed to ECR and pinned on the Flow A `SandboxTemplate` via GitOps
+(`gitops/addons/charts/agent-sandbox/values.yaml` → `coderTemplate.image`). ArgoCD syncs the template;
+the pool-manager recycles warm pods onto the new tag.
 
 ```bash
-# 1) Build + push both images to ECR, pin the tags.
-docker build -t <ecr>/dark-factory-orchestrator:0.1.0 examples/dark-factory/orchestrator
-docker build -t <ecr>/dark-factory-coder:0.1.0        examples/dark-factory/coder
-#    → set the coder image on the Flow A SandboxTemplate (coderTemplate.image)
-#    → set the orchestrator image in orchestrator/k8s/deployment.yaml
-
-# 2) Deploy the orchestrator onto spoke-dev.
-kubectl --context hub apply -f examples/dark-factory/gitops-app.yaml   # ArgoCD (recommended)
-# or directly:
-kubectl --context spoke-dev apply -f examples/dark-factory/orchestrator/k8s/
-
-# 3) Wire the trigger.
-#    repo/org variable  DARK_FACTORY_ORCHESTRATOR_URL  = https://<orchestrator ingress>
-#    repo/org secret     DARK_FACTORY_DISPATCH_TOKEN    = shared dispatch secret
-#    Label an issue `dark-factory` to fire a run.
+# amd64 (hub nodes are amd64); podman/docker both work.
+podman build --platform linux/amd64 -t <ecr>/dark-factory-coder:<tag> examples/dark-factory/coder
+podman push <ecr>/dark-factory-coder:<tag>
+# → bump coderTemplate.image in the agent-sandbox chart values, commit, let ArgoCD sync.
 ```
 
-## Configuration (orchestrator env)
+## Roadmap
 
-| Var | Default | Purpose |
-|---|---|---|
-| `SANDBOX_NAMESPACE` | `agent-sandbox-system` | Where the warm pool + claims live |
-| `WARM_POOL_NAME` | `coder-warmpool` | Flow A `SandboxWarmPool` to claim from |
-| `CLAIM_READY_TIMEOUT_MS` | `120000` | Max wait for a claim to bind + Ready |
-| `CLAIM_TTL_SECONDS` | `10800` | Safety-net TTL on the claim (reaper backstop) |
-| `BIFROST_URL` | `http://bifrost.bifrost.svc.cluster.local:8080` | LLM gateway the coder uses |
-| `CODER_PROFILE` | `claude-code` | `claude-code` (primary) or `kiro` |
-
-## Not in P1 (by design)
-
-- **Holdout gate** (P2), **AWS Security/DevOps agents** (P3) — rendered as pending in the sticky
-  comment so the surface is stable.
-- **Auto-teardown on merge** + reaper (P4) — P1 teardown is the manual `/teardown` call.
-- **Iterative comment loop** — P1 opens the PR and stops; the human drives from there.
-
-## Status
-
-Code + manifests validated (JS syntax, server-side `kubectl --dry-run` against spoke-dev). Images
-are **not** built/pushed and nothing is deployed yet — this is the staged P1 implementation.
+- **P1 (done):** issue → PR, end-to-end, hands-off. The workflow stops at "PR open, awaiting human."
+- **P2:** holdout gate — an isolated eval Job runs hidden BDD scenarios the coder never sees.
+- **P3:** AWS Security / DevOps review agents (advisory → blocking-capable).
+- **P4:** auto-merge/teardown on approval + iterate loop (PR-comment driven).
