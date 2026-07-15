@@ -96,14 +96,33 @@ async function gh(method, path, body) {
 
 async function fetchIssueSpec() {
   const issue = await gh("GET", `/repos/${REPO}/issues/${ISSUE}`);
-  return `# ${issue.title}\n\n${issue.body || ""}\n`;
+  let spec = `# ${issue.title}\n\n${issue.body || ""}\n`;
+  // Iterate mode (df-iterate): a human left a change request on the PR. Append it
+  // so the coder revises the EXISTING branch to address the feedback, rather than
+  // re-implementing from scratch. DF_ITERATE_NOTE is injected by the df-iterate
+  // claim; absent on a first (df-run) pass.
+  const note = process.env.DF_ITERATE_NOTE;
+  if (note && note.trim()) {
+    spec += `\n---\n\n## Revision requested (address this feedback on the existing branch)\n\n${note}\n`;
+  }
+  return spec;
 }
 
 function checkout() {
   const token = readSecret(GH_TOKEN_PATH);
   const url = `https://x-access-token:${token}@github.com/${REPO}.git`;
   const dir = `${WORKSPACE}/repo`;
-  if (!fs.existsSync(dir)) sh("git", ["clone", "--depth", "1", "--branch", BASE, url, dir]);
+  const iterating = !!(process.env.DF_ITERATE_NOTE && process.env.DF_ITERATE_NOTE.trim());
+  if (!fs.existsSync(dir)) {
+    // On iterate, start from the existing coder branch (build on prior work);
+    // otherwise branch fresh from BASE.
+    if (iterating) {
+      try { sh("git", ["clone", "--depth", "1", "--branch", BRANCH, url, dir]); }
+      catch { sh("git", ["clone", "--depth", "1", "--branch", BASE, url, dir]); }
+    } else {
+      sh("git", ["clone", "--depth", "1", "--branch", BASE, url, dir]);
+    }
+  }
   sh("git", ["checkout", "-B", BRANCH], { cwd: dir });
   sh("git", ["config", "user.email", "dark-factory@noreply"], { cwd: dir });
   sh("git", ["config", "user.name", "Dark Factory"], { cwd: dir });
