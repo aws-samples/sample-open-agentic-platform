@@ -42,6 +42,11 @@ spec:
         value: ""
       - name: base-branch
         value: main
+      # Optional revision request (df-iterate passes the PR comment here; empty on
+      # a first pass). Injected into the coder as DF_ITERATE_NOTE so it revises the
+      # existing branch to address the feedback.
+      - name: iterate-note
+        value: ""
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
@@ -157,6 +162,7 @@ spec:
               - { containerName: coder, name: DF_ISSUE_TITLE, value: "{{`{{workflow.parameters.issue-title}}`}}" }
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.profile }}" }
               - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
+              - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
     # The coder image (baked into the SandboxTemplate) auto-runs on VM start,
