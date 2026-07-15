@@ -470,7 +470,11 @@ spec:
           ' || true
 
           # Post the full findings to the PR as a marker comment (edited in place).
-          PR="$(node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].number||"")}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
+          # NOTE: REPO/BRANCH are shell vars here (not step env), so they MUST be
+          # passed explicitly to node — process.env.REPO would otherwise be empty
+          # and the PR lookup returns nothing (silent no-comment bug).
+          PR="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BRANCH="$BRANCH" node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].number||"")}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
+          echo "[review:${ROLE}] PR lookup for comment: ${PR:-none}"
           if [ -n "$PR" ] && [ -f /tmp/review-${ROLE}.md ]; then
             GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /review/comment.js "dark-factory:review-${ROLE}" < /tmp/review-${ROLE}.md
           fi
