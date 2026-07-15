@@ -14,9 +14,9 @@ RUN apk add --no-cache git bash python3 py3-pip go
 RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
-# entrypoint.js — env-driven Flow B P1 coder (auto-runs on VM start, self-reports
-# via GitHub). agent.js — the earlier HTTP-server reference (kept for reuse).
-COPY entrypoint.js agent.js ./
+# entrypoint.js — env-driven Flow B coder (auto-runs on VM start, self-reports
+# via GitHub commit status; the df-run Argo workflow polls GitHub for the result).
+COPY entrypoint.js ./
 
 # Non-root, matches the SandboxTemplate securityContext (runAsUser 1000).
 USER 1000
