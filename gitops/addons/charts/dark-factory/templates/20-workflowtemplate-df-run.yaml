@@ -473,13 +473,11 @@ spec:
 
 {{- if .Values.deployTest.enabled }}
     # ---- 2d. detect-deployable (P4) — does the diff touch deployable artifacts? ----
-    # Cheap grep of the changed file list. Emits `deployable = true|false`, which
-    # gates the expensive deploy-test step. Uses the coder image (git + node).
+    # Emits `deployable = true|false`, which gates the expensive deploy-test step.
+    # Uses the GitHub compare API (authoritative changed-file list) rather than a
+    # local git diff — a depth-1 clone + depth-1 base fetch share no merge-base, so
+    # `origin/BASE...HEAD` yields nothing (observed: empty file list → false).
     - name: detect-deployable
-      volumes:
-        - name: review-script
-          configMap:
-            name: df-review
       script:
         image: {{ .Values.review.reviewImage }}
         command: [bash]
@@ -499,12 +497,12 @@ spec:
             value: {{ .Values.deployTest.deployablePatterns | quote }}
         source: |
           set -eu
-          WORK=/tmp/detect; rm -rf "$WORK"; mkdir -p "$WORK"
-          git clone --quiet --depth 1 --branch "$BRANCH" \
-            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK/repo"
-          cd "$WORK/repo"
-          git fetch --quiet --depth 1 origin "$BASE" || true
-          FILES="$(git diff --name-only "origin/${BASE}...HEAD" 2>/dev/null || git diff --name-only HEAD~1 2>/dev/null || echo "")"
+          FILES="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BASE="$BASE" BRANCH="$BRANCH" node -e '
+            const https=require("https");
+            const {GH_TOKEN,REPO,BASE,BRANCH}=process.env;
+            https.get({host:"api.github.com",path:"/repos/"+REPO+"/compare/"+BASE+"..."+BRANCH,headers:{"User-Agent":"df-detect","Authorization":"Bearer "+GH_TOKEN,"Accept":"application/vnd.github+json"}},
+              r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{const j=JSON.parse(b);(j.files||[]).forEach(f=>console.log(f.filename));}catch(e){process.exit(0);}});}).on("error",()=>process.exit(0));
+          ')"
           echo "[detect] changed files:"; echo "$FILES" | sed 's/^/  /'
           if echo "$FILES" | grep -qE "$PATTERNS"; then echo true > /tmp/deployable; else echo false > /tmp/deployable; fi
           echo "[detect] deployable=$(cat /tmp/deployable)"
