@@ -549,7 +549,17 @@ spec:
             subPath: comment.js
         source: |
           set -eu
-          command -v aws >/dev/null 2>&1 || { echo "[security-agent] installing aws-cli..."; apk add --no-cache aws-cli >/dev/null 2>&1 || pip install --quiet awscli; }
+          # The `securityagent` service is brand-new; the image's apk aws-cli may be
+          # too old ("Invalid choice: securityagent"). Ensure a CURRENT aws-cli v2.
+          if ! aws securityagent help >/dev/null 2>&1; then
+            echo "[security-agent] installing current aws-cli (need securityagent verbs)..."
+            python3 -m venv /tmp/awsv >/dev/null 2>&1 || true
+            /tmp/awsv/bin/pip install --quiet --upgrade awscli >/dev/null 2>&1 \
+              || pip install --quiet --break-system-packages --upgrade awscli >/dev/null 2>&1 \
+              || apk add --no-cache aws-cli >/dev/null 2>&1 || true
+            export PATH="/tmp/awsv/bin:$PATH"
+          fi
+          aws securityagent help >/dev/null 2>&1 || { echo "[security-agent] ERROR: aws-cli lacks securityagent"; exit 1; }
           bash /scripts/security-agent.sh
 {{- end }}
 

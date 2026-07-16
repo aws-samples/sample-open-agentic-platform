@@ -114,16 +114,26 @@ spec:
             defaultMode: 0555
       containers:
         - name: bootstrap
-          # Needs aws + kubectl. The platform step image (alpine/k8s) has kubectl;
-          # add the AWS CLI at start (or bake a combined image later).
-          image: {{ .Values.stepImage }}
-          # Plain K8s Job container: command+args (NOT Argo's script.source). The
-          # inline installer + script invocation live in args.
-          command: ["bash", "-c"]
+          # Needs a CURRENT aws-cli v2 (the `securityagent` service is brand-new;
+          # older/musl aws-cli lacks it) PLUS kubectl (to write the result Secret).
+          # amazon/aws-cli is glibc + always-current v2 → guaranteed securityagent
+          # verbs. kubectl is a static binary we fetch at start (works on glibc).
+          image: {{ .Values.securityAgent.bootstrapImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
+          # amazon/aws-cli's ENTRYPOINT is `aws`; override to a shell.
+          command: ["/bin/sh", "-c"]
           args:
             - |
               set -eu
-              command -v aws >/dev/null 2>&1 || { echo "[bootstrap] installing aws-cli..."; apk add --no-cache aws-cli >/dev/null 2>&1 || pip install --quiet awscli; }
+              echo "[bootstrap] aws version: $(aws --version 2>&1 | head -1)"
+              aws securityagent help >/dev/null 2>&1 || { echo "[bootstrap] ERROR: aws-cli lacks 'securityagent' — cannot reconcile"; exit 1; }
+              # Fetch a static kubectl (to write the Secret) if not present.
+              if ! command -v kubectl >/dev/null 2>&1; then
+                echo "[bootstrap] fetching kubectl..."
+                ARCH="$(uname -m)"; case "$ARCH" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
+                KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+                curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/${A}/kubectl" -o /tmp/kubectl
+                chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+              fi
               bash /scripts/bootstrap-agentspace.sh
           env:
             - name: AWS_REGION
