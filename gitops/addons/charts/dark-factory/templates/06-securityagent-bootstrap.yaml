@@ -84,7 +84,14 @@ spec:
           # Needs aws + kubectl. The platform step image (alpine/k8s) has kubectl;
           # add the AWS CLI at start (or bake a combined image later).
           image: {{ .Values.stepImage }}
-          command: [bash]
+          # Plain K8s Job container: command+args (NOT Argo's script.source). The
+          # inline installer + script invocation live in args.
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -eu
+              command -v aws >/dev/null 2>&1 || { echo "[bootstrap] installing aws-cli..."; apk add --no-cache aws-cli >/dev/null 2>&1 || pip install --quiet awscli; }
+              bash /scripts/bootstrap-agentspace.sh
           env:
             - name: AWS_REGION
               value: {{ .Values.securityAgent.region | quote }}
@@ -103,8 +110,4 @@ spec:
           volumeMounts:
             - name: scripts
               mountPath: /scripts
-          source: |
-            set -eu
-            command -v aws >/dev/null 2>&1 || { echo "[bootstrap] installing aws-cli..."; apk add --no-cache aws-cli >/dev/null 2>&1 || pip install --quiet awscli; }
-            bash /scripts/bootstrap-agentspace.sh
 {{- end }}
