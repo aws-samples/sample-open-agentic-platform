@@ -4,28 +4,23 @@
 # no OAuth: the whole path is the AWS securityagent API + an S3-staged diff, via
 # the workflow's IRSA role.
 #
-# This is the exact chain validated live 2026-07-16 (a flawed sample returned
-# SQL_INJECTION/DEFAULT_CREDENTIALS/PRIVILEGE_ESCALATION findings):
+# Runs on the glibc aws-cli v2 image (amazon/aws-cli) — the ONLY place with the
+# brand-new `securityagent` verbs (Alpine/musl aws-cli 2.32 lacks them). To keep
+# that image dependency minimal this script uses python3 (bundled in the aws-cli
+# image) + curl for GitHub — NO node. Only `git` is added at step start.
+#
+# Chain (validated live 2026-07-16 — a flawed sample returned SQL_INJECTION /
+# DEFAULT_CREDENTIALS / PRIVILEGE_ESCALATION findings):
 #   clone df/issue-N -> archive source + unified diff -> upload to S3
 #   -> securityagent create-code-review (sourceCode = S3 archive, --service-role)
-#   -> start-code-review-job (diffSource = S3 diff)
-#   -> poll batch-get-code-review-jobs until COMPLETED
-#   -> list-findings -> map to a dark-factory/security commit status + PR comment.
+#   -> start-code-review-job (diffSource = S3 diff) -> poll -> list-findings
+#   -> map to a dark-factory/security commit status + PR comment.
 #
-# It runs only after the DevOps Agent has cleared the PR (the workflow gates this
-# step on the `needs-security-review` label — see df-run DAG). Narrow + strict:
-# OWASP Top 10, hardcoded secrets, IAM misuse, dependency risk.
+# Runs only after the DevOps Agent cleared (gated on `needs-security-review`).
+# Narrow + strict: OWASP Top 10, hardcoded secrets, IAM misuse, dependency risk.
 #
-# Env (from the df-run security step):
-#   GH_TOKEN          GitHub token (clone + status + comment)
-#   REPO BRANCH BASE  repo (owner/name), coder branch df/issue-N, base branch
-#   AGENT_SPACE_ID    from the bootstrap Secret
-#   SERVICE_ROLE_ARN  from the bootstrap Secret (create-code-review --service-role)
-#   DIFF_BUCKET       from the bootstrap Secret (S3 staging)
-#   AWS_REGION        agent region
-#   WF_NAME           workflow name (unique S3 prefix per run)
-#   BLOCK_LEVEL       none|low|medium|high|critical — min riskLevel that fails the gate
-#   POLL_TIMEOUT      seconds to wait for the review job (default 900)
+# Env: GH_TOKEN, REPO, BRANCH, BASE, AGENT_SPACE_ID, SERVICE_ROLE_ARN, DIFF_BUCKET,
+#      AWS_REGION, WF_NAME, BLOCK_LEVEL(none|low|medium|high|critical), POLL_TIMEOUT.
 set -euo pipefail
 
 log() { echo "[security-agent] $*"; }
@@ -38,18 +33,17 @@ POLL_TIMEOUT="${POLL_TIMEOUT:-900}"
 WORK=/tmp/secagent-work
 rm -rf "$WORK"; mkdir -p "$WORK"
 
-# ── helper: post the dark-factory/security commit status (defined early so the
-# empty-diff / job-failure branches below can call it). node https — no curl. ─
+GH_API="https://api.github.com"
+GH_HDR=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "User-Agent: dark-factory-secagent")
+
 SHA=""  # set after clone; status posts are no-ops until then
-post_status() { # state, description
+post_status() { # state, description — GitHub commit status via curl
   [ -z "${SHA}" ] && return 0
-  GH_TOKEN="$GH_TOKEN" REPO="$REPO" SHA="$SHA" ST="$1" DESC="$2" node -e '
-    const https=require("https");
-    const body=JSON.stringify({state:process.env.ST,context:"dark-factory/security",description:(process.env.DESC||"").slice(0,140)});
-    let n=0;(function p(){const r=https.request({host:"api.github.com",method:"POST",path:"/repos/"+process.env.REPO+"/statuses/"+process.env.SHA,
-      headers:{"User-Agent":"dark-factory-secagent","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json","Content-Type":"application/json","Content-Length":Buffer.byteLength(body)}},
-      res=>{let b="";res.on("data",c=>b+=c);res.on("end",()=>{if(res.statusCode>=500&&++n<4){setTimeout(p,500*n);return}console.log("[security-agent] status="+process.env.ST+" ("+res.statusCode+")")});});
-      r.on("error",e=>{if(++n<4)setTimeout(p,500*n)});r.write(body);r.end();})();' || true
+  local st="$1" desc="$2"
+  desc="$(printf '%s' "$desc" | cut -c1-140)"
+  curl -fsS -X POST "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/statuses/${SHA}" \
+    -d "$(python3 -c 'import json,sys,os; print(json.dumps({"state":sys.argv[1],"context":"dark-factory/security","description":sys.argv[2]}))' "$st" "$desc")" \
+    >/dev/null 2>&1 && log "posted status=${st}" || log "status post failed (non-fatal)"
 }
 
 # ── 1. Clone the coder's branch (read-only) + build the unified diff ─────────
@@ -58,7 +52,6 @@ git clone --quiet --branch "$BRANCH" \
   "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$WORK/repo"
 cd "$WORK/repo"
 git fetch --quiet --depth 50 origin "$BASE" || true
-# Diff vs base (fall back to last commit if shallow clone lacks the merge-base).
 git diff "origin/${BASE}...HEAD" > "$WORK/diff.patch" 2>/dev/null \
   || git diff HEAD~1 > "$WORK/diff.patch" 2>/dev/null \
   || echo "" > "$WORK/diff.patch"
@@ -81,10 +74,8 @@ aws s3 cp "$WORK/diff.patch" "$DIFF_S3" --region "$AWS_REGION" >/dev/null
 log "uploaded ${SRC_S3} + ${DIFF_S3}"
 
 # ── 3. create-code-review + start-code-review-job (diff scan) ────────────────
-# Title constraint (API): letters, numbers, hyphens, underscores only, <=100 chars.
-# Sanitize repo/branch/sha into a safe slug.
-TITLE_RAW="df-${REPO}-${BRANCH}-${SHA:0:12}"
-TITLE="$(printf '%s' "$TITLE_RAW" | tr -c 'A-Za-z0-9_-' '-' | cut -c1-100)"
+# Title constraint (API): [A-Za-z0-9_-] only, <=100 chars.
+TITLE="$(printf 'df-%s-%s-%s' "$REPO" "$BRANCH" "${SHA:0:12}" | tr -c 'A-Za-z0-9_-' '-' | cut -c1-100)"
 log "creating code review (title=${TITLE})..."
 CRID="$(aws securityagent create-code-review --region "$AWS_REGION" \
   --title "$TITLE" \
@@ -121,65 +112,84 @@ if [ "$STATUS" != "COMPLETED" ] && [ "$STATUS" != "SUCCEEDED" ]; then
   log "timed out waiting for review (last=${STATUS})"; post_status "error" "security: review timed out"; exit 0
 fi
 
-# ── 5. Fetch findings, render report, decide the gate ────────────────────────
+# ── 5. Fetch findings, render report + verdict (python3, no node) ────────────
 aws securityagent list-findings --region "$AWS_REGION" \
   --agent-space-id "$AGENT_SPACE_ID" --code-review-job-id "$JOBID" \
   > "$WORK/findings.json" 2>/dev/null || echo '{"findingsSummaries":[]}' > "$WORK/findings.json"
 
-# Rank order for riskLevel; determine top severity + counts + block decision.
-node - "$WORK/findings.json" "$BLOCK_LEVEL" <<'NODE' > "$WORK/verdict.env"
-const fs = require("fs");
-const [file, blockLevel] = process.argv.slice(2);
-const RANK = { informational:1, low:2, medium:3, high:4, critical:5 };
-const data = JSON.parse(fs.readFileSync(file, "utf8"));
-const f = (data.findingsSummaries || []).map(x => ({
-  name: x.name || "(unnamed)",
-  risk: (x.riskLevel || "informational").toLowerCase(),
-  type: x.riskType || "",
-  confidence: (x.confidence || "").toLowerCase(),
-}));
-const counts = {};
-let top = 0;
-for (const x of f) { counts[x.risk] = (counts[x.risk]||0)+1; top = Math.max(top, RANK[x.risk]||0); }
-const topSev = Object.keys(RANK).find(k => RANK[k] === top) || "none";
-const blockAt = RANK[blockLevel] || 0;
-const blocked = blockAt > 0 && top >= blockAt;
-// verdict.env (sourced by bash)
-const order = ["critical","high","medium","low","informational"];
-const summary = order.filter(s=>counts[s]).map(s=>`${counts[s]} ${s}`).join(", ") || "none";
-console.log(`TOTAL=${f.length}`);
-console.log(`TOPSEV=${topSev}`);
-console.log(`BLOCKED=${blocked ? 1 : 0}`);
-console.log(`SUMMARY="${summary}"`);
-// Markdown report for the PR comment.
-const icon = { critical:"🔴", high:"🟠", medium:"🟡", low:"🔵", informational:"⚪" };
-const lines = [];
-if (!f.length) {
-  lines.push("### ✅ 🔒 AWS Security Agent review", "", "No findings. _(OWASP Top 10, secrets, IAM misuse, dependency risk — real AWS Security Agent, diff scan)_");
-} else {
-  lines.push(`### ⚠️ 🔒 AWS Security Agent review`, "", `**${f.length} finding(s)** — ${summary}.${blocked ? "  \n**⛔ Would block** at `"+blockLevel+"`." : "  \n_(advisory)_"}`, "");
-  lines.push("| Risk | Finding | Type | Confidence |", "|---|---|---|---|");
-  for (const x of f.sort((a,b)=>(RANK[b.risk]||0)-(RANK[a.risk]||0)))
-    lines.push(`| ${icon[x.risk]||""} ${x.risk} | ${x.name.replace(/\|/g,"\\|")} | \`${x.type}\` | ${x.confidence} |`);
-}
-lines.push("", "_Powered by AWS Security Agent (agentic code security review)._");
-fs.writeFileSync("/tmp/secagent-work/report.md", lines.join("\n"));
-NODE
+python3 - "$WORK/findings.json" "$BLOCK_LEVEL" "$WORK/report.md" > "$WORK/verdict.env" <<'PY'
+import json, sys
+findings_file, block_level, report_file = sys.argv[1], sys.argv[2], sys.argv[3]
+RANK = {"informational":1,"low":2,"medium":3,"high":4,"critical":5}
+data = json.load(open(findings_file))
+f = [{"name":x.get("name","(unnamed)"),
+      "risk":(x.get("riskLevel") or "informational").lower(),
+      "type":x.get("riskType",""),
+      "confidence":(x.get("confidence") or "").lower()} for x in data.get("findingsSummaries",[])]
+counts = {}
+top = 0
+for x in f:
+    counts[x["risk"]] = counts.get(x["risk"],0)+1
+    top = max(top, RANK.get(x["risk"],0))
+topsev = next((k for k,v in RANK.items() if v==top), "none")
+block_at = RANK.get(block_level,0)
+blocked = block_at > 0 and top >= block_at
+order = ["critical","high","medium","low","informational"]
+summary = ", ".join(f"{counts[s]} {s}" for s in order if counts.get(s)) or "none"
+print(f"TOTAL={len(f)}")
+print(f"TOPSEV={topsev}")
+print(f"BLOCKED={1 if blocked else 0}")
+print(f'SUMMARY="{summary}"')
+icon = {"critical":"🔴","high":"🟠","medium":"🟡","low":"🔵","informational":"⚪"}
+lines = []
+if not f:
+    lines += ["### ✅ 🔒 AWS Security Agent review","",
+              "No findings. _(OWASP Top 10, secrets, IAM misuse, dependency risk — real AWS Security Agent, diff scan)_"]
+else:
+    tail = ("  \n**⛔ Would block** at `%s`." % block_level) if blocked else "  \n_(advisory)_"
+    lines += ["### ⚠️ 🔒 AWS Security Agent review","",
+              f"**{len(f)} finding(s)** — {summary}.{tail}",""]
+    lines += ["| Risk | Finding | Type | Confidence |","|---|---|---|---|"]
+    for x in sorted(f, key=lambda z: RANK.get(z["risk"],0), reverse=True):
+        nm = x["name"].replace("|","\\|")
+        lines.append(f'| {icon.get(x["risk"],"")} {x["risk"]} | {nm} | `{x["type"]}` | {x["confidence"]} |')
+lines += ["","_Powered by AWS Security Agent (agentic code security review)._"]
+open(report_file,"w").write("\n".join(lines))
+PY
 # shellcheck disable=SC1091
 . "$WORK/verdict.env"
 log "findings: total=${TOTAL} top=${TOPSEV} blocked=${BLOCKED}"
 
 STATE="success"; [ "${BLOCKED}" = "1" ] && STATE="failure"
-[ "${TOTAL}" = "0" ] && DESC="security: no findings" || DESC="security: ${TOTAL} finding(s), top=${TOPSEV}"
+if [ "${TOTAL}" = "0" ]; then DESC="security: no findings"; else DESC="security: ${TOTAL} finding(s), top=${TOPSEV}"; fi
 post_status "$STATE" "$DESC"
 
-# PR comment (marker-based, edited in place) — reuse the shared comment.js.
-PR="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BRANCH="$BRANCH" node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].number||"")}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
+# ── 6. PR comment (marker-based, edited in place) — python3 + curl ───────────
+PR="$(curl -fsS "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null \
+  | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin); print(d[0]["number"] if d else "")
+except Exception: print("")' 2>/dev/null || echo "")"
 if [ -n "$PR" ] && [ -f "$WORK/report.md" ]; then
-  GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /scripts/comment.js "dark-factory:security-agent" < "$WORK/report.md" || true
+  MARKER="<!-- dark-factory:security-agent -->"
+  BODY="$(printf '%s\n%s' "$MARKER" "$(cat "$WORK/report.md")")"
+  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"body":sys.stdin.read()}))' <<<"$BODY")"
+  # Find an existing marker comment to edit; else create one (idempotent sticky).
+  CID="$(curl -fsS "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/${PR}/comments?per_page=100" 2>/dev/null \
+    | python3 -c 'import json,sys,os
+m=os.environ["MARKER"]
+try:
+    cs=json.load(sys.stdin)
+    print(next((str(c["id"]) for c in cs if m in (c.get("body") or "")), ""))
+except Exception: print("")' 2>/dev/null || echo "")"
+  export MARKER
+  if [ -n "$CID" ]; then
+    curl -fsS -X PATCH "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/comments/${CID}" -d "$PAYLOAD" >/dev/null 2>&1 && log "updated PR comment"
+  else
+    curl -fsS -X POST "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/${PR}/comments" -d "$PAYLOAD" >/dev/null 2>&1 && log "posted PR comment"
+  fi
 fi
 
-# Advisory unless BLOCK_LEVEL was raised and met.
 if [ "${BLOCKED}" = "1" ]; then
   log "BLOCKING — finding at/above ${BLOCK_LEVEL}."
   exit 1

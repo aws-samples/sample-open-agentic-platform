@@ -141,6 +141,11 @@ securityAgent:
   # v2) guarantees the verbs; kubectl is fetched at start. Override if you bake a
   # combined aws-cli+kubectl image.
   bootstrapImage: public.ecr.aws/aws-cli/aws-cli:latest
+  # df-run security step image — same reason (needs securityagent verbs). The
+  # script is node-free (python3+curl+git+aws), so this glibc image + git suffices.
+  # NOTE: verified in-cluster that Alpine/musl aws-cli 2.32 does NOT have
+  # securityagent — do NOT point this at the coder image.
+  stepImage: public.ecr.aws/aws-cli/aws-cli:latest
   # Advisory by default. Raise to low|medium|high|critical to fail the run when a
   # finding at/above that riskLevel is returned (per-severity blocking).
   blockLevel: none

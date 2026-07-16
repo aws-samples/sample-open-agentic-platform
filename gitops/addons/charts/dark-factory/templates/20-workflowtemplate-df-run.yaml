@@ -501,7 +501,11 @@ spec:
           configMap:
             name: df-review
       script:
-        image: {{ .Values.reviewImage }}
+        # Runs on the glibc aws-cli v2 image — the ONLY place with the brand-new
+        # `securityagent` verbs (Alpine/musl aws-cli 2.32 lacks them; verified
+        # in-cluster). security-agent.sh is node-free (python3 + curl + git + aws),
+        # so this minimal image needs only git added at start.
+        image: {{ .Values.securityAgent.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
         command: [bash]
         env:
           - name: GH_TOKEN
@@ -544,22 +548,12 @@ spec:
           - name: review-script
             mountPath: /scripts/security-agent.sh
             subPath: security-agent.sh
-          - name: review-script
-            mountPath: /scripts/comment.js
-            subPath: comment.js
         source: |
           set -eu
-          # The `securityagent` service is brand-new; the image's apk aws-cli may be
-          # too old ("Invalid choice: securityagent"). Ensure a CURRENT aws-cli v2.
-          if ! aws securityagent help >/dev/null 2>&1; then
-            echo "[security-agent] installing current aws-cli (need securityagent verbs)..."
-            python3 -m venv /tmp/awsv >/dev/null 2>&1 || true
-            /tmp/awsv/bin/pip install --quiet --upgrade awscli >/dev/null 2>&1 \
-              || pip install --quiet --break-system-packages --upgrade awscli >/dev/null 2>&1 \
-              || apk add --no-cache aws-cli >/dev/null 2>&1 || true
-            export PATH="/tmp/awsv/bin:$PATH"
-          fi
-          aws securityagent help >/dev/null 2>&1 || { echo "[security-agent] ERROR: aws-cli lacks securityagent"; exit 1; }
+          # amazon/aws-cli (glibc) has current aws-cli v2 + python3 + curl; add git.
+          command -v git >/dev/null 2>&1 || { echo "[security-agent] installing git..."; (dnf install -y -q git >/dev/null 2>&1 || yum install -y -q git >/dev/null 2>&1 || microdnf install -y git >/dev/null 2>&1); }
+          command -v zip >/dev/null 2>&1 || { dnf install -y -q zip >/dev/null 2>&1 || yum install -y -q zip >/dev/null 2>&1 || microdnf install -y zip >/dev/null 2>&1 || true; }
+          aws securityagent help >/dev/null 2>&1 || { echo "[security-agent] ERROR: aws-cli lacks securityagent (needs v2 >=2.35 glibc)"; exit 1; }
           bash /scripts/security-agent.sh
 {{- end }}
 
