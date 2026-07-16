@@ -5,28 +5,28 @@
       "id": "subtract-basic",
       "feature": "subtract(a, b) returns the arithmetic difference",
       "scenario": "Given the module exports subtract, When I call subtract(5, 3), Then it returns 2; and subtract(10, 4) returns 6.",
-      "test": "const m=require(process.env.REPO+'/index.js'); const a=m.subtract(5,3), b=m.subtract(10,4); if(a!==2||b!==6){console.error('expected 2,6 got',a,b);process.exit(1)} console.log('ok')",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); const a=m.subtract(5,3), b=m.subtract(10,4); if(a!==2||b!==6){console.error('expected 2,6 got',a,b);process.exit(1)} console.log('ok')",
       "appliesWhen": "/index\\.js/.test(diff)"
     },
     {
       "id": "subtract-negative",
       "feature": "subtract handles negatives and order",
       "scenario": "Given subtract, When I call subtract(3, 5), Then it returns -2; and subtract(-2, -8) returns 6. This defeats a stub that only handles the two example inputs.",
-      "test": "const m=require(process.env.REPO+'/index.js'); const a=m.subtract(3,5), b=m.subtract(-2,-8); if(a!==-2||b!==6){console.error('expected -2,6 got',a,b);process.exit(1)} console.log('ok')",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); const a=m.subtract(3,5), b=m.subtract(-2,-8); if(a!==-2||b!==6){console.error('expected -2,6 got',a,b);process.exit(1)} console.log('ok')",
       "appliesWhen": "/index\\.js/.test(diff)"
     },
     {
       "id": "subtract-not-hardcoded",
       "feature": "subtract computes, it is not a lookup table",
       "scenario": "Given subtract, When I call it with a randomized-but-fixed pair the coder could not have hard-coded (subtract(123, 45)), Then it returns 78; and subtract(0, 0) returns 0.",
-      "test": "const m=require(process.env.REPO+'/index.js'); const a=m.subtract(123,45), b=m.subtract(0,0); if(a!==78||b!==0){console.error('expected 78,0 got',a,b);process.exit(1)} console.log('ok')",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); const a=m.subtract(123,45), b=m.subtract(0,0); if(a!==78||b!==0){console.error('expected 78,0 got',a,b);process.exit(1)} console.log('ok')",
       "appliesWhen": "/index\\.js/.test(diff)"
     },
     {
       "id": "add-still-works",
       "feature": "the pre-existing add function is not broken (regression)",
       "scenario": "Given the module still exports add, When I call add(2, 3), Then it returns 5. The new work must not regress existing behaviour.",
-      "test": "const m=require(process.env.REPO+'/index.js'); if(typeof m.add!=='function'||m.add(2,3)!==5){console.error('add regressed');process.exit(1)} console.log('ok')",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); if(typeof m.add!=='function'||m.add(2,3)!==5){console.error('add regressed');process.exit(1)} console.log('ok')",
       "appliesWhen": "/index\\.js/.test(diff)"
     }
   ]

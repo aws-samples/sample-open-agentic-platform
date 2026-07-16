@@ -305,18 +305,29 @@ function buildAndTest(repoDir) {
   // platform config. Devs control build/test by their repo layout; the toolchains
   // live in the coder IMAGE (see coder/Dockerfile), not here. A repo Makefile with
   // a `test` target is the explicit dev-controlled override, checked first.
-  const has = (f) => fs.existsSync(`${repoDir}/${f}`);
-  const makeHasTest = () => {
-    try { return has("Makefile") && /^test:/m.test(fs.readFileSync(`${repoDir}/Makefile`, "utf8")); } catch { return false; }
+  //
+  // The project may not be at the repo ROOT (e.g. an infra/ + app/ split), so we
+  // probe a few conventional subdirs and run the toolchain in the first that has a
+  // recognizable marker. Root wins if present; otherwise app/src/backend/server.
+  const CANDIDATES = [".", "app", "src", "backend", "server"];
+  const hasIn = (d, f) => fs.existsSync(`${repoDir}/${d}/${f}`.replace(/\/\.\//, "/"));
+  const dirOf = (f) => CANDIDATES.find((d) => hasIn(d, f));
+  const makeTestDir = () => {
+    for (const d of CANDIDATES) {
+      try { if (hasIn(d, "Makefile") && /^test:/m.test(fs.readFileSync(`${repoDir}/${d}/Makefile`, "utf8"))) return d; } catch { /* skip */ }
+    }
+    return null;
   };
+  const wd = (d) => `${repoDir}/${d}`.replace(/\/\.$/, "");
   try {
-    if (makeHasTest()) { console.log("[coder] Makefile test target"); sh("make", ["test"], { cwd: repoDir }); }
-    else if (has("package.json")) { sh("npm", ["install", "--no-audit", "--no-fund"], { cwd: repoDir }); sh("npm", ["test"], { cwd: repoDir }); }
-    else if (has("go.mod")) sh("go", ["test", "./..."], { cwd: repoDir });
-    else if (has("pyproject.toml") || has("setup.py") || has("requirements.txt")) sh("python", ["-m", "pytest", "-q"], { cwd: repoDir });
-    else if (has("Cargo.toml")) sh("cargo", ["test"], { cwd: repoDir });
-    else if (has("pom.xml")) sh("mvn", ["-q", "test"], { cwd: repoDir });
-    else if (has("build.gradle") || has("build.gradle.kts")) sh("./gradlew", ["test"], { cwd: repoDir });
+    let d;
+    if ((d = makeTestDir()) != null) { console.log(`[coder] Makefile test target in ${d}/`); sh("make", ["test"], { cwd: wd(d) }); }
+    else if ((d = dirOf("package.json")) != null) { console.log(`[coder] node project in ${d}/`); sh("npm", ["install", "--no-audit", "--no-fund"], { cwd: wd(d) }); sh("npm", ["test"], { cwd: wd(d) }); }
+    else if ((d = dirOf("go.mod")) != null) sh("go", ["test", "./..."], { cwd: wd(d) });
+    else if ((d = ["pyproject.toml", "setup.py", "requirements.txt"].map(dirOf).find(Boolean)) != null) sh("python", ["-m", "pytest", "-q"], { cwd: wd(d) });
+    else if ((d = dirOf("Cargo.toml")) != null) sh("cargo", ["test"], { cwd: wd(d) });
+    else if ((d = dirOf("pom.xml")) != null) sh("mvn", ["-q", "test"], { cwd: wd(d) });
+    else if ((d = ["build.gradle", "build.gradle.kts"].map(dirOf).find(Boolean)) != null) sh("./gradlew", ["test"], { cwd: wd(d) });
     else return { green: true, summary: "no recognized test suite — skipped (e.g. infra/config change)" };
     return { green: true, summary: "tests passed" };
   } catch (e) {

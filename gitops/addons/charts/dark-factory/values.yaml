@@ -90,7 +90,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.0
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.1
 
 # ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
 # Two independent reviewers, run OUTSIDE the coder VM (the coder never grades
@@ -181,7 +181,7 @@ devopsAgent:
 
 # Image for hub-side agent steps: needs aws-cli + kubectl + node + git + zip.
 # Reuse the coder image (has node/git/zip); the bootstrap Job adds aws-cli.
-reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.0
+reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.1
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision
@@ -226,7 +226,7 @@ deployTest:
   # Where each kind's files live in the repo (dir or file). If absent, the step
   # logs "nothing to test" and passes (advisory).
   manifestPath: "k8s/"        # k8s apply target
-  terraformPath: "."          # terraform working dir (repo root by default)
+  terraformPath: "infra"      # terraform working dir (repo uses infra/ + app/ layout)
   # Purpose-built image with kubectl + terraform + node + git + curl (content-aware
   # deploy-test needs both toolchains). Built from examples/dark-factory/deploy-test.
   image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0
