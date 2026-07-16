@@ -90,7 +90,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.1
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.2
 
 # ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
 # Two independent reviewers, run OUTSIDE the coder VM (the coder never grades
@@ -174,6 +174,10 @@ devopsAgent:
   # "aws-devops-agent/release-readiness-review". Keep the broader alternation as a
   # safety net in case the context string varies by preview version.
   checkContext: "(?i)(aws-devops-agent/release-readiness-review|devops[- ]?agent|release[- ]?readiness)"
+  # EXACT check-run name (Checks API) the DevOps Agent posts — used by the sticky
+  # status (status.js) + the merge gate (merge.js) to read/require the real verdict.
+  # This is the precise name (not a regex); tune if the preview reports differently.
+  checkRunName: "aws-devops-agent/release-readiness-review"
   # How long devops-gate waits for the DevOps Agent to post its verdict. The
   # managed review typically completes in ~8-10 min (docs), so allow headroom.
   waitSeconds: 900
@@ -183,7 +187,7 @@ devopsAgent:
 
 # Image for hub-side agent steps: needs aws-cli + kubectl + node + git + zip.
 # Reuse the coder image (has node/git/zip); the bootstrap Job adds aws-cli.
-reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.1
+reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.2
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision

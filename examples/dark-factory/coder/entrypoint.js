@@ -390,14 +390,26 @@ async function main() {
     // dark-factory:status marker) with the real verdicts once holdout/security/
     // devops finish — the "one live sticky status" (README §7). Keep this block's
     // shape in sync with that step.
-    // DevOps line reflects the REAL AWS DevOps Agent verdict (or not-connected).
-    const devopsIcon = devops.cleared ? "✅" : (devops.verdict === "not-connected" ? "⚠️" : (devops.verdict === "BLOCK" ? "⛔" : "⏳"));
-    const devopsLine = devops.verdict === "not-connected"
-      ? "- ⚠️ **DevOps review (AWS DevOps Agent):** _not connected — one-time console setup required_"
-      : `- ${devopsIcon} **DevOps review (AWS DevOps Agent):** ${devops.verdict}`;
-    const secLine = devops.cleared
-      ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
-      : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
+    // DevOps line reflects how the review is driven:
+    //   - mode "off" (default = check-gate): the AWS DevOps Agent GitHub App reviews
+    //     the PR and posts its own check — so show "pending (GitHub App)", NOT skipped.
+    //   - mode "claude-plugin" (label-gate): the coder drove it → show the verdict
+    //     (or "not connected" honestly if the plugin isn't wired).
+    // Either way the hub sticky-status step overwrites this block with the live
+    // verdict (from the check-run / statuses) once verification completes.
+    let devopsLine, secLine;
+    if (DEVOPS_AGENT_MODE === "off") {
+      devopsLine = "- ⏳ **DevOps review (AWS DevOps Agent):** _pending — AWS DevOps Agent reviews this PR…_";
+      secLine = "- ⏳ **Security review (AWS Security Agent):** _runs after DevOps clears…_";
+    } else {
+      const devopsIcon = devops.cleared ? "✅" : (devops.verdict === "not-connected" ? "⚠️" : (devops.verdict === "BLOCK" ? "⛔" : "⏳"));
+      devopsLine = devops.verdict === "not-connected"
+        ? "- ⚠️ **DevOps review (AWS DevOps Agent):** _not connected — one-time console setup required_"
+        : `- ${devopsIcon} **DevOps review (AWS DevOps Agent):** ${devops.verdict}`;
+      secLine = devops.cleared
+        ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
+        : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
+    }
     const prBody = [
       `Closes #${ISSUE}.`,
       "",

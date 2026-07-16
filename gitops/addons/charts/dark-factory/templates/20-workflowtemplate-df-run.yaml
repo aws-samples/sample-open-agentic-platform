@@ -700,6 +700,12 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+{{- if .Values.devopsAgent.enabled }}
+          # Real AWS DevOps Agent posts a check-run (not a commit status) named this;
+          # status.js renders the DevOps row from the check-run when present.
+          - name: DEVOPS_CHECK
+            value: {{ .Values.devopsAgent.checkRunName | quote }}
+{{- end }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/status.js

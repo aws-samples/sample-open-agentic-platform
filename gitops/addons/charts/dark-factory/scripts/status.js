@@ -6,8 +6,12 @@
 // block in place with the real verdicts. Idempotent; non-fatal on error.
 //
 // Env: GH_TOKEN, REPO (owner/name), BRANCH (df/issue-N).
+//   DEVOPS_CHECK (optional) real AWS DevOps Agent check-run name (Checks API), e.g.
+//                aws-devops-agent/release-readiness-review. The DevOps row reads it
+//                from check-runs (not commit statuses) so the real verdict shows.
 const https = require("https");
 const { GH_TOKEN, REPO, BRANCH } = process.env;
+const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
 const H = { "User-Agent": "dark-factory-status", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 
 function api(method, path, body) {
@@ -36,17 +40,32 @@ async function main() {
   const st = await api("GET", `/repos/${REPO}/commits/${pr.head.sha}/status`);
   const by = {};
   for (const s of st.statuses || []) if (!by[s.context]) by[s.context] = { state: s.state, desc: s.description || "" };
+  // Also fold in check-runs (the real DevOps Agent posts a check-run, not a status).
+  const concToState = (c) => ({ success: "success", neutral: "success", skipped: "success",
+    failure: "failure", timed_out: "failure", cancelled: "failure", action_required: "failure" }[c] || "pending");
+  try {
+    const cr = await api("GET", `/repos/${REPO}/commits/${pr.head.sha}/check-runs`);
+    for (const c of cr.check_runs || []) {
+      const state = c.status === "completed" ? concToState(c.conclusion) : "pending";
+      if (!by[c.name]) by[c.name] = { state, desc: (c.output && c.output.title) || c.conclusion || c.status };
+    }
+  } catch (e) { /* non-fatal — statuses still render */ }
   const row = (ctx, label) => {
-    const s = by[`dark-factory/${ctx}`];
+    const s = by[ctx.includes("/") ? ctx : `dark-factory/${ctx}`];
     return s ? `- ${icon(s.state)} **${label}:** ${s.desc || s.state}` : `- ⬜ **${label}:** _not run_`;
   };
+  // DevOps row: prefer the real DevOps Agent check-run if configured, else the
+  // dark-factory/devops status (label-mode / coder-plugin path).
+  const devopsRow = DEVOPS_CHECK && by[DEVOPS_CHECK]
+    ? `- ${icon(by[DEVOPS_CHECK].state)} **DevOps review (AWS DevOps Agent):** ${by[DEVOPS_CHECK].desc || by[DEVOPS_CHECK].state}`
+    : row("devops", "DevOps review (AWS DevOps Agent)");
   const block = [
     MARKER,
     "### 🏭 Dark Factory — verification",
     row("implementation", "Build + unit tests"),
     row("holdout", "Holdout gate"),
-    row("security", "Security review"),
-    row("devops", "DevOps review"),
+    row("security", "Security review (AWS Security Agent)"),
+    devopsRow,
     // deploy-test only appears when the PR was deployable; omit the row otherwise
     // so non-deployable PRs don't show a confusing "not run" line.
     ...(by["dark-factory/deploy-test"] ? [row("deploy-test", "Deploy test")] : []),

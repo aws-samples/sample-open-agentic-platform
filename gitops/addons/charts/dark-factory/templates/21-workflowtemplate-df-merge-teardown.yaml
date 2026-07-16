@@ -62,6 +62,17 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: PR
             value: "{{`{{workflow.parameters.pr-number}}`}}"
+{{- if .Values.devopsAgent.enabled }}
+          # Require the REAL AWS DevOps Agent check-run (Checks API) green before
+          # merge — merge.js reads both commit statuses and check-runs.
+          - name: DEVOPS_CHECK
+            value: {{ .Values.devopsAgent.checkRunName | quote }}
+          - name: REQUIRE_DEVOPS
+            value: "true"
+{{- else }}
+          - name: REQUIRE_DEVOPS
+            value: "false"
+{{- end }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/merge.js

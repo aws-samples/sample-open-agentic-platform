@@ -6,8 +6,16 @@
 // event routed by the Sensor.
 //
 // Env: GH_TOKEN, REPO (owner/name), PR (number).
+//   DEVOPS_CHECK   (optional) the real AWS DevOps Agent check-run name/context to
+//                  require green in check-mode (e.g. aws-devops-agent/release-readiness-review).
+//                  When set, it's added to the required gate and satisfied by EITHER a
+//                  commit status OR a check-run of that name.
+//   REQUIRE_DEVOPS "true"|"false" — whether DevOps clearance is required to merge
+//                  (false in security-only mode). Default true.
 const https = require("https");
 const { GH_TOKEN, REPO, PR } = process.env;
+const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
+const REQUIRE_DEVOPS = (process.env.REQUIRE_DEVOPS || "true").toLowerCase() !== "false";
 const H = { "User-Agent": "dark-factory-merge", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 
 function api(method, path, body) {
@@ -25,18 +33,34 @@ function api(method, path, body) {
   });
 }
 
-// Which dark-factory/* checks must be green before we merge. holdout/security/
-// devops are advisory in v1 (they always post success unless blocking is on), but
-// we still require them to be *success*, not failure/error.
-const REQUIRED = ["dark-factory/implementation", "dark-factory/holdout", "dark-factory/security", "dark-factory/devops"];
+// Which checks must be green before we merge. The df-run steps post COMMIT STATUSES
+// (dark-factory/*); the REAL AWS DevOps Agent posts a CHECK-RUN (Checks API) named
+// DEVOPS_CHECK. We read BOTH surfaces and require each listed check to be success.
+// holdout/security are advisory in v1 (post success unless blocking on), but we
+// still require them to be *success*, not failure/error.
+const REQUIRED = ["dark-factory/implementation", "dark-factory/holdout", "dark-factory/security"];
+if (REQUIRE_DEVOPS) REQUIRED.push(DEVOPS_CHECK || "dark-factory/devops");
+
+// Map GitHub check-run conclusion → status-style state.
+const concToState = (c) => ({ success: "success", neutral: "success", skipped: "success",
+  failure: "failure", timed_out: "failure", cancelled: "failure", action_required: "failure" }[c] || "pending");
 
 async function main() {
   const pr = await api("GET", `/repos/${REPO}/pulls/${PR}`);
   if (pr.state !== "open") { console.log(`[df-merge] PR #${PR} is ${pr.state}, not open — nothing to merge`); return; }
   const sha = pr.head.sha;
+  // Read commit statuses AND check-runs (the DevOps Agent uses the Checks API).
   const st = await api("GET", `/repos/${REPO}/commits/${sha}/status`);
   const by = {};
   for (const s of st.statuses || []) if (!by[s.context]) by[s.context] = s.state;
+  try {
+    const cr = await api("GET", `/repos/${REPO}/commits/${sha}/check-runs`);
+    for (const c of cr.check_runs || []) {
+      const state = c.status === "completed" ? concToState(c.conclusion) : "pending";
+      // Prefer a completed check-run's verdict; don't overwrite an existing success.
+      if (!by[c.name] || by[c.name] === "pending") by[c.name] = state;
+    }
+  } catch (e) { console.log(`[df-merge] check-runs read skipped: ${e.message}`); }
   const notGreen = REQUIRED.filter((c) => by[c] && by[c] !== "success");
   const missing = REQUIRED.filter((c) => !by[c]);
   if (notGreen.length) { console.error(`[df-merge] refusing to merge — not green: ${notGreen.map((c) => `${c}=${by[c]}`).join(", ")}`); process.exit(1); }
