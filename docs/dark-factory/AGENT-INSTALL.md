@@ -21,6 +21,43 @@ OAuth). This page is the one-time human runbook.
 
 ---
 
+## PREREQUISITE (DevOps Agent only) — get the account allow-listed for Release Manager
+
+The DevOps Agent **code-review / Release Manager** capability is **allow-list gated in
+preview**. Until account `940019131157` is on the list, the console shows only the ops
+capabilities (cloud accounts / remote agents / webhooks) — there is **no Pipeline/GitHub
+code-review section**, and there is **no API/CLI** for it either (confirmed: `aws devops-agent`
+has zero review/release verbs; GitHub is excluded from `register-service` as an OAuth-3LO
+service). So this step is unavoidable and must precede everything below.
+
+Two ways to get allow-listed (either works):
+
+**Path A — onboarding ticket (owning team `heimdall-release-manager-agent`):**
+- Template: `https://t.corp.amazon.com/create/templates/a87f5c29-bf4e-49c4-92e1-710c328d83c2`
+- Ask: *allow-list account `940019131157` for AWS DevOps Agent Release Manager (source-control
+  code review), and enable automated PR/MR reviews.*
+
+**Path B — self-serve CR (what the team itself does; faster):**
+- The allow-list is literally two account-ID additions to constants arrays in two CDK packages
+  (sample: `CR-278107681`):
+  - `ReleaseManagementServiceCDK` → `lib/common/constants.ts` → `CUSTOMER_ALLOWLISTED_ACCOUNTS`
+  - `ReleaseManagementDataServiceCDK` → `lib/common/constants.ts` → `NON_WEBHOOK_3P_ALLOWLISTED_ACCOUNTS`
+- Add `'940019131157',` to both, raise a CR, the Heimdall team approves/auto-merges.
+- The guide's shortcut: check out both packages and ask your AI assistant *"run allowlist SOP for
+  940019131157"*.
+
+**After allow-listing:** a **"Changes"** (Release Manager) entry appears in the Agent Space web
+app. Then add the inline IAM policy that lights up the UI — Agent Space → **Access** tab → note the
+WebApp admin role → attach:
+```json
+{ "Version": "2012-10-17",
+  "Statement": [{ "Sid": "Statement1", "Effect": "Allow",
+    "Action": ["release-manager:*"], "Resource": ["*"] }] }
+```
+(Ignore "unrecognized permission" warnings.) Repo indexing then takes ~1–2 hours.
+
+---
+
 ## The one manual step — connect the repo to the AWS DevOps Agent (GitHub App)
 
 **Why only DevOps?** The Security Agent runs headlessly over an S3-staged diff, so it needs **no**
