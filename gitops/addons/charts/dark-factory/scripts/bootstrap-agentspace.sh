@@ -66,11 +66,30 @@ APP_ID="$(aws securityagent list-applications --region "$AWS_REGION" \
 if [ -z "$APP_ID" ] || [ "$APP_ID" = "None" ]; then
   if [ -n "${IDC_INSTANCE_ARN:-}" ]; then
     log "creating Application (IDC-backed) so the console renders the space..."
-    APP_ID="$(aws securityagent create-application --region "$AWS_REGION" \
+    # Only ONE application per account is allowed. create-application fails with
+    # ServiceQuotaExceededException if one already exists but list-applications
+    # didn't surface it (eventual consistency / paging). Treat "already exists" as
+    # success and re-list to adopt it — idempotent, never fatal.
+    set +e
+    CREATE_OUT="$(aws securityagent create-application --region "$AWS_REGION" \
       --idc-instance-arn "$IDC_INSTANCE_ARN" \
       --role-arn "$SERVICE_ROLE_ARN" \
-      --query 'applicationId' --output text)"
-    log "created application ${APP_ID}"
+      --query 'applicationId' --output text 2>&1)"
+    CREATE_RC=$?
+    set -e
+    if [ "$CREATE_RC" -eq 0 ]; then
+      APP_ID="$CREATE_OUT"
+      log "created application ${APP_ID}"
+    elif echo "$CREATE_OUT" | grep -qiE "already exists|ServiceQuotaExceeded"; then
+      log "application already exists — adopting it."
+      APP_ID="$(aws securityagent list-applications --region "$AWS_REGION" \
+        --query 'applicationSummaries[0].applicationId' --output text 2>/dev/null || echo "")"
+      if [ -z "$APP_ID" ] || [ "$APP_ID" = "None" ]; then APP_ID="existing"; fi
+      log "application id: ${APP_ID}"
+    else
+      log "WARN: create-application failed (non-fatal): ${CREATE_OUT}"
+      APP_ID=""
+    fi
   else
     log "WARN: no IDC_INSTANCE_ARN provided — skipping Application creation."
     log "WARN: the API/reviews still work, but the console will show 'application hasn't been created'."
