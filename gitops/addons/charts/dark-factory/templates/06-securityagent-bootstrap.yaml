@@ -24,6 +24,13 @@ metadata:
     # lifecycle + S3). The role's trust policy allows this exact SA (see
     # iam/securityagent.tf workflow_service_accounts).
     eks.amazonaws.com/role-arn: {{ .Values.securityAgent.irsaRoleArn | quote }}
+    # This SA + its RBAC + the script CM are PreSync hooks at an EARLIER wave than
+    # the Job (-1 vs 0) so they exist when the hook Job's pod is created. Regular
+    # (non-hook) resources sync AFTER PreSync hooks, so the SA can't be a plain
+    # resource — the Job would fail "serviceaccount not found".
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
 ---
 # The bootstrap Job writes the result Secret in the argo namespace.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -33,6 +40,10 @@ metadata:
   namespace: {{ .Values.argo.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -45,6 +56,10 @@ metadata:
   namespace: {{ .Values.argo.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
 subjects:
   - kind: ServiceAccount
     name: dark-factory-bootstrap
@@ -53,6 +68,23 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: dark-factory-bootstrap
+---
+# The bootstrap script as its OWN hooked ConfigMap (wave -1) — the Job can't rely
+# on the regular df-review ConfigMap (that syncs after PreSync hooks).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dark-factory-bootstrap-script
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "-1"
+data:
+  bootstrap-agentspace.sh: |
+{{ .Files.Get "scripts/bootstrap-agentspace.sh" | indent 4 }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -65,6 +97,7 @@ metadata:
     # Reconcile before the sync so the Secret exists when df-run first fires.
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   backoffLimit: 3
   template:
@@ -77,7 +110,7 @@ spec:
       volumes:
         - name: scripts
           configMap:
-            name: df-review
+            name: dark-factory-bootstrap-script
             defaultMode: 0555
       containers:
         - name: bootstrap
