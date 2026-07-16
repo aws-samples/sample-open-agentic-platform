@@ -111,6 +111,10 @@ spec:
             template: devops-gate
             dependencies: [drive-coder]
             when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: pr-number
+                  value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
           # Security Agent (narrow/strict) runs SECOND — only after DevOps cleared
           # (label present). Headless: create-code-review → job → list-findings.
           - name: security-agent
@@ -408,6 +412,9 @@ spec:
     # and the sticky status shows DevOps not-run (NEVER a fake pass). Advisory: this
     # step itself never fails the run.
     - name: devops-gate
+      inputs:
+        parameters:
+          - name: pr-number
       activeDeadlineSeconds: {{ add .Values.devopsAgent.waitSeconds 60 }}
       script:
         image: {{ .Values.reviewImage }}
@@ -421,7 +428,7 @@ spec:
           - name: REPO
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: PR
-            value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
+            value: "{{`{{inputs.parameters.pr-number}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
           - name: GATE_MODE
