@@ -1,10 +1,13 @@
 {{- /*
 Hub-side scripts for df-run, in a ConfigMap in the argo namespace, mounted into
 the workflow steps (never the Kata VM):
-  - review.js  — the shared Security/DevOps reviewer (P3), parameterized by ROLE.
-  - status.js  — the sticky-status updater (rewrites the PR body from live verdicts).
-Always rendered: the sticky-status step always runs and needs status.js, even if
-the review roles are disabled.
+  - security-agent.sh       — the REAL AWS Security Agent code review (headless).
+  - bootstrap-agentspace.sh — idempotent agent-space/application reconcile (PreSync).
+  - status.js               — sticky-status updater (rewrites the PR body).
+  - comment.js / merge.js / iterate.js / deploy-test.sh — lifecycle helpers.
+Always rendered: the sticky-status step always runs and needs status.js.
+NOTE: the old review.js (linters+Nova stub) was REMOVED — reviews are now the
+real AWS DevOps + Security Agents (docs §6.2), never a cooked-up reviewer.
 */ -}}
 apiVersion: v1
 kind: ConfigMap
@@ -14,8 +17,6 @@ metadata:
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 data:
-  review.js: |
-{{ .Files.Get "scripts/review.js" | indent 4 }}
   status.js: |
 {{ .Files.Get "scripts/status.js" | indent 4 }}
   merge.js: |
@@ -26,3 +27,7 @@ data:
 {{ .Files.Get "scripts/comment.js" | indent 4 }}
   deploy-test.sh: |
 {{ .Files.Get "scripts/deploy-test.sh" | indent 4 }}
+  bootstrap-agentspace.sh: |
+{{ .Files.Get "scripts/bootstrap-agentspace.sh" | indent 4 }}
+  security-agent.sh: |
+{{ .Files.Get "scripts/security-agent.sh" | indent 4 }}

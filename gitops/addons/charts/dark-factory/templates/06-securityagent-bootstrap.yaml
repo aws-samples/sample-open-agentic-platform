@@ -1,0 +1,110 @@
+{{- if .Values.securityAgent.enabled }}
+{{- /*
+AWS Security Agent bootstrap — reconciles the Agent Space + Application ONCE
+(idempotent) and publishes their IDs into a Secret the df-run security step
+reads. Runs as an ArgoCD PreSync hook Job so it completes before the workflow
+templates that depend on the Secret are used.
+
+WHY a Job: the Security Agent space/application are preview resources with no
+Terraform/ACK provider, so a find-or-create reconcile Job is the GitOps-native
+way to manage them (same pattern as langfuse-minio-init). The agent space is
+created ONCE and reused across all runs; only the per-PR code-review + job are
+created per df-run. IAM (IRSA role, service role, S3 bucket, OIDC provider) is
+committed as Terraform in iam/securityagent.tf — NOT minted here.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dark-factory-bootstrap
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    # IRSA: assume the committed df-securityagent-irsa role (securityagent
+    # lifecycle + S3). The role's trust policy allows this exact SA (see
+    # iam/securityagent.tf workflow_service_accounts).
+    eks.amazonaws.com/role-arn: {{ .Values.securityAgent.irsaRoleArn | quote }}
+---
+# The bootstrap Job writes the result Secret in the argo namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-bootstrap
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-bootstrap
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-bootstrap
+    namespace: {{ .Values.argo.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-bootstrap
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dark-factory-securityagent-bootstrap
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    # Reconcile before the sync so the Secret exists when df-run first fires.
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "dark-factory.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: dark-factory-bootstrap
+      restartPolicy: Never
+      volumes:
+        - name: scripts
+          configMap:
+            name: df-review
+            defaultMode: 0555
+      containers:
+        - name: bootstrap
+          # Needs aws + kubectl. The platform step image (alpine/k8s) has kubectl;
+          # add the AWS CLI at start (or bake a combined image later).
+          image: {{ .Values.stepImage }}
+          command: [bash]
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.securityAgent.region | quote }}
+            - name: SPACE_NAME
+              value: {{ .Values.securityAgent.spaceName | quote }}
+            - name: SERVICE_ROLE_ARN
+              value: {{ .Values.securityAgent.serviceRoleArn | quote }}
+            - name: DIFF_BUCKET
+              value: {{ .Values.securityAgent.diffBucket | quote }}
+            - name: IDC_INSTANCE_ARN
+              value: {{ .Values.securityAgent.idcInstanceArn | quote }}
+            - name: SECRET_NAME
+              value: {{ .Values.securityAgent.secretName | quote }}
+            - name: SECRET_NAMESPACE
+              value: {{ .Values.argo.namespace | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+          source: |
+            set -eu
+            command -v aws >/dev/null 2>&1 || { echo "[bootstrap] installing aws-cli..."; apk add --no-cache aws-cli >/dev/null 2>&1 || pip install --quiet awscli; }
+            bash /scripts/bootstrap-agentspace.sh
+{{- end }}

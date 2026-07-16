@@ -32,7 +32,23 @@ const ISSUE = process.env.DF_ISSUE_NUMBER;
 const BRANCH = process.env.DF_BRANCH || `df/issue-${ISSUE}`;
 const BASE = process.env.DF_BASE_BRANCH || "main";
 const TITLE = process.env.DF_ISSUE_TITLE || `Dark Factory: issue #${ISSUE}`;
-const PROFILE = process.env.CODER_PROFILE || "claude-code";
+// Agentic engine the VM runs. Both engines are first-class and selectable:
+//   claude → claude -p (Claude Code, default)   |   kiro → kiro run --headless
+// Accept the new CODER_ENGINE and the legacy CODER_PROFILE (claude-code|kiro);
+// normalize either to a bare engine id.
+const ENGINE = (() => {
+  const raw = (process.env.CODER_ENGINE || process.env.CODER_PROFILE || "claude").toLowerCase();
+  return raw.startsWith("kiro") ? "kiro" : "claude";
+})();
+const PROFILE = ENGINE; // back-compat alias used in a few log lines
+// AWS DevOps Agent — release-readiness review via the coding-agent plugin, run
+// BEFORE the PR opens (docs §6.2). Modes: "claude-plugin" (Claude Code DevOps
+// Agent plugin) | "off". On a clear verdict the coder applies DF_DEVOPS_CLEAR_LABEL
+// so the hub's Security Agent step runs next (DevOps-first ordering).
+const DEVOPS_AGENT_MODE = (process.env.DF_DEVOPS_AGENT_MODE || "off").toLowerCase();
+const DEVOPS_CLEAR_LABEL = process.env.DF_DEVOPS_CLEAR_LABEL || "needs-security-review";
+const DEVOPS_CLEAR_VERDICTS = (process.env.DF_DEVOPS_CLEAR_VERDICTS || "Safe to Release,Proceed with Caution")
+  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 const GH_TOKEN_PATH = process.env.GH_TOKEN_PATH || "/etc/secrets/gh-token";
 const BIFROST_KEY_PATH = process.env.BIFROST_KEY_PATH || "/etc/secrets/bifrost-api-key";
@@ -221,13 +237,67 @@ function runCoder(repoDir) {
   // Inherit stdio so the coder CLI's own output + errors stream into the pod
   // logs (kubectl logs), instead of being swallowed by execFileSync's exception.
   const opts = { cwd: repoDir, env, stdio: "inherit", maxBuffer: 64 * 1024 * 1024 };
-  if (PROFILE === "kiro") return execFileSync("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], opts);
+  const prompt = `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`;
+  if (ENGINE === "kiro") {
+    // Kiro CLI headless — the coder image carries the `kiro` binary; it reads the
+    // same Bifrost/Bedrock env above. --headless drives it non-interactively.
+    console.log("[coder] engine=kiro (kiro run --headless)");
+    return execFileSync("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], opts);
+  }
+  console.log("[coder] engine=claude (claude -p)");
   return execFileSync(
     "claude",
-    ["-p", `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`,
-     "--permission-mode", "bypassPermissions", "--verbose"],
+    ["-p", prompt, "--permission-mode", "bypassPermissions", "--verbose"],
     opts,
   );
+}
+
+// AWS DevOps Agent — release-readiness code review, run in-VM via the coding-agent
+// plugin BEFORE the PR opens (docs §6.2). Returns { verdict, cleared, summary }.
+// This is the REAL managed agent, invoked through the engine's plugin — NOT a
+// linter/LLM stand-in. Because the plugin needs a one-time console connect
+// (Agent Space + repo), when it isn't wired the review is reported as
+// "not-connected" and cleared=false (NEVER a fake pass) so the hub sticky-status
+// shows DevOps as not-run and Security is correctly skipped.
+function runDevopsReview(repoDir) {
+  if (DEVOPS_AGENT_MODE === "off") return { verdict: "skipped", cleared: false, summary: "DevOps Agent disabled" };
+  const key = readSecret(BIFROST_KEY_PATH) || "bifrost";
+  const base = startBifrostUaShim(`${BIFROST_URL.replace(/\/+$/, "")}/anthropic`);
+  const env = {
+    ...process.env,
+    ANTHROPIC_BASE_URL: base, ANTHROPIC_API_KEY: key,
+    ANTHROPIC_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+    ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+    HOME: "/tmp/coder-home", CLAUDE_CONFIG_DIR: "/tmp/coder-home/.claude",
+    XDG_CONFIG_HOME: "/tmp/coder-home/.config", XDG_CACHE_HOME: "/tmp/coder-home/.cache", CI: "1",
+  };
+  delete env.CLAUDE_CODE_USE_BEDROCK;
+  const opts = { cwd: repoDir, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024, timeout: 15 * 60 * 1000 };
+  // Ask the coding agent to invoke the DevOps Agent release-readiness review on
+  // the working changes and print the verdict on the last line as DF_DEVOPS_VERDICT=.
+  const prompt =
+    "Use the AWS DevOps Agent plugin to run a release readiness code review on the current uncommitted+committed changes in this repo " +
+    "(cross-repository dependency risks, internal standards compliance, access-control correctness; run static analysis). " +
+    "Summarize the findings, then print EXACTLY one final line: DF_DEVOPS_VERDICT=<BLOCK|Proceed with Caution|Safe to Release>.";
+  try {
+    let out = "";
+    if (ENGINE === "kiro") {
+      out = execFileSync("kiro", ["run", "--headless", "--prompt", prompt], opts) || "";
+    } else {
+      out = execFileSync("claude", ["-p", prompt, "--permission-mode", "bypassPermissions"], opts) || "";
+    }
+    const m = String(out).match(/DF_DEVOPS_VERDICT=\s*(.+)\s*$/im);
+    const verdict = m ? m[1].trim() : "unknown";
+    const cleared = DEVOPS_CLEAR_VERDICTS.includes(verdict.toLowerCase());
+    console.log(`[coder] AWS DevOps Agent verdict: ${verdict} (cleared=${cleared})`);
+    return { verdict, cleared, summary: `AWS DevOps Agent: ${verdict}` };
+  } catch (e) {
+    // Plugin not connected / not installed → report honestly, do NOT fake-pass.
+    const msg = (e.stderr || e.stdout || e.message || "").toString();
+    const notConnected = /plugin|not installed|not connected|unknown command|No such|command not found/i.test(msg);
+    console.error(`[coder] DevOps Agent review unavailable: ${msg.slice(0, 200)}`);
+    return { verdict: notConnected ? "not-connected" : "error", cleared: false, summary: "AWS DevOps Agent not connected (one-time console setup required)" };
+  }
 }
 
 function buildAndTest(repoDir) {
@@ -295,6 +365,11 @@ async function main() {
     // can't be used: the depth-1 clone never fetched origin/df/issue-N, so its
     // lease check fails ("stale info") whenever the branch already exists from a
     // prior run.
+    // AWS DevOps Agent release-readiness review runs FIRST (before the PR opens),
+    // per the DevOps-first ordering. Its verdict drives the handoff label so the
+    // hub's Security Agent step runs only after DevOps clears.
+    const devops = runDevopsReview(repoDir);
+
     sh("git", ["push", "-u", "origin", BRANCH, "--force"], { cwd: repoDir });
     headSha = sh("git", ["rev-parse", "HEAD"], { cwd: repoDir }).trim();
 
@@ -304,6 +379,14 @@ async function main() {
     // dark-factory:status marker) with the real verdicts once holdout/security/
     // devops finish — the "one live sticky status" (README §7). Keep this block's
     // shape in sync with that step.
+    // DevOps line reflects the REAL AWS DevOps Agent verdict (or not-connected).
+    const devopsIcon = devops.cleared ? "✅" : (devops.verdict === "not-connected" ? "⚠️" : (devops.verdict === "BLOCK" ? "⛔" : "⏳"));
+    const devopsLine = devops.verdict === "not-connected"
+      ? "- ⚠️ **DevOps review (AWS DevOps Agent):** _not connected — one-time console setup required_"
+      : `- ${devopsIcon} **DevOps review (AWS DevOps Agent):** ${devops.verdict}`;
+    const secLine = devops.cleared
+      ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
+      : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
     const prBody = [
       `Closes #${ISSUE}.`,
       "",
@@ -311,18 +394,53 @@ async function main() {
       "### 🏭 Dark Factory — verification",
       `- ✅ **Build + unit tests:** ${test.summary}`,
       "- ⏳ **Holdout gate:** _running…_",
-      "- ⏳ **Security review:** _running…_",
-      "- ⏳ **DevOps review:** _running…_",
+      devopsLine,
+      secLine,
       "",
-      "_Autonomously implemented in a hardware-isolated Kata micro-VM; verification runs as independent hub-side steps (see the checks below)._",
+      "_Autonomously implemented in a hardware-isolated Kata micro-VM; DevOps + Security reviews are the real AWS Frontier Agents (see the checks below)._",
     ].join("\n");
+    let prNumber = "";
     try {
-      await gh("POST", `/repos/${REPO}/pulls`, {
+      const created = await gh("POST", `/repos/${REPO}/pulls`, {
         title: `Dark Factory: ${TITLE} (#${ISSUE})`, head: BRANCH, base: BASE,
         body: prBody,
         maintainer_can_modify: true,
       });
+      prNumber = created && created.number ? String(created.number) : "";
     } catch (e) { if (!/already exists|A pull request already/i.test(e.message)) throw e; }
+    // If the PR already existed, look up its number (labels attach to the PR).
+    if (!prNumber) {
+      try {
+        const list = await gh("GET", `/repos/${REPO}/pulls?head=${REPO.split("/")[0]}:${BRANCH}&state=open`);
+        if (Array.isArray(list) && list[0]) prNumber = String(list[0].number);
+      } catch (_) {}
+    }
+
+    // Post the AWS DevOps Agent verdict as its own commit status, and — when the
+    // verdict clears — apply the handoff label so the hub's Security Agent step
+    // runs next (DevOps-first ordering). When not connected/BLOCK, we leave the
+    // label off (Security stays gated) and report honestly.
+    if (DEVOPS_AGENT_MODE !== "off") {
+      const dvState = devops.cleared ? "success" : (devops.verdict === "BLOCK" ? "failure" : "error");
+      try {
+        await gh("POST", `/repos/${REPO}/statuses/${headSha}`, {
+          state: dvState, context: "dark-factory/devops",
+          description: devops.summary.slice(0, 130),
+        });
+      } catch (_) {}
+      if (devops.cleared && prNumber) {
+        // Labels attach to the PR number (the hub devops-gate reads
+        // /issues/<pr>/labels). Label the PR, not the issue.
+        try {
+          await gh("POST", `/repos/${REPO}/issues/${prNumber}/labels`, { labels: [DEVOPS_CLEAR_LABEL] });
+          console.log(`[coder] AWS DevOps Agent cleared → applied '${DEVOPS_CLEAR_LABEL}' to PR #${prNumber} (Security Agent will run)`);
+        } catch (e) { console.error(`[coder] could not apply handoff label: ${e.message}`); }
+      } else if (devops.cleared && !prNumber) {
+        console.error("[coder] DevOps cleared but PR number unknown — cannot apply handoff label");
+      } else {
+        console.log(`[coder] AWS DevOps Agent did NOT clear (${devops.verdict}) → Security Agent stays gated`);
+      }
+    }
 
     // Self-report SUCCESS on the head SHA — this is what df-run polls for.
     await gh("POST", `/repos/${REPO}/statuses/${headSha}`, {

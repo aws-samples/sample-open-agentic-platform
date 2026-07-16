@@ -50,7 +50,7 @@ spec:
           configMap:
             name: df-review
       script:
-        image: {{ .Values.review.reviewImage }}
+        image: {{ .Values.reviewImage }}
         command: [bash]
         env:
           - name: GH_TOKEN

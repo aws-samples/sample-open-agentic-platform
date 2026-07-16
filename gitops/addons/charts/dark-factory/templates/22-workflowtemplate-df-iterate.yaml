@@ -52,7 +52,7 @@ spec:
           configMap:
             name: df-review
       script:
-        image: {{ .Values.review.reviewImage }}
+        image: {{ .Values.reviewImage }}
         command: [bash]
         env:
           - name: GH_TOKEN
@@ -75,7 +75,7 @@ spec:
           - name: BIFROST_URL
             value: {{ .Values.bifrost.url | quote }}
           - name: CODER_PROFILE
-            value: {{ .Values.coder.profile | quote }}
+            value: {{ .Values.coder.engine | quote }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/iterate.js

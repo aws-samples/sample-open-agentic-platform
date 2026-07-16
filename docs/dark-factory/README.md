@@ -345,48 +345,48 @@ clones the coder's `df/issue-N`, diffs it vs base, and runs `evaluate.js`.
 > inputs go RED, and on the one narrow test it passes the judge votes 0/3 catching the lookup table →
 > **0/4 gate FAIL**. Neither signal alone is the gate; together they resist gaming.
 
-### 6.2 Review roles — independent, read-only reviewers (Security + DevOps)  ✅ *built (P3, advisory)*
+### 6.2 Reviews — the REAL AWS Frontier Agents (DevOps → Security)  ✅ *built*
 
-The **workflow** (not the coder) runs two independent review roles on the finished diff, as
-**parallel DAG steps** (`security-review ∥ devops-review`, alongside the holdout gate). Each role is a
-**pluggable slot with a swappable backend**, so we're not locked to any single service's GA status:
+The reviews are the **genuine managed AWS agents** — **AWS DevOps Agent** and **AWS Security Agent**
+(AWS Continuum / Frontier Agents). Not linters, not a Nova stand-in, not a stub. They run **outside
+the coder VM** (the coder never grades itself) and are **ordered**, matching the AI-DLC model:
 
-| Role | Answers | Backends (`review.<role>.backend`) |
-|---|---|---|
-| **Security** | *"Can this code be attacked?"* — vulns, exploitability, injection, secrets, insecure deps | `auto` **(v1 default)** = linters + Nova reviewer · `aws-agent` (managed AWS Security Agent, when available) · `llm` · `linters` |
-| **DevOps** | *"Will this code operate well?"* — reliability, deployability, cost, observability, IaC/config correctness | `auto` **(v1 default)** = linters + Nova reviewer · `aws-agent` (managed AWS DevOps Agent) · `llm` · `linters` |
+```
+coder implements  →  AWS DevOps Agent (broad, FIRST)  →  clears?  →  label `needs-security-review`
+                                                                        ↓
+                       AWS Security Agent (narrow/strict, SECOND, gated on the label)  →  both clear → merge
+```
 
-**As built (v1 `auto` backend)** — same two-signal split as the holdout gate:
-- **Deterministic linters = the hard signal.** Security: `npm audit` (vulnerable deps), a
-  hard-coded-secret scan on the diff (AWS keys, credentials, private keys, GitHub tokens), and
-  dangerous-sink flags (`eval`, `exec`). DevOps: Dockerfile hygiene (unpinned base image, runs-as-root)
-  and k8s-manifest hygiene (missing `resources`/probes, `privileged: true`).
-- **A different-family Nova reviewer = advisory.** Reads only the diff, returns structured findings;
-  it's a second opinion, never the sole verdict (and never the coder's own Claude — no self-review).
-- The **managed `aws-agent` backend** is a stub for the out-of-cluster AWS Security/DevOps Agents
-  (invoked with the **hub orchestrator's IAM**, never in the coder VM) — wired in when that API is
-  available. **Fable-5 is deliberately not used here** (returns 400 via Bifrost today + a
-  data-retention caveat — see the deep-sec note below).
+| Agent | Order | Scope | How it's invoked |
+|---|---|---|---|
+| **AWS DevOps Agent** — Release Readiness code review | **1st (broad)** | cross-repo dependency risk, standards compliance, access-control correctness, build+test in an AWS-managed env → **BLOCK / Proceed with Caution / Safe to Release** | **GitHub App** auto-reviews the PR and posts a check-run (`devopsAgent.gate: check`, default). The df-run `devops-gate` step **waits** for that check, then applies `needs-security-review`. *(No headless code-review API exists; the coding-agent plugin is a `label`-mode fallback — see the manual-step note.)* |
+| **AWS Security Agent** — code security review | **2nd (narrow)** | OWASP Top 10, hardcoded secrets, IAM misuse, dependency risk | **Fully headless, no GitHub App:** the `security-agent` step clones read-only, stages `{source archive, unified diff}` in S3, calls `securityagent create-code-review → start-code-review-job → list-findings` via the workflow's **IRSA** role, and maps findings to `dark-factory/security` + a PR comment. |
 
-- Both roles are **read-only reviewers on the finished diff** — never co-authors. Each posts a
-  `dark-factory/<role>` commit status; findings fold into the PR report; the coder only *reacts* via
-  the comment loop.
-- **v1 = advisory** (`review.blockSeverity: none`) — reported, never fails the run. Raise
-  `blockSeverity` to `low|medium|high|critical` to make a finding at/above that bar **block** the PR
-  (e.g. `critical` blocks on a hard-coded AWS key).
+**Why the split matters (verified live 2026-07-16):**
+- The **Security Agent path is 100% GitOps + headless** — proven end-to-end against the real service:
+  a flawed sample (`hardcoded AWS key + SQL injection + wildcard IAM`) returned exactly
+  `DEFAULT_CREDENTIALS (HIGH)`, `SQL_INJECTION (HIGH)`, `PRIVILEGE_ESCALATION (CRITICAL)`. The
+  committed `scripts/security-agent.sh` drives that same chain and was validated against the live API.
+- The **agent space + application** are reconciled **once** by an idempotent ArgoCD **PreSync Job**
+  (`scripts/bootstrap-agentspace.sh`), which writes their IDs into a Secret the review step reads. Only
+  the **per-PR code-review + job** are created per run. IAM (IRSA role, service role, S3 bucket, OIDC
+  provider) is committed Terraform in **`iam/securityagent.tf`** — the chart *consumes* ARNs, never
+  mints IAM.
+- **v1 = advisory** (`securityAgent.blockLevel: none`) — findings are reported, never fail the run.
+  Raise `blockLevel` to `low|medium|high|critical` to **block** on a finding at/above that risk level.
 
-> **Verified (2026-07-15):** clean `subtract` diff → both roles **0 findings** (no false positives),
-> statuses green. Adversarial diffs (a hard-coded AWS key + `eval` → security flags **2 critical + 1
-> low**; a `:latest` root Dockerfile + a probe-less/limit-less Deployment → devops flags **4
-> findings**), correctly caught by the linters.
+> **⚠️ The one manual, non-GitOps step (flagged, never faked).** Both agents need a **one-time console
+> connect** of the GitHub repo to the Agent Space (an OAuth grant no tool can script). For the
+> **Security Agent** this is optional — the headless diff API needs no repo connect. For the **DevOps
+> Agent** it's required (its review only runs via the GitHub App / plugin / chat). Until it's done, the
+> `devops-gate` reports **not-cleared** and the Security Agent step is **skipped** — the pipeline
+> **never fakes a DevOps pass**. Connecting the repo (≈5 min in the AWS DevOps Agent console) is the
+> single manual action in the whole pipeline.
 
-**Optional deep-security tier (gated, later phase).** For reasoning-heavy vulnerability discovery
-beyond the managed Security Agent, a `deep-sec`-labelled run spins a **second, isolated Kata sandbox**
-running a security agent backed by **Claude Fable 5** on Bedrock (via Bifrost) — read-only on the
-diff, its own narrow credential, never sharing the coder's VM. *Note:* **Mythos** proper is
-allow-list-gated (defensive-cyber partners only) and not assumed available; **Fable 5** is the
-generally-available "Mythos-class" defensive model, and it carries a provider-data-share / 30-day
-retention caveat to clear before enabling.
+**Engine parameterization (coder).** The coder VM runs either engine via `coder.engine`:
+`claude` (Claude Code `claude -p`, default + tested) or `kiro` (Kiro CLI `kiro run --headless`). Both
+are first-class; the image (`examples/dark-factory/coder/Dockerfile`) carries both CLIs
+(`KIRO_CLI_URL` build-arg pins the Kiro artifact). `entrypoint.js` branches on the engine.
 
 > **Why the workflow invokes them, not the coder:** it keeps the untrusted sandbox
 > **credential-less** and preserves *separation of concerns* — the agent doing the work is not the

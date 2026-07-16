@@ -19,6 +19,12 @@ warmPool:
 coder:
   # In-VM control endpoint the workflow drives (the coder image listens here).
   port: 8080
+  # Agentic engine the coder VM runs. BOTH are first-class and selectable:
+  #   claude  → claude -p (Claude Code, default; wired + tested)
+  #   kiro    → kiro run --headless (Kiro CLI; supported, selectable)
+  # The coder image carries both CLIs; entrypoint.js branches on this value.
+  # (Retained name `profile` for back-compat; value is the engine id.)
+  engine: claude
   profile: claude-code
   # Max minutes for a single coder run before the step times out.
   runTimeoutMinutes: 30
@@ -86,31 +92,86 @@ holdout:
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
   evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.15
 
-# ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
-# Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
-# the coder VM — the coder never grades itself). Each role is a pluggable slot
-# (docs §6.2). v1 backend "auto" = deterministic linters (the hard signal:
-# npm audit, secret scan, dangerous sinks; devops: Dockerfile/k8s hygiene) PLUS a
-# different-family LLM reviewer (Nova, advisory) — same test+judge split as the
-# holdout. The managed "aws-agent" backend is a swappable option for when that API
-# is available. Fable-5 deep-sec is deliberately NOT used here (400 via Bifrost +
-# data-retention caveat — see docs §6.2). Advisory in v1: posts commit statuses,
-# never fails the workflow unless blockSeverity is raised above "none".
+# ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
+# Two independent reviewers, run OUTSIDE the coder VM (the coder never grades
+# itself). These are the genuine managed AWS agents — NOT linters, NOT a Nova
+# stand-in. Ordering (per the AI-DLC model): DevOps Agent FIRST (broad release
+# readiness) → on clear, add the `needs-security-review` label → Security Agent
+# SECOND (narrow/strict). See docs §6.2 + diagram B.5.
+#
+#   1. AWS DevOps Agent — Release Readiness code review (cross-repo deps,
+#      standards, access-control, build+test in an AWS-managed env → BLOCK /
+#      Proceed-with-Caution / Safe-to-Release). Invoked via the Claude Code
+#      DevOps Agent plugin inside the coder step (NO headless code-review API
+#      exists). Requires a one-time console Agent-Space + repo connect (the only
+#      non-GitOps step; flagged in docs). Operational Readiness (incident/SRE) is
+#      OUT OF SCOPE — this is a pre-merge pipeline.
+#   2. AWS Security Agent — code security review (OWASP Top 10, secrets, IAM
+#      misuse, dependency risk). FULLY headless: clone → stage {src,diff} in S3 →
+#      securityagent create-code-review → start-code-review-job → list-findings,
+#      via the workflow's IRSA role. No GitHub App, no OAuth. VERIFIED live.
 review:
   enabled: true
-  # Backend per role: auto | linters | llm | aws-agent.
-  security:
-    backend: auto
-  devops:
-    backend: auto
-  # LLM reviewer model — MUST be a different family than the coder (claude-sonnet).
-  reviewModel: us.amazon.nova-pro-v1:0
-  bifrostUrl: http://172.20.181.17:8080
-  # Advisory by default. Raise to low|medium|high|critical to make a finding at or
-  # above that severity fail the workflow (per-severity blocking, docs §6.2).
-  blockSeverity: none
-  # Reuse the coder image (has node + npm audit + git).
-  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.15
+  # The label the DevOps clear-gate applies; the Security Agent step only runs
+  # once it's present (so DevOps reviews first, Security second).
+  handoffLabel: needs-security-review
+
+# ── AWS Security Agent (headless, GitOps-native) ─────────────────────────────
+# The agent SPACE + APPLICATION are reconciled once by the PreSync bootstrap Job
+# (templates/06-securityagent-bootstrap.yaml → scripts/bootstrap-agentspace.sh),
+# which writes their IDs into `secretName`. IAM (IRSA role, service role, S3
+# bucket, OIDC provider) is committed Terraform in iam/securityagent.tf. The
+# per-run review step (scripts/security-agent.sh) reads the Secret. All values
+# below are the live, validated resources (account 940019131157, us-west-2).
+securityAgent:
+  enabled: true
+  region: us-west-2
+  # Agent space name the bootstrap Job finds-or-creates (adopts as-0fa9566... ).
+  spaceName: dark-factory
+  # Committed IAM (iam/securityagent.tf) outputs — the chart consumes, never mints.
+  irsaRoleArn: arn:aws:iam::940019131157:role/df-securityagent-irsa
+  serviceRoleArn: arn:aws:iam::940019131157:role/service-role/df-securityagent-service-role
+  diffBucket: dark-factory-secagent-940019131157-us-west-2
+  # IAM Identity Center instance (create-application → console renders the space).
+  idcInstanceArn: arn:aws:sso:::instance/ssoins-7907c8a7931ceef3
+  # Secret (argo ns) the bootstrap Job writes + the review step reads.
+  secretName: dark-factory-securityagent
+  # Advisory by default. Raise to low|medium|high|critical to fail the run when a
+  # finding at/above that riskLevel is returned (per-severity blocking).
+  blockLevel: none
+  # Seconds to wait for a review job (validated: ~2.5 min on a small diff).
+  pollTimeoutSeconds: 900
+
+# ── AWS DevOps Agent (Release Readiness) ─────────────────────────────────────
+# NOTE: unlike the Security Agent, the DevOps Agent has NO headless code-review
+# API. Its release-readiness review is reachable via (a) the GitHub App that
+# auto-reviews every PR and posts a check-run [DEFAULT — native model, matches
+# the AI-DLC blog], (b) MCP/A2A with an Agent-Spaces access key from a hub step,
+# or (c) the coding-agent plugin inside the IDE/CLI. Because the coder VM is
+# credential-less + network-locked AND Claude Code -p doesn't expand plugin
+# commands, the in-VM plugin path can't run there — so we default to the GitHub
+# App check-run and WAIT for it. All paths need ONE one-time console connect
+# (repo ↔ Agent Space); that is the single manual step in the pipeline (docs §6.2).
+devopsAgent:
+  enabled: true
+  # How the df-run devops-gate confirms the DevOps Agent cleared:
+  #   check → wait for the DevOps Agent GitHub App's check-run (DEFAULT, native).
+  #   label → wait for a coder-applied handoffLabel (fallback if you drive DevOps
+  #           via the coding-agent plugin instead of the App).
+  gate: check
+  # Regex matched against check-run names / status contexts the DevOps Agent posts.
+  # (Tune to the exact context once the App is connected — e.g. "aws.*devops.*").
+  checkContext: "(?i)(devops[- ]?agent|release[- ]?readiness)"
+  # How long devops-gate waits for the DevOps Agent to post its verdict. The
+  # managed review typically completes in ~8-10 min (docs), so allow headroom.
+  waitSeconds: 900
+  # (label-mode only) verdicts the coder treats as "cleared" when it drives the
+  # review via the plugin and applies the handoff label itself.
+  clearVerdicts: ["Safe to Release", "Proceed with Caution"]
+
+# Image for hub-side agent steps: needs aws-cli + kubectl + node + git + zip.
+# Reuse the coder image (has node/git/zip); the bootstrap Job adds aws-cli.
+reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.15
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision
