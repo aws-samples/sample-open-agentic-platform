@@ -114,6 +114,25 @@ async function gh(method, path, body) {
   throw lastErr;
 }
 
+// Upsert ONE marker-based PR comment (edit in place, no spam) — mirrors the
+// hub-side comment.js so the coder's own steps (coding complete, local testing)
+// leave a visible mark on the PR just like the review agents do.
+async function postStickyComment(prNumber, marker, bodyMd) {
+  if (!prNumber) return;
+  const full = `<!-- ${marker} -->\n${bodyMd.trim()}`;
+  try {
+    let existing = null;
+    for (let page = 1; page <= 5 && !existing; page++) {
+      const cs = await gh("GET", `/repos/${REPO}/issues/${prNumber}/comments?per_page=100&page=${page}`);
+      if (!Array.isArray(cs) || !cs.length) break;
+      existing = cs.find((c) => (c.body || "").includes(`<!-- ${marker} -->`));
+    }
+    if (existing) await gh("PATCH", `/repos/${REPO}/issues/comments/${existing.id}`, { body: full });
+    else await gh("POST", `/repos/${REPO}/issues/${prNumber}/comments`, { body: full });
+    console.log(`[coder] posted PR comment ${marker}`);
+  } catch (e) { console.error(`[coder] comment ${marker} non-fatal: ${e.message}`); }
+}
+
 async function fetchIssueSpec() {
   const issue = await gh("GET", `/repos/${REPO}/issues/${ISSUE}`);
   let spec = `# ${issue.title}\n\n${issue.body || ""}\n`;
@@ -438,6 +457,18 @@ async function main() {
         if (Array.isArray(list) && list[0]) prNumber = String(list[0].number);
       } catch (_) {}
     }
+
+    // Every step reports on the PR as a comment. The coder posts two: (1) coding
+    // complete — what it changed; (2) local testing — the in-VM build+test result.
+    // (The review agents post their own comments; the sticky PR-body block is the
+    // consolidated board.) Files changed = git name-status vs base.
+    let changed = "";
+    try { changed = sh("git", ["diff", "--name-status", `origin/${BASE}...HEAD`], { cwd: repoDir }).trim(); } catch { try { changed = sh("git", ["show", "--name-status", "--oneline", "-1", "HEAD"], { cwd: repoDir }).trim(); } catch {} }
+    const filesBlock = changed ? "```\n" + changed.slice(0, 1500) + "\n```" : "_(diff summary unavailable)_";
+    await postStickyComment(prNumber, "dark-factory:coding",
+      `### ✅ 🤖 Coding complete (engine: ${ENGINE})\n\nImplemented the change for issue #${ISSUE} on \`${BRANCH}\` in a hardware-isolated Kata micro-VM.\n\n**Files changed:**\n${filesBlock}`);
+    await postStickyComment(prNumber, "dark-factory:local-test",
+      `### ${test.green ? "✅" : "❌"} 🧪 Local testing (in-VM, before PR)\n\n**${test.green ? "Build + unit tests passed" : "Tests NOT green"}** — discovered from the repo's own marker files (no central config).\n\n${test.summary ? "```\n" + String(test.summary).slice(0, 800) + "\n```" : ""}`);
 
     // Post the AWS DevOps Agent verdict as its own commit status, and — when the
     // verdict clears — apply the handoff label so the hub's Security Agent step
