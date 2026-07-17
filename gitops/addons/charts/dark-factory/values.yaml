@@ -173,7 +173,10 @@ devopsAgent:
   # CONFIRMED (internal DevSecOps walkthrough): the native GitHub check is
   # "aws-devops-agent/release-readiness-review". Keep the broader alternation as a
   # safety net in case the context string varies by preview version.
-  checkContext: "(?i)(aws-devops-agent/release-readiness-review|devops[- ]?agent|release[- ]?readiness)"
+  # NOTE: JS RegExp — do NOT use a (?i) inline flag (Python/Go syntax; throws
+  # "Invalid group" in node). Case-insensitivity is applied via the `i` flag in
+  # the gate script's `new RegExp(CHECK_CONTEXT, "i")`.
+  checkContext: "(aws-devops-agent/release-readiness-review|devops[- ]?agent|release[- ]?readiness)"
   # EXACT check-run name (Checks API) the DevOps Agent posts — used by the sticky
   # status (status.js) + the merge gate (merge.js) to read/require the real verdict.
   # This is the precise name (not a regex); tune if the preview reports differently.
