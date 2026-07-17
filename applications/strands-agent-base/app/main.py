@@ -42,6 +42,16 @@ elif os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
     except ImportError:
         pass
 
+# ── HTTP client instrumentation (W3C traceparent propagation) ────────────
+# Instruments httpx so outbound calls to Bifrost carry the traceparent header.
+# Bifrost reads traceparent and creates child spans under the same trace ID,
+# producing a unified trace tree: Agent → Bifrost LLM call.
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    HTTPXClientInstrumentor().instrument()
+except ImportError:
+    pass
+
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper()),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
