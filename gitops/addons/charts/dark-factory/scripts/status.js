@@ -52,7 +52,13 @@ async function main() {
   } catch (e) { /* non-fatal — statuses still render */ }
   const row = (ctx, label) => {
     const s = by[ctx.includes("/") ? ctx : `dark-factory/${ctx}`];
-    return s ? `- ${icon(s.state)} **${label}:** ${s.desc || s.state}` : `- ⬜ **${label}:** _not run_`;
+    if (!s) return `- ⬜ **${label}:** _not run_`;
+    // A step can report success but be "not applicable" to this change (e.g. the
+    // holdout gate when no hidden scenario matches a Terraform-only PR). Render
+    // that as a neutral ⬜ n/a, not a green ✅ that would imply it actually ran.
+    const na = /not applicable|n\/a/i.test(s.desc || "");
+    const mark = na ? "⬜" : icon(s.state);
+    return `- ${mark} **${label}:** ${s.desc || s.state}`;
   };
   // DevOps row: prefer the real DevOps Agent check-run if configured, else the
   // dark-factory/devops status (label-mode / coder-plugin path).

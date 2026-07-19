@@ -361,7 +361,19 @@ spec:
 
           RATIO="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(Math.round(r.ratio*100))' 2>/dev/null || echo 0)"
           PASSED="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(r.passed+"/"+r.total)' 2>/dev/null || echo '?/?')"
-          if [ "${GATE}" -eq 0 ]; then STATE=success; DESC="holdout ${PASSED} (${RATIO}%) — gate passed"; else STATE=failure; DESC="holdout ${PASSED} (${RATIO}%) — below threshold"; fi
+          TOTAL="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(r.total)' 2>/dev/null || echo 0)"
+          SKIPPED="$(node -e 'const r=require("/tmp/holdout-result.json");console.log(r.skipped||0)' 2>/dev/null || echo 0)"
+          # Distinguish the three outcomes so the PR reads honestly:
+          #   total=0  → no hidden scenario matched this change (e.g. a Terraform PR
+          #              vs JS-only scenarios) → NOT APPLICABLE, green as n/a.
+          #   gate ok  → passed. gate fail → below threshold.
+          if [ "${TOTAL}" = "0" ]; then
+            STATE=success; DESC="not applicable — no hidden scenarios match this change (${SKIPPED} skipped)"
+          elif [ "${GATE}" -eq 0 ]; then
+            STATE=success; DESC="holdout ${PASSED} (${RATIO}%) — gate passed"
+          else
+            STATE=failure; DESC="holdout ${PASSED} (${RATIO}%) — below threshold"
+          fi
 
           # Post the holdout verdict as a commit status on the PR head SHA. The
           # coder image has no curl, so use node's https (always present). Retry
