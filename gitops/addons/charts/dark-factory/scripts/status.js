@@ -106,10 +106,12 @@ async function main() {
     MARKER,
     "### 🏭 Dark Factory — verification",
     row("implementation", "Build + unit tests"),
-    // Holdout only appears when it actually ran (posted a status). The scenarios are
-    // repo/language-specific (appliesWhen), so a Terraform-only PR has none — omit
-    // the row entirely rather than show a confusing "not run".
-    ...(by["dark-factory/holdout"] ? [row("holdout", "Holdout gate")] : []),
+    // Holdout appears ONLY when it actually evaluated something. The scenarios are
+    // repo/language-specific (appliesWhen), so a Terraform-only PR has none — in
+    // that case the step reports "not applicable"; omit the row entirely (like
+    // deploy-test) rather than clutter the board with a not-applicable/​not-run line.
+    ...((by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || ""))
+        ? [row("holdout", "Holdout gate")] : []),
     securityRow,
     devopsRow,
     // deploy-test only appears when the PR was deployable; omit the row otherwise.
