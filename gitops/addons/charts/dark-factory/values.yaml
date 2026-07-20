@@ -152,6 +152,27 @@ securityAgent:
   # Seconds to wait for a review job (validated: ~2.5 min on a small diff).
   pollTimeoutSeconds: 900
 
+  # ── AWS Security Agent GitHub App (inline bot findings — ADDITIVE) ──────────
+  # The headless S3-diff path above stays running. This ADDS the aws-security-agent
+  # GitHub App (AWSHobbesSecureCode) which — once installed on the repo (one-time
+  # console OAuth, see docs/dark-factory/AGENT-INSTALL.md) — auto-reviews every PR
+  # and posts INLINE findings as `aws-security-agent [Bot]`, exactly like the
+  # DevOps Agent App. Both run (redundant by design): inline bot review + our
+  # relayed dark-factory:security-agent comment. merge.js/status.js read the App's
+  # real check so a Security BLOCK gates the merge.
+  app:
+    enabled: true
+    # JS RegExp — do NOT use a (?i) inline flag (throws "Invalid group"; the code
+    # applies the `i` flag via new RegExp(x,"i")). Seeded broad; tune to the exact
+    # context after the first real PR (as we pinned the DevOps one).
+    checkContext: "(aws-security-agent|hobbes|secure[- ]?code|security[- ]?review)"
+    # Exact check-run / status context name the App posts — used by merge.js +
+    # status.js. Tune post-install once the real name is observed on a PR.
+    checkRunName: "aws-security-agent/code-review"
+    # Parity with devopsAgent.waitSeconds (the headless step already gates today;
+    # this is here for a future optional security-gate + config symmetry).
+    waitSeconds: 900
+
 # ── AWS DevOps Agent (Release Readiness) ─────────────────────────────────────
 # NOTE: unlike the Security Agent, the DevOps Agent has NO headless code-review
 # API. Its release-readiness review is reachable via (a) the GitHub App that

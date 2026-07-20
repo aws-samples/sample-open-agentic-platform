@@ -12,10 +12,20 @@
 //                  commit status OR a check-run of that name.
 //   REQUIRE_DEVOPS "true"|"false" — whether DevOps clearance is required to merge
 //                  (false in security-only mode). Default true.
+//   SECURITY_CHECK (optional) the real AWS Security Agent GitHub App check-run
+//                  name/context (e.g. aws-security-agent/code-review). When set +
+//                  REQUIRE_SECURITY, a Security Agent BLOCK/failure blocks the merge.
+//                  Satisfied by EITHER a commit status OR a check-run of that name.
+//   REQUIRE_SECURITY "true"|"false" — require the App's check green to merge.
+//                  Default false so nothing blocks until the App is actually
+//                  installed and posting a check (avoids waiting on a check that
+//                  never arrives). Our advisory dark-factory/security is always required.
 const https = require("https");
 const { GH_TOKEN, REPO, PR } = process.env;
 const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
 const REQUIRE_DEVOPS = (process.env.REQUIRE_DEVOPS || "true").toLowerCase() !== "false";
+const SECURITY_CHECK = process.env.SECURITY_CHECK || "";
+const REQUIRE_SECURITY = (process.env.REQUIRE_SECURITY || "false").toLowerCase() === "true";
 const H = { "User-Agent": "dark-factory-merge", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 
 function api(method, path, body) {
@@ -40,6 +50,10 @@ function api(method, path, body) {
 // still require them to be *success*, not failure/error.
 const REQUIRED = ["dark-factory/implementation", "dark-factory/holdout", "dark-factory/security"];
 if (REQUIRE_DEVOPS) REQUIRED.push(DEVOPS_CHECK || "dark-factory/devops");
+// The real AWS Security Agent GitHub App posts its own check — require it green
+// too (when enabled) so a Security BLOCK can't be merged past. This is in ADDITION
+// to our advisory dark-factory/security (headless path); both run.
+if (REQUIRE_SECURITY && SECURITY_CHECK) REQUIRED.push(SECURITY_CHECK);
 
 // Map GitHub check-run conclusion → status-style state.
 const concToState = (c) => ({ success: "success", neutral: "success", skipped: "success",

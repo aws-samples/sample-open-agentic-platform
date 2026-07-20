@@ -16,8 +16,32 @@ OAuth). This page is the one-time human runbook.
 |---|---|---|
 | IAM (OIDC provider, service role, IRSA role, S3 diff bucket) | Terraform | `iam/securityagent.tf` (`terraform apply`) |
 | Agent Space + Application | idempotent ArgoCD **PreSync Job** | `templates/06-securityagent-bootstrap.yaml` → writes Secret `argo/dark-factory-securityagent` |
-| Security Agent code review | **fully headless** — S3 diff API via IRSA, **no GitHub App needed** | `scripts/security-agent.sh` |
+| Security Agent code review (headless) | **fully headless** — S3 diff API via IRSA, **no GitHub App needed** | `scripts/security-agent.sh` |
 | DevOps→Security ordering, gating, sticky status | Argo `df-run` DAG | `templates/20-workflowtemplate-df-run.yaml` |
+
+> **Note — the Security Agent runs TWO ways (redundant by design):** the **headless S3-diff path**
+> above (always on, no App) **plus** the optional **`aws-security-agent` GitHub App** (below) which
+> posts inline findings as `aws-security-agent [Bot]`. Both review every PR; you'll see the bot's
+> inline comments *and* our relayed `dark-factory:security-agent` comment. The App is the richer
+> signal when installed; the headless path guarantees coverage even without it.
+
+---
+
+## Install the AWS Security Agent GitHub App (optional — inline bot findings)
+
+Gives the Security Agent the same first-class inline-bot experience as the DevOps Agent.
+
+1. Open `https://github.com/apps/aws-security-agent/installations/new`
+   (or mint the URL: `aws securityagent initiate-provider-registration --provider GITHUB` →
+   `redirectTo` + `csrfState`).
+2. Install on **Only select repositories → `elamaran11/dark-factory-sandbox`**, permission
+   **Read & Write** (write lets it post inline comments + optional remediation PRs).
+3. If the Security Agent console prompts, connect the repo to the `dark-factory` Security Agent
+   Agent Space (same repo↔space connect the DevOps Agent required).
+4. On the next PR the App auto-reviews and posts inline as `aws-security-agent [Bot]`.
+   **Capture the exact check-run/status context name** it posts and set it in `values.yaml`
+   `securityAgent.app.checkRunName` (+ tune `checkContext`) — seeded as `aws-security-agent/code-review`.
+   With `REQUIRE_SECURITY`, a Security **BLOCK** then also gates the merge (`merge.js`).
 
 ---
 

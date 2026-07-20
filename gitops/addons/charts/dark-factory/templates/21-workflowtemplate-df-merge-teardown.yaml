@@ -73,6 +73,15 @@ spec:
           - name: REQUIRE_DEVOPS
             value: "false"
 {{- end }}
+{{- if and .Values.securityAgent.app .Values.securityAgent.app.enabled }}
+          # Require the REAL AWS Security Agent GitHub App check green before merge
+          # so a Security BLOCK can't be merged past (in addition to the advisory
+          # dark-factory/security from the headless path — both run).
+          - name: SECURITY_CHECK
+            value: {{ .Values.securityAgent.app.checkRunName | quote }}
+          - name: REQUIRE_SECURITY
+            value: "true"
+{{- end }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/merge.js

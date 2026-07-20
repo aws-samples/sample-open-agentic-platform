@@ -749,6 +749,13 @@ spec:
           - name: DEVOPS_CHECK
             value: {{ .Values.devopsAgent.checkRunName | quote }}
 {{- end }}
+{{- if and .Values.securityAgent.app .Values.securityAgent.app.enabled }}
+          # Real AWS Security Agent GitHub App posts its own check/inline review;
+          # status.js renders the Security row from it when present (else the
+          # headless dark-factory/security status).
+          - name: SECURITY_CHECK
+            value: {{ .Values.securityAgent.app.checkRunName | quote }}
+{{- end }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/status.js

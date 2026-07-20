@@ -9,9 +9,13 @@
 //   DEVOPS_CHECK (optional) real AWS DevOps Agent check-run name (Checks API), e.g.
 //                aws-devops-agent/release-readiness-review. The DevOps row reads it
 //                from check-runs (not commit statuses) so the real verdict shows.
+//   SECURITY_CHECK (optional) real AWS Security Agent GitHub App check-run name.
+//                When present on the PR, the Security row shows the App's inline-bot
+//                verdict; otherwise it falls back to our headless dark-factory/security.
 const https = require("https");
 const { GH_TOKEN, REPO, BRANCH } = process.env;
 const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
+const SECURITY_CHECK = process.env.SECURITY_CHECK || "";
 const H = { "User-Agent": "dark-factory-status", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 
 function api(method, path, body) {
@@ -65,12 +69,18 @@ async function main() {
   const devopsRow = DEVOPS_CHECK && by[DEVOPS_CHECK]
     ? `- ${icon(by[DEVOPS_CHECK].state)} **DevOps review (AWS DevOps Agent):** ${by[DEVOPS_CHECK].desc || by[DEVOPS_CHECK].state}`
     : row("devops", "DevOps review (AWS DevOps Agent)");
+  // Security row: prefer the real Security Agent GitHub App check-run (inline-bot
+  // review) when present; else fall back to our headless dark-factory/security
+  // relayed status. Both paths run — the App is the richer signal when installed.
+  const securityRow = SECURITY_CHECK && by[SECURITY_CHECK]
+    ? `- ${icon(by[SECURITY_CHECK].state)} **Security review (AWS Security Agent):** ${by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state}`
+    : row("security", "Security review (AWS Security Agent)");
   const block = [
     MARKER,
     "### 🏭 Dark Factory — verification",
     row("implementation", "Build + unit tests"),
     row("holdout", "Holdout gate"),
-    row("security", "Security review (AWS Security Agent)"),
+    securityRow,
     devopsRow,
     // deploy-test only appears when the PR was deployable; omit the row otherwise
     // so non-deployable PRs don't show a confusing "not run" line.
