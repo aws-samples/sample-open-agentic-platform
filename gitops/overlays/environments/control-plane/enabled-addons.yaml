@@ -44,7 +44,8 @@ enabledAddons:
   kro_manifests: false
   kro_manifests_hub: false
   multi_acct: false
-  platform_manifests: false
+  platform_manifests_bootstrap: true   # wave -1: creates the system-<prefix> Karpenter NodePool that system pods pin to
+  platform_manifests: true
   backstage: false
   kubevela: true
   devlake: false
