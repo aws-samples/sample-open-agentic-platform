@@ -162,15 +162,16 @@ securityAgent:
   # real check so a Security BLOCK gates the merge.
   app:
     enabled: true
-    # JS RegExp — do NOT use a (?i) inline flag (throws "Invalid group"; the code
-    # applies the `i` flag via new RegExp(x,"i")). Seeded broad; tune to the exact
-    # context after the first real PR (as we pinned the DevOps one).
-    checkContext: "(aws-security-agent|hobbes|secure[- ]?code|security[- ]?review)"
-    # Exact check-run / status context name the App posts — used by merge.js +
-    # status.js. Tune post-install once the real name is observed on a PR.
-    checkRunName: "aws-security-agent/code-review"
-    # Parity with devopsAgent.waitSeconds (the headless step already gates today;
-    # this is here for a future optional security-gate + config symmetry).
+    # OBSERVED (probe PR #48, 2026-07-19): in this preview the aws-security-agent[bot]
+    # posts INLINE PR COMMENTS ("AWS Security Agent is reviewing…" → "No issues
+    # identified" / findings) but does NOT post a commit-status or check-run. So
+    # there is nothing for checkRunName/checkContext to match — leave them empty and
+    # do NOT require them in the merge gate. The merge gate keeps using the reliable
+    # headless dark-factory/security signal; the App's inline comments are the
+    # visible bot review. If a future preview adds a real check, set these + flip
+    # REQUIRE_SECURITY (21-workflowtemplate) to "true".
+    checkContext: ""
+    checkRunName: ""
     waitSeconds: 900
 
 # ── AWS DevOps Agent (Release Readiness) ─────────────────────────────────────
