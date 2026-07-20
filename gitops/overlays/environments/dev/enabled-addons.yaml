@@ -5,6 +5,7 @@ enabledAddons:
   ingress_class_alb: true
   aws_load_balancer_controller: true
   default_storage_class: true
+  cert_manager: true
   external_secrets: true
   external_dns: true
   # Security
@@ -15,6 +16,7 @@ enabledAddons:
   prometheus_node_exporter: true
   aws_for_fluentbit: true
   # Platform
+  platform_manifests_bootstrap: true   # wave -1: creates the system-<prefix> Karpenter NodePool that system pods pin to
   crossplane: true
   crossplane_aws: true
   kubevela: true
