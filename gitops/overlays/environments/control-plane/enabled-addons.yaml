@@ -45,7 +45,7 @@ enabledAddons:
   kro_manifests_hub: false
   multi_acct: false
   platform_manifests_bootstrap: true   # wave -1: creates the system-<prefix> Karpenter NodePool that system pods pin to
-  platform_manifests: true
+  platform_manifests: false            # wave 6: Ray-only IAMRoleSelector — inert here (Ray disabled)
   backstage: false
   kubevela: true
   devlake: false
