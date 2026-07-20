@@ -41,19 +41,39 @@ async function main() {
   const prs = await api("GET", `/repos/${REPO}/pulls?head=${owner}:${BRANCH}&state=open`);
   if (!prs.length) { console.log("[df-run] no open PR — nothing to update"); return; }
   const pr = prs[0];
-  const st = await api("GET", `/repos/${REPO}/commits/${pr.head.sha}/status`);
-  const by = {};
-  for (const s of st.statuses || []) if (!by[s.context]) by[s.context] = { state: s.state, desc: s.description || "" };
-  // Also fold in check-runs (the real DevOps Agent posts a check-run, not a status).
   const concToState = (c) => ({ success: "success", neutral: "success", skipped: "success",
     failure: "failure", timed_out: "failure", cancelled: "failure", action_required: "failure" }[c] || "pending");
+  // MULTI-SHA ROBUSTNESS: the hub verify steps (holdout/security/deploy-test) post
+  // their commit statuses on the SHA that was HEAD when they ran. If the coder then
+  // pushes another commit (an impl re-post, or an agent re-review moves head),
+  // reading only pr.head.sha shows those steps as "not run" even though they passed
+  // on an earlier commit. So collect statuses + check-runs across ALL PR commits,
+  // oldest -> newest, letting a later commit's verdict override an earlier one.
+  const by = {};
+  let shas = [pr.head.sha];
   try {
-    const cr = await api("GET", `/repos/${REPO}/commits/${pr.head.sha}/check-runs`);
-    for (const c of cr.check_runs || []) {
-      const state = c.status === "completed" ? concToState(c.conclusion) : "pending";
-      if (!by[c.name]) by[c.name] = { state, desc: (c.output && c.output.title) || c.conclusion || c.status };
-    }
-  } catch (e) { /* non-fatal — statuses still render */ }
+    const commits = await api("GET", `/repos/${REPO}/pulls/${pr.number}/commits?per_page=100`);
+    if (Array.isArray(commits) && commits.length) shas = commits.map((c) => c.sha); // oldest -> newest
+  } catch (e) { /* fall back to head only */ }
+  for (const sha of shas) {
+    try {
+      const st = await api("GET", `/repos/${REPO}/commits/${sha}/status`);
+      // GitHub returns statuses newest-first; take the first (latest) per context on this commit.
+      const seen = {};
+      for (const s of st.statuses || []) {
+        if (seen[s.context]) continue;
+        seen[s.context] = 1;
+        by[s.context] = { state: s.state, desc: s.description || "" };
+      }
+    } catch (e) { /* skip this commit */ }
+    try {
+      const cr = await api("GET", `/repos/${REPO}/commits/${sha}/check-runs`);
+      for (const c of cr.check_runs || []) {
+        const state = c.status === "completed" ? concToState(c.conclusion) : "pending";
+        by[c.name] = { state, desc: (c.output && c.output.title) || c.conclusion || c.status };
+      }
+    } catch (e) { /* non-fatal */ }
+  }
   const row = (ctx, label) => {
     const s = by[ctx.includes("/") ? ctx : `dark-factory/${ctx}`];
     if (!s) return `- ⬜ **${label}:** _not run_`;
@@ -75,18 +95,27 @@ async function main() {
   const securityRow = SECURITY_CHECK && by[SECURITY_CHECK]
     ? `- ${icon(by[SECURITY_CHECK].state)} **Security review (AWS Security Agent):** ${by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state}`
     : row("security", "Security review (AWS Security Agent)");
+  // Overall state = worst across the dark-factory/* + agent verdicts we collected.
+  const overall = (() => {
+    const vals = Object.entries(by).filter(([k]) => k.startsWith("dark-factory/") || k === DEVOPS_CHECK || k === SECURITY_CHECK).map(([, v]) => v.state);
+    if (vals.includes("failure") || vals.includes("error")) return "failure";
+    if (vals.includes("pending")) return "pending";
+    return vals.length ? "success" : "pending";
+  })();
   const block = [
     MARKER,
     "### 🏭 Dark Factory — verification",
     row("implementation", "Build + unit tests"),
-    row("holdout", "Holdout gate"),
+    // Holdout only appears when it actually ran (posted a status). The scenarios are
+    // repo/language-specific (appliesWhen), so a Terraform-only PR has none — omit
+    // the row entirely rather than show a confusing "not run".
+    ...(by["dark-factory/holdout"] ? [row("holdout", "Holdout gate")] : []),
     securityRow,
     devopsRow,
-    // deploy-test only appears when the PR was deployable; omit the row otherwise
-    // so non-deployable PRs don't show a confusing "not run" line.
+    // deploy-test only appears when the PR was deployable; omit the row otherwise.
     ...(by["dark-factory/deploy-test"] ? [row("deploy-test", "Deploy test")] : []),
     "",
-    `_Overall: **${st.state}**. Autonomously implemented in a hardware-isolated Kata micro-VM; verification ran as independent hub-side steps (see the checks above). Awaiting human review._`,
+    `_Overall: **${overall}**. Autonomously implemented in a hardware-isolated Kata micro-VM; verification ran as independent hub-side steps (see the checks above). Awaiting human review._`,
   ].join("\n");
 
   let body = pr.body || "";
@@ -98,7 +127,7 @@ async function main() {
     body = (body ? body + "\n\n" : "") + block;
   }
   await api("PATCH", `/repos/${REPO}/pulls/${pr.number}`, { body });
-  console.log(`[df-run] PR #${pr.number} body updated — overall=${st.state}`);
+  console.log(`[df-run] PR #${pr.number} body updated — overall=${overall}`);
 }
 
 main().catch((e) => { console.error(`[df-run] status update failed (non-fatal): ${e.message}`); process.exit(0); });
