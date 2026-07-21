@@ -128,12 +128,14 @@ tasks:
           printf '✓ No spokes configured (hub-only).\n'
           exit 0
         fi
+        # PlatformCluster CRD lives on the kind-crossplane bootstrap cluster
+        CTX="kind-{{.HUB_CLUSTER_NAME}}-bootstrap"
         for SPOKE in $(yq -r '.spokes | keys | .[]' {{.CONFIG_FILE}}); do
           REGION=$(yq -r ".spokes.${SPOKE}.region // \"{{.AWS_REGION}}\"" {{.CONFIG_FILE}})
           K8S_VER=$(yq -r ".spokes.${SPOKE}.kubernetesVersion // \"1.35\"" {{.CONFIG_FILE}})
           VPC_CIDR=$(yq -r ".spokes.${SPOKE}.vpcCidr // \"10.1.0.0/16\"" {{.CONFIG_FILE}})
           AUTO_MODE=$(yq -r ".spokes.${SPOKE}.autoMode // true" {{.CONFIG_FILE}})
-          kubectl apply -f - <<EOF
+          kubectl --context "$CTX" apply -f - <<EOF
         apiVersion: platform.gitops.io/v1alpha1
         kind: PlatformCluster
         metadata:
