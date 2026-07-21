@@ -7,18 +7,22 @@ host Kata). Uses the nested-virt LaunchTemplate (16-...). Scale-to-zero when no
 sandbox is claimed; the pool-manager scales up on a claim. Only kata pods tolerate
 the taint, so general workloads never land here.
 
-ADOPTION: crossplane.io/external-name = <cluster>/<nodegroup> imports the existing
-node group in place — no recreate, no node churn.
+ADOPTION: crossplane.io/external-name = <nodegroupName> imports the existing node
+group in place — no recreate, no node churn. The provider prepends clusterName
+itself (external ID becomes "<cluster>:<nodegroup>"), so the external-name is the
+BARE node-group name — NOT "<cluster>/<nodegroup>" (that yields "<cluster>:<cluster>/
+<nodegroup>" and a 400 InvalidParameterException). Verified live 2026-07-21.
 */ -}}
 apiVersion: eks.aws.upbound.io/v1beta2
-kind: Nodegroup
+kind: NodeGroup
 metadata:
   name: {{ .Values.nodepool.nodegroupName | default "kata-sandbox" }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
   annotations:
-    # Adopt the existing node group in place: "<clusterName>/<nodegroupName>".
-    crossplane.io/external-name: {{ printf "%s/%s" .Values.nodepool.clusterName (.Values.nodepool.nodegroupName | default "kata-sandbox") | quote }}
+    # Adopt the existing node group in place — BARE nodegroup name (provider adds
+    # the "<clusterName>:" prefix). See the note above.
+    crossplane.io/external-name: {{ .Values.nodepool.nodegroupName | default "kata-sandbox" | quote }}
 spec:
   forProvider:
     region: {{ .Values.nodepool.region | quote }}
