@@ -101,15 +101,15 @@ holdout:
 #
 #   1. AWS DevOps Agent — Release Readiness code review (cross-repo deps,
 #      standards, access-control, build+test in an AWS-managed env → BLOCK /
-#      Proceed-with-Caution / Safe-to-Release). Invoked via the Claude Code
-#      DevOps Agent plugin inside the coder step (NO headless code-review API
-#      exists). Requires a one-time console Agent-Space + repo connect (the only
-#      non-GitOps step; flagged in docs). Operational Readiness (incident/SRE) is
-#      OUT OF SCOPE — this is a pre-merge pipeline.
+#      Proceed-with-Caution / Safe-to-Release). Connected via its GitHub App; it
+#      auto-reviews each PR and posts the aws-devops-agent/release-readiness-review
+#      check. The df-run `devops-gate` step waits for that check. (Operational
+#      Readiness / incident-SRE is a separate capability, out of scope here.)
 #   2. AWS Security Agent — code security review (OWASP Top 10, secrets, IAM
-#      misuse, dependency risk). FULLY headless: clone → stage {src,diff} in S3 →
-#      securityagent create-code-review → start-code-review-job → list-findings,
-#      via the workflow's IRSA role. No GitHub App, no OAuth. VERIFIED live.
+#      misuse, dependency risk). TWO paths, both run: (a) GitHub App → inline
+#      aws-security-agent[bot] findings; (b) headless API — clone → stage
+#      {src,diff} in S3 → create-code-review → start-job → list-findings via the
+#      workflow's IRSA role. Setup: docs/dark-factory/AGENT-INSTALL.md.
 review:
   enabled: true
   # The label the DevOps clear-gate applies; the Security Agent step only runs
