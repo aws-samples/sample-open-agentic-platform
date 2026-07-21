@@ -7,13 +7,45 @@ Mode's managed Bottlerocket nodes can't host Kata, so we add a **self-managed
 nested-virt Managed Node Group** alongside Auto Mode. Coexistence + `/dev/kvm`
 were validated by a live spike (see [`docs/dark-factory` §12a](../../../../../docs/dark-factory/README.md)).
 
-## Files here
+## ✅ Now GitOps-managed (Crossplane) — this is the default path
+
+The node group is a **first-class GitOps resource** — ArgoCD owns the node-group
+INFRA end-to-end, no out-of-band `eksctl`/`terraform apply`. It's rendered by the
+chart's `templates/` as Crossplane managed resources:
+
+| Template | Resource |
+|---|---|
+| `../templates/16-kata-launch-template.yaml` | Crossplane `LaunchTemplate` — `cpuOptions.nestedVirtualization=enabled` + nodeadm userData |
+| `../templates/17-kata-nodegroup.yaml` | Crossplane `Nodegroup` — scale-to-zero, kata taint/labels, LT ref |
+| `../templates/18-kata-eks-addons.yaml` | Crossplane `Addon` — vpc-cni + kube-proxy (the two Auto-Mode prerequisites) |
+
+**Enable it** in `values.yaml`:
+
+```yaml
+nodepool:
+  enabled: true          # provision/adopt the kata MNG
+  manageAddons: true     # also adopt vpc-cni + kube-proxy (skip if base platform owns them)
+  clusterName: hub       # + clusterEndpoint / clusterCA / serviceCidr, subnetIds,
+                         #   nodeRoleArn, amiId, instanceType, launchTemplateId, region
+```
+
+Requires the Crossplane AWS providers `provider-aws-eks` + `provider-aws-ec2`
+(installed on the hub) and a `ProviderConfig` (default: `default`).
+
+**Adoption:** on a cluster that already has a kata node group / LT / addons (e.g.
+from the earlier manual path), the templates carry `crossplane.io/external-name`
+annotations that **import the existing resources in place** — no recreate, no node
+churn. Set `launchTemplateId` + `nodegroupName` to the existing ids.
+
+## Reference files (superseded by the Crossplane templates above)
+
+Kept for reference / non-GitOps or air-gapped setups; **not** applied by ArgoCD:
 
 | File | Purpose |
 |---|---|
 | `kata-mng-eksctl.yaml` | eksctl `ClusterConfig` to add the kata MNG (declarative, simplest) |
-| `kata-mng.tf` | Terraform launch template (`cpu_options.nested_virtualization=enabled`) + MNG — use when you need the nested-virt flag eksctl can't set. `terraform validate` passes. |
-| `kata-mng-launch-template-userdata.mime` | The AL2023 **nodeadm MIME** userData (modprobe kvm_intel + join). Reference for either path. |
+| `kata-mng.tf` | Terraform launch template (`cpu_options.nested_virtualization=enabled`) + MNG. `terraform validate` passes. |
+| `kata-mng-launch-template-userdata.mime` | The AL2023 **nodeadm MIME** userData (modprobe kvm_intel + join). |
 
 ## ✅ PROVEN END-TO-END on EKS Auto Mode (spoke-dev, 2026-07-10)
 
