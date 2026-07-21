@@ -12,7 +12,7 @@ enabledAddons:
   ingress_class_alb: true
   aws_load_balancer_controller: true
   default_storage_class: true
-  cert_manager: false
+  cert_manager: true
   external_secrets: true
   external_dns: true
   aws_efs_csi_driver: false
