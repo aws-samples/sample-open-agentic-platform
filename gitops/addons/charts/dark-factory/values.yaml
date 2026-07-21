@@ -162,14 +162,13 @@ securityAgent:
   # real check so a Security BLOCK gates the merge.
   app:
     enabled: true
-    # OBSERVED (probe PR #48, 2026-07-19): in this preview the aws-security-agent[bot]
-    # posts INLINE PR COMMENTS ("AWS Security Agent is reviewing…" → "No issues
-    # identified" / findings) but does NOT post a commit-status or check-run. So
-    # there is nothing for checkRunName/checkContext to match — leave them empty and
-    # do NOT require them in the merge gate. The merge gate keeps using the reliable
-    # headless dark-factory/security signal; the App's inline comments are the
-    # visible bot review. If a future preview adds a real check, set these + flip
-    # REQUIRE_SECURITY (21-workflowtemplate) to "true".
+    # The aws-security-agent[bot] posts INLINE PR COMMENTS ("AWS Security Agent is
+    # reviewing…" → findings / "No issues identified") rather than a commit-status
+    # or check-run. So there's nothing for checkRunName/checkContext to match — leave
+    # them empty and don't require them in the merge gate. The merge gate uses the
+    # headless dark-factory/security signal; the App's inline comments are the visible
+    # bot review. If your setup posts a Security check/status, set these + flip
+    # REQUIRE_SECURITY (21-workflowtemplate) to "true" to gate the merge on it.
     checkContext: ""
     checkRunName: ""
     waitSeconds: 900
@@ -194,14 +193,14 @@ devopsAgent:
   # Regex matched against check-run names / status contexts the DevOps Agent posts.
   # CONFIRMED (internal DevSecOps walkthrough): the native GitHub check is
   # "aws-devops-agent/release-readiness-review". Keep the broader alternation as a
-  # safety net in case the context string varies by preview version.
+  # safety net in case the check context varies by environment.
   # NOTE: JS RegExp — do NOT use a (?i) inline flag (Python/Go syntax; throws
   # "Invalid group" in node). Case-insensitivity is applied via the `i` flag in
   # the gate script's `new RegExp(CHECK_CONTEXT, "i")`.
   checkContext: "(aws-devops-agent/release-readiness-review|devops[- ]?agent|release[- ]?readiness)"
   # EXACT check-run name (Checks API) the DevOps Agent posts — used by the sticky
   # status (status.js) + the merge gate (merge.js) to read/require the real verdict.
-  # This is the precise name (not a regex); tune if the preview reports differently.
+  # This is the precise name (not a regex); tune if your environment reports a different name.
   checkRunName: "aws-devops-agent/release-readiness-review"
   # How long devops-gate waits for the DevOps Agent to post its verdict. The
   # managed review typically completes in ~8-10 min (docs), so allow headroom.

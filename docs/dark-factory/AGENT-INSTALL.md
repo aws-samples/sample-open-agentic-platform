@@ -1,156 +1,145 @@
-# Dark Factory — AWS Frontier Agent install runbook
+# Connecting the AWS DevOps Agent & AWS Security Agent to the Dark Factory
 
-The Dark Factory reviews are the **real AWS Security Agent + AWS DevOps Agent**. Almost everything
-is automated (GitOps + Terraform + a PreSync bootstrap Job). **One thing cannot be automated: the
-GitHub App authorization**, because it is an OAuth consent — a human must grant an AWS app access to
-the GitHub org in a browser. No API or token can fabricate that consent (that is the whole point of
-OAuth). This page is the one-time human runbook.
+The Dark Factory pipeline reviews every PR with two managed AWS agents:
 
-> **TL;DR for the installer:** click one link, install the app on the repo, done. ~5 minutes.
+- **AWS DevOps Agent** — *Release Readiness* code review: cross-repo dependency risk, standards
+  compliance, access-control correctness, and (optionally) build+test in an AWS-managed environment.
+  Verdict: **BLOCK / Proceed with Caution / Safe to Release**.
+- **AWS Security Agent** — code security review: OWASP Top 10, hardcoded secrets, IAM misuse,
+  dependency risk, with inline findings + recommended fixes.
 
----
+Both integrate with GitHub the same way: **install a GitHub App, connect the repo to an Agent
+Space, enable review.** After that, every pull request is reviewed automatically and the agents post
+their verdicts back onto the PR. This page is the end-to-end setup — follow it top to bottom.
 
-## What's already automated (you do NOT do these)
-
-| Piece | How | Where |
-|---|---|---|
-| IAM (OIDC provider, service role, IRSA role, S3 diff bucket) | Terraform | `iam/securityagent.tf` (`terraform apply`) |
-| Agent Space + Application | idempotent ArgoCD **PreSync Job** | `templates/06-securityagent-bootstrap.yaml` → writes Secret `argo/dark-factory-securityagent` |
-| Security Agent code review (headless) | **fully headless** — S3 diff API via IRSA, **no GitHub App needed** | `scripts/security-agent.sh` |
-| DevOps→Security ordering, gating, sticky status | Argo `df-run` DAG | `templates/20-workflowtemplate-df-run.yaml` |
-
-> **Note — the Security Agent runs TWO ways (redundant by design):** the **headless S3-diff path**
-> above (always on, no App) **plus** the optional **`aws-security-agent` GitHub App** (below) which
-> posts inline findings as `aws-security-agent [Bot]`. Both review every PR; you'll see the bot's
-> inline comments *and* our relayed `dark-factory:security-agent` comment. The App is the richer
-> signal when installed; the headless path guarantees coverage even without it.
+> **Prerequisites:** an AWS account with the DevOps Agent + Security Agent enabled, admin access to
+> that account, and **owner/admin** rights on the GitHub org or user that owns your repo (needed to
+> install a GitHub App). The examples use account `940019131157`, region `us-west-2`, repo
+> `elamaran11/dark-factory-sandbox` — substitute your own.
 
 ---
 
-## Install the AWS Security Agent GitHub App (optional — inline bot findings)
+## Part A — AWS DevOps Agent (Release Readiness code review)
 
-Gives the Security Agent the same first-class inline-bot experience as the DevOps Agent.
+### A1. Create / open an Agent Space
+1. AWS Console → **AWS DevOps Agent**.
+2. Create an Agent Space (or open an existing one), e.g. **`dark-factory`**.
 
-1. Open `https://github.com/apps/aws-security-agent/installations/new`
-   (or mint the URL: `aws securityagent initiate-provider-registration --provider GITHUB` →
-   `redirectTo` + `csrfState`).
-2. Install on **Only select repositories → `elamaran11/dark-factory-sandbox`**, permission
-   **Read & Write** (write lets it post inline comments + optional remediation PRs).
-3. If the Security Agent console prompts, connect the repo to the `dark-factory` Security Agent
-   Agent Space (same repo↔space connect the DevOps Agent required).
-4. On the next PR the App auto-reviews and posts inline as `aws-security-agent [Bot]`.
-   **Capture the exact check-run/status context name** it posts and set it in `values.yaml`
-   `securityAgent.app.checkRunName` (+ tune `checkContext`) — seeded as `aws-security-agent/code-review`.
-   With `REQUIRE_SECURITY`, a Security **BLOCK** then also gates the merge (`merge.js`).
+### A2. Register GitHub (account level)
+1. In the Agent Space → **Capabilities** tab → **Pipeline** section → **Add** → **GitHub**.
+2. Choose **User** or **Organization** (must match where the repo lives), then submit.
+3. GitHub opens its **authorize** screen → authorize AWS DevOps Agent.
+4. On the **Install & Authorize** page, choose **Only select repositories → your repo** (or All),
+   then **Install & Authorize**. You're returned to the console with GitHub registered.
+   > Permission level: **Read & Write** (default) — lets the agent post PR comments, check-runs, and
+   > optional remediation PRs. Read-Only disables those write actions.
+
+### A3. Connect the repo to the Agent Space + enable review
+1. In the Agent Space → **Capabilities** → **Pipeline** → **Add** → **GitHub** → pick the
+   registration → select your repo → **Add**.
+2. In **Code Review and Automated Testing**, per repo:
+   - **Auto trigger change review** = **ON** — reviews every PR automatically.
+   - **Automated verification testing** = ON (optional) — builds/tests the change in an AWS-managed
+     verification environment (deeper than static analysis).
+   - **Runtime role** (optional) — an IAM role the agent assumes for private-registry/artifact
+     access during builds.
+3. **Save.**
+
+### A4. What you'll see on a PR
+On every new/updated PR the DevOps Agent posts a status/check-run
+**`aws-devops-agent/release-readiness-review`** (`pending` → `success`/`failure`) with a link to the
+full report, plus inline comments for any risks it finds (e.g. an unpinned image, a missing variable
+default, an over-broad IAM change). A clean change gets **"change approved"**.
 
 ---
 
-## PREREQUISITE (DevOps Agent only) — get the account allow-listed for Release Manager
+## Part B — AWS Security Agent (code security review)
 
-The DevOps Agent **code-review / Release Manager** capability is **allow-list gated in
-preview**. Until account `940019131157` is on the list, the console shows only the ops
-capabilities (cloud accounts / remote agents / webhooks) — there is **no Pipeline/GitHub
-code-review section**, and there is **no API/CLI** for it either (confirmed: `aws devops-agent`
-has zero review/release verbs; GitHub is excluded from `register-service` as an OAuth-3LO
-service). So this step is unavoidable and must precede everything below.
+The Security Agent can review a PR **two ways** — you can use either or both:
 
-Two ways to get allow-listed (either works):
+### Path B1 (recommended) — GitHub App: inline bot findings
+1. AWS Console → **AWS Security Agent** → your Agent Space (e.g. **`dark-factory`**).
+2. **Integrations → GitHub → Connect** (or open
+   `https://github.com/apps/aws-security-agent/installations/new`). Authorize + install the App on
+   your repo, **Read & Write** (so it can post inline comments + optional fix PRs).
+3. Back in the Security Agent console, **add the GitHub integration to your Agent Space** and
+   **enable code review** on the repo. *(Installing the App on GitHub and connecting it to the Agent
+   Space are two distinct steps — do both.)*
+4. On the next PR the agent posts as **`aws-security-agent[bot]`**: an "AWS Security Agent is
+   reviewing…" notice, then inline findings (or **"No issues identified"**), with recommended fixes.
 
-**Path A — onboarding ticket (owning team `heimdall-release-manager-agent`):**
-- Template: `https://t.corp.amazon.com/create/templates/a87f5c29-bf4e-49c4-92e1-710c328d83c2`
-- Ask: *allow-list account `940019131157` for AWS DevOps Agent Release Manager (source-control
-  code review), and enable automated PR/MR reviews.*
-
-**Path B — self-serve CR (what the team itself does; faster):**
-- The allow-list is literally two account-ID additions to constants arrays in two CDK packages
-  (sample: `CR-278107681`):
-  - `ReleaseManagementServiceCDK` → `lib/common/constants.ts` → `CUSTOMER_ALLOWLISTED_ACCOUNTS`
-  - `ReleaseManagementDataServiceCDK` → `lib/common/constants.ts` → `NON_WEBHOOK_3P_ALLOWLISTED_ACCOUNTS`
-- Add `'940019131157',` to both, raise a CR, the Heimdall team approves/auto-merges.
-- The guide's shortcut: check out both packages and ask your AI assistant *"run allowlist SOP for
-  940019131157"*.
-
-**After allow-listing:** a **"Changes"** (Release Manager) entry appears in the Agent Space web
-app. Then add the inline IAM policy that lights up the UI — Agent Space → **Access** tab → note the
-WebApp admin role → attach:
-```json
-{ "Version": "2012-10-17",
-  "Statement": [{ "Sid": "Statement1", "Effect": "Allow",
-    "Action": ["release-manager:*"], "Resource": ["*"] }] }
+### Path B2 — headless code-review API (no GitHub App)
+Fully API-driven — useful for automation that shouldn't depend on a GitHub App. The Dark Factory's
+`security-agent` step already implements this (`scripts/security-agent.sh`): stage the diff to S3,
+then:
 ```
-(Ignore "unrecognized permission" warnings.) Repo indexing then takes ~1–2 hours.
+aws securityagent create-code-review   --agent-space-id <id> --assets '{"sourceCode":[{"s3Location":"s3://.../src.zip"}]}' --service-role <role>
+aws securityagent start-code-review-job --agent-space-id <id> --code-review-id <cr> --diff-source '{"s3Uri":"s3://.../diff.patch"}'
+aws securityagent list-findings        --agent-space-id <id> --code-review-job-id <job>
+```
+Findings come back with `riskType`, `riskLevel` (INFORMATIONAL→CRITICAL), and `confidence`. The IAM
+this needs (a service role trusting `securityagent.amazonaws.com` + an IRSA role for the workflow +
+an S3 bucket) is committed as Terraform in `gitops/addons/charts/dark-factory/iam/securityagent.tf`,
+and the Agent Space is reconciled by the PreSync bootstrap Job
+(`templates/06-securityagent-bootstrap.yaml`). **The Dark Factory runs both paths** — the App for
+inline bot findings and the headless path for the merge-gate signal.
 
 ---
 
-## The one manual step — connect the repo to the AWS DevOps Agent (GitHub App)
+## Part C — How the Dark Factory pipeline uses the agents
 
-**Why only DevOps?** The Security Agent runs headlessly over an S3-staged diff, so it needs **no**
-GitHub App. The **DevOps Agent** release-readiness review has **no headless code-review API** — it only
-runs via its GitHub App (auto-reviews each PR and posts a check-run) or the IDE plugin. So the DevOps
-Agent's GitHub App must be installed once on the org/repo.
+Once the agents are connected, the `df-run` workflow wires them into the PR lifecycle (ordering:
+**DevOps first, then Security**):
 
-### Steps (installer, ~5 min)
+1. Coder opens the PR → posts `dark-factory:coding` + `dark-factory:local-test` comments.
+2. **`devops-gate`** waits for the DevOps Agent's `aws-devops-agent/release-readiness-review` verdict.
+   On a clear verdict it applies the **`needs-security-review`** label. *(Config:
+   `devopsAgent.checkContext` / `devopsAgent.checkRunName` in `values.yaml` — the check name the gate
+   watches for.)*
+3. **`security-agent`** runs (gated on that label) → the Security Agent reviews the diff; the
+   `aws-security-agent[bot]` also comments inline (Path B1).
+4. **`deploy-test`** runs for deployable changes (`terraform validate` for `*.tf`, ephemeral-namespace
+   apply for k8s).
+5. **Sticky status** rewrites the PR body into one board (build+tests, security, devops, deploy-test).
+6. A human **approves** the PR → the `df-merge-teardown` workflow **squash-merges** and reaps the
+   sandbox. *(GitHub blocks a PR author from approving their own PR, so the approver must be a
+   different identity than the one the coder opens PRs as.)*
 
-1. **Sign in** to the AWS console as an admin of account **`940019131157`**, region **`us-west-2`**,
-   and to GitHub as an **org owner** of the target org (`elamaran11`, repo `dark-factory-sandbox`).
+### Relevant `values.yaml` knobs
+```yaml
+devopsAgent:
+  enabled: true
+  gate: check                       # wait for the DevOps Agent check-run (native model)
+  checkContext: "(aws-devops-agent/release-readiness-review|...)"   # JS regex (no (?i) flag)
+  checkRunName: "aws-devops-agent/release-readiness-review"          # exact check name
+securityAgent:
+  enabled: true                     # headless S3-diff path (Path B2)
+  app:
+    enabled: true                   # GitHub App inline bot (Path B1)
+    checkContext: ""                # set only if the App posts a check/status to gate on
+    checkRunName: ""
+```
 
-2. Open the **AWS DevOps Agent** console → your Agent Space → **Capabilities** → **GitHub**
-   (or generate the install link via the CLI — see "Regenerating the link" below).
+---
 
-3. Click **Connect GitHub / Install App**. GitHub shows the app-install consent screen. Choose the
-   org, select **Only the `dark-factory-sandbox` repo** (or All repos), and click **Install &
-   Authorize**. This is the OAuth consent — the part that must be a human.
-
-4. In the DevOps Agent **Code Review and Automated Testing** settings for the repo, ensure:
-   - **Auto trigger change review** = ON (reviews every PR)
-   - **Automated verification testing** = ON (optional; builds+tests in the AWS-managed env)
-   - **Runtime role** = (optional) an IAM role for private-registry access during builds.
-
-5. **Done.** From now on the DevOps Agent reviews every PR and posts a check-run. The Dark Factory
-   `devops-gate` step watches for that check (context matches `devopsAgent.checkContext`), and on a
-   clear verdict applies the `needs-security-review` label → the Security Agent step runs.
-
-### Regenerating the install link (CLI)
-
-The Security Agent's GitHub App install URL + CSRF state can be minted with:
+## Verify the setup
 
 ```bash
-aws securityagent initiate-provider-registration --provider GITHUB --region us-west-2
-# → { "redirectTo": "https://github.com/apps/aws-security-agent/installations/new",
-#     "csrfState": "<token>" }
+# Open a PR in the connected repo, then within a few minutes:
+
+# DevOps Agent posted its review?
+gh api repos/<owner>/<repo>/commits/<PR_HEAD_SHA>/status \
+  --jq '.statuses[] | select(.context|test("devops")) | {context,state,description}'
+
+# Security Agent bot commented inline?
+gh api repos/<owner>/<repo>/issues/<PR>/comments \
+  --jq '.[] | select(.user.login=="aws-security-agent[bot]") | .body[0:80]'
+
+# Security Agent integration recorded on the space (headless path)?
+aws securityagent list-integrations --query 'integrationSummaries[].provider'
+aws securityagent list-integrated-resources --agent-space-id <id>
 ```
 
-Open `redirectTo` in a browser to install. *(We use the Security Agent headlessly, so this is only
-needed if you also want its GitHub-App / PR-comment path. The DevOps Agent install is driven from the
-DevOps Agent console the same way.)*
-
----
-
-## How to verify the install worked
-
-```bash
-# 1. Open a test PR in the connected repo, then within ~10 min:
-gh api repos/elamaran11/dark-factory-sandbox/commits/<PR_HEAD_SHA>/check-runs \
-  --jq '.check_runs[].name'          # expect a DevOps Agent check-run to appear
-
-# 2. In a df-run, the devops-gate step logs "AWS DevOps Agent CLEARED" and the
-#    needs-security-review label appears on the PR → security-agent step runs.
-```
-
-Until the app is connected, `devops-gate` reports **not-cleared** and the Security Agent step is
-**skipped** — the pipeline **never fakes a DevOps pass**. That's the intended safe default.
-
----
-
-## What I need from you / your colleague (the human bits)
-
-1. **Install + authorize the AWS DevOps Agent GitHub App** on the org/repo (steps above). This is the
-   only irreducibly-human action.
-2. Confirm the **`devopsAgent.checkContext`** regex in `values.yaml` matches the exact check-run name
-   the DevOps Agent posts (visible on the first reviewed PR). Default:
-   `(?i)(devops[- ]?agent|release[- ]?readiness)`. Tune if the real context differs.
-3. (If using the coding-agent plugin path instead of the App) install the **DevOps Agent Claude Code
-   plugin** via `aim plugins install <plugin>` — needs Midway; not usable from the credential-less
-   Kata VM, so the GitHub-App path is the default.
-
-Everything else — IAM, agent space, the Security Agent review, ordering, gating — is automated.
+If the DevOps check never appears, the repo isn't connected to the Agent Space (Part A3). If the
+Security bot never comments, the GitHub App isn't connected to the Agent Space (Part B1 step 3) —
+installing the App on GitHub alone is not enough.
