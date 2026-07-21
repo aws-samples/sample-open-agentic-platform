@@ -19,7 +19,13 @@ chart's `templates/` as Crossplane managed resources:
 | `../templates/17-kata-nodegroup.yaml` | Crossplane `Nodegroup` — scale-to-zero, kata taint/labels, LT ref |
 | `../templates/18-kata-eks-addons.yaml` | Crossplane `Addon` — vpc-cni + kube-proxy (the two Auto-Mode prerequisites) |
 
-**Enable it** in `values.yaml`:
+**Enable it** — the chart default (`../values.yaml`) keeps `nodepool` cluster-agnostic;
+the hub-specific coordinates live in the **per-cluster overlay** the addon
+ApplicationSet already layers on (`valueFiles: clusters/<name>/addons`):
+
+```
+gitops/addons/clusters/hub/addons/agent-sandbox/values.yaml
+```
 
 ```yaml
 nodepool:
@@ -28,6 +34,14 @@ nodepool:
   clusterName: hub       # + clusterEndpoint / clusterCA / serviceCidr, subnetIds,
                          #   nodeRoleArn, amiId, instanceType, launchTemplateId, region
 ```
+
+> `clusterEndpoint` + `clusterCA` are **not secrets** — the CA is the cluster's
+> PUBLIC api-server certificate (no private key) and the endpoint is public DNS;
+> both ship in every kubeconfig. They live in the overlay (not the chart default)
+> for reusability. They're baked into the LaunchTemplate `userData` at Helm render
+> time, so a k8s Secret/env can't feed them. Dropping the custom `amiId` (letting
+> EKS auto-inject the bootstrap) would remove them from git entirely — a possible
+> future refactor.
 
 Requires the Crossplane AWS providers `provider-aws-eks` + `provider-aws-ec2`
 (installed on the hub) and a `ProviderConfig` (default: `default`).

@@ -197,23 +197,41 @@ nodepool:
   region: us-west-2
   # Crossplane ProviderConfig (provider-aws-eks / -ec2). "default" on this platform.
   providerConfigName: default
-  # Target cluster + its control-plane coordinates (required in nodeadm userData
-  # when using a custom AMI). Values below are the live hub cluster.
-  clusterName: hub
-  clusterEndpoint: https://5E188804F70B5BD204A38FCAA233AF3D.gr7.us-west-2.eks.amazonaws.com
-  serviceCidr: 172.20.0.0/16
-  clusterCA: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJVTc5Y25OekQ3aW93RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TmpBM01EWXhOekUzTWpkYUZ3MHpOakEzTURNeE56SXlNamRhTUJVeApFekFSQmdOVkJBTVRDbXQxWW1WeWJtVjBaWE13Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLCkFvSUJBUUNtTEc1bHBNb3BCKzlHMjVvVXlSQmF5RWdSZVd3N2VUU0taTWsyWmh0OWttMGFWaEE2UTNBMXZYVzEKc3FxcEhRVHdYR3RmeFB4eUt1RmRCMGVrV2s3WEV4TUVoblFTZWVOTEFkWkdUaGVpd3pZNVpSWTNNMG5kSGE5dQpZZXFBTkpWd2FXOXVTaVByM0dHL2pTR1JTZElKN2VuMU9qRTRHY2ZPdUNqV0hiUElvNVNKNndEQUtDbGRjbGplCkNnMklvVC8rb3NyTzBGay9aMjF2d2NLVDBMYy9SU3diVnExUFI3TncxSzBxaFQ0K1RBSHRKSktoK0Qxek80REoKTjd2amduam03R2RsdS9lOTBnS3NNTjhKbEhhMFJYNWh6ZmV2N0ZNdGZxdUxEcGlxcE03cWpzT08wcDQwajY4dgpmT1V2K2hEQUZvd3dZay9QYVhyVE44ZTNxR2NKQWdNQkFBR2pXVEJYTUE0R0ExVWREd0VCL3dRRUF3SUNwREFQCkJnTlZIUk1CQWY4RUJUQURBUUgvTUIwR0ExVWREZ1FXQkJTYkI0SUhxaFFVZ1lmd1dNa21zUUQ3N3JBU2JUQVYKQmdOVkhSRUVEakFNZ2dwcmRXSmxjbTVsZEdWek1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQWtOUmhLWUZvMwp5NUlseGhRSVBZckhrM1Y3UjZtUFpnejF2SmxjWmpKcEhVd0E1U3MwTDBRSkRmVmdvMVpJaUFiVmpPV1VYTHJmCjNsUXN1M2FJSDE3K2NuVnA3ZDJUZVhLd0NNbTVWTTFuK25CL1d4U1U4enVIWTQ1TEVVOVRFSG1FcDBaV25XSkwKcmFZbTZ0UWMvbzJLWGxla3JYTHBQa052TnR4QkFJQitsQ3NZbzd3ZGcxYXQ4NDJtNUx5Z1BvWkJIblptbTRDdQpzdWZPR1VTT3M5SkVxekUwdzhGYWU0NVJHc2o0RmM5QXR1QVF3a1V0cVdVcjNLT2lEcGtpZDUweHRuaVZQNTRZCncveU9CTUNGaXM4TklteTZ6cTMrVDQxV3krTnJQNVlOSzd0MHpEajYxdW1XMjJFVXZPU3U0ZktUU0ZZeldOTVoKblM3c2pqREZmTXVvCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
-  # Node group shape.
+  # Node group shape — cluster-agnostic defaults, safe to keep in the chart.
   nodegroupName: kata-sandbox
-  nodeRoleArn: arn:aws:iam::940019131157:role/hub-kata-node-role
-  subnetIds:
-    - subnet-0694e405e202f825e
-    - subnet-0f161be05a87d5335
   instanceType: c8i.4xlarge          # 8i family → exposes VT-x for nested virt
-  amiId: ami-055ebeb74702bc758        # EKS-optimized AL2023 for k8s 1.35 (x86_64)
   minSize: 0                          # scale-to-zero when no sandbox is claimed
   desiredSize: 1
   maxSize: 3
-  # Adopt the existing LaunchTemplate in place (leave blank to create fresh).
-  launchTemplateId: lt-0e204ea3e305e2e1f
   launchTemplateVersion: "$Latest"
+  #
+  # ── Cluster-specific coordinates — DO NOT hardcode in this chart. ──────────
+  # These are per-cluster and must be supplied by the per-cluster overlay, NOT
+  # baked into the chart default, so the chart stays reusable across clusters:
+  #     gitops/addons/clusters/<clusterName>/addons/agent-sandbox/values.yaml
+  # (see clusters/hub/addons/agent-sandbox/values.yaml for the live hub values).
+  #
+  # NOTE: clusterEndpoint + clusterCA are NOT secrets — the CA is the cluster's
+  # PUBLIC api-server certificate (verification only, no private key) and the
+  # endpoint is public DNS; both ship in every kubeconfig. They're relocated to
+  # the overlay for chart hygiene/reusability, not because they're sensitive.
+  # They get baked into the LaunchTemplate userData (nodeadm NodeConfig) at Helm
+  # render time — a k8s Secret/env can't feed a Crossplane field, so they must be
+  # known at render time. (Dropping the custom amiId lets EKS auto-inject them
+  # and removes them from git entirely — a future refactor.)
+  #   clusterName:      <eks cluster name>   (also used for external-name adoption)
+  #   clusterEndpoint:  https://<id>.<region>.eks.amazonaws.com
+  #   clusterCA:        <base64 cluster certificate-authority data>
+  #   serviceCidr:      <cluster service IPv4 CIDR>
+  #   nodeRoleArn:      arn:aws:iam::<acct>:role/<kata-node-role>
+  #   subnetIds:        [ subnet-..., subnet-... ]
+  #   amiId:            <EKS-optimized AL2023 AMI for the cluster k8s version>
+  #   launchTemplateId: <existing LT id to ADOPT in place> (blank = create fresh)
+  clusterName: ""
+  clusterEndpoint: ""
+  clusterCA: ""
+  serviceCidr: ""
+  nodeRoleArn: ""
+  subnetIds: []
+  amiId: ""
+  launchTemplateId: ""
