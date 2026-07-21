@@ -335,7 +335,9 @@ trigger:
         names:
           - dark-factory-sandbox
     # Public URL GitHub posts webhooks to (ALB ingress host + endpoint).
-    webhookUrl: https://idp.elamaras.people.aws.dev
+    # Left empty; supplied at deploy time from the ingress_domain_name
+    # cluster-secret annotation via the dark-factory registry valuesObject.
+    webhookUrl: ""
     webhookEndpoint: /dark-factory
     webhookPort: 12000
     # Secret (in argo-events ns) with keys: token (GitHub API), webhook-secret (HMAC).
@@ -343,5 +345,7 @@ trigger:
     # Expose the EventSource via the platform ALB ingress for GitHub to reach it.
     ingress:
       enabled: true
-      host: idp.elamaras.people.aws.dev
+      # Left empty; supplied at deploy time from the ingress_domain_name
+      # cluster-secret annotation via the dark-factory registry valuesObject.
+      host: ""
       path: /dark-factory
