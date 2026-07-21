@@ -183,12 +183,16 @@ coderTemplate:
 # Managed Node Group + its LaunchTemplate (cpuOptions.nestedVirtualization) +
 # the required vpc-cni / kube-proxy addons — all as Crossplane managed resources
 # (templates 16/17/18), so ArgoCD owns the node-group INFRA end-to-end (no more
-# out-of-band eksctl/terraform). The old nodepool/*.tf|eksctl files remain as
-# reference only. See nodepool/README.md.
+# out-of-band eksctl/terraform). The MNG carries the kata taint/labels, so only
+# kata sandbox pods (SandboxTemplate) + kata-deploy land on it. The old
+# nodepool/*.tf|eksctl files remain as reference only. See nodepool/README.md.
 #
-# DISABLED by default: flip enabled=true (and set the values below to your
-# cluster) to activate. On a cluster that already has a kata node group, the
-# external-name annotations in the templates ADOPT it in place (no recreate).
+# DISABLED by default and cluster-agnostic — flip nodepool.enabled + supply the
+# cluster-specific coordinates from the per-cluster overlay (NOT this chart
+# default) so the chart stays reusable:
+#   gitops/overlays/clusters/<clusterName>/agent-sandbox/values.yaml
+# On a cluster that already has a kata node group, the external-name annotations
+# in the templates ADOPT it in place (no recreate).
 nodepool:
   enabled: false
   # Also adopt/manage the vpc-cni + kube-proxy EKS addons (needed by the MNG).
@@ -208,8 +212,10 @@ nodepool:
   # ── Cluster-specific coordinates — DO NOT hardcode in this chart. ──────────
   # These are per-cluster and must be supplied by the per-cluster overlay, NOT
   # baked into the chart default, so the chart stays reusable across clusters:
-  #     gitops/addons/clusters/<clusterName>/addons/agent-sandbox/values.yaml
-  # (see clusters/hub/addons/agent-sandbox/values.yaml for the live hub values).
+  #     gitops/overlays/clusters/<clusterName>/agent-sandbox/values.yaml
+  # (This is the path the appset actually layers — verified against the live
+  # Application's valueFiles. An older gitops/addons/clusters/<c>/addons/... tree
+  # may still exist; it is NOT read.)
   #
   # NOTE: clusterEndpoint + clusterCA are NOT secrets — the CA is the cluster's
   # PUBLIC api-server certificate (verification only, no private key) and the
