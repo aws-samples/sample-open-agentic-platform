@@ -100,3 +100,14 @@ dark-factory:
     argocd.argoproj.io/sync-wave: '3'
   selectorMatchLabels:
     environment: control-plane
+  valuesObject:
+    # Derive the webhook URL + ingress host from the cluster-secret
+    # ingress_domain_name annotation (set per-cluster by the platform), instead
+    # of a hardcoded domain in the chart defaults. Mirrors the agent-gateway
+    # pattern (gateway.yaml). GitHub posts webhooks to webhookUrl+webhookEndpoint;
+    # the EventSource ingress is served on host.
+    trigger:
+      argoEvents:
+        webhookUrl: 'https://{{.metadata.annotations.ingress_domain_name}}'
+        ingress:
+          host: '{{.metadata.annotations.ingress_domain_name}}'
