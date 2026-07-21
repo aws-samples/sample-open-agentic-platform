@@ -11,10 +11,19 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 
+from botocore.exceptions import ClientError
 from mcp.client.streamable_http import streamablehttp_client
 from strands import Agent
 from strands.models.openai import OpenAIModel
 from strands.tools.mcp.mcp_client import MCPClient
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential, before_sleep_log
+
+try:
+    from strands.multiagent.a2a.server import _AGENT_CARD_CONTEXT_ID
+except ImportError:
+    # Fallback if the SDK renames/removes this internal constant; matches
+    # the value as of strands-agents 1.48.0.
+    _AGENT_CARD_CONTEXT_ID = "__agent_card__"
 
 from .config import config
 
@@ -25,6 +34,11 @@ logger = logging.getLogger(__name__)
 _model: Optional[OpenAIModel] = None
 _mcp_tools: list = []
 _mcp_exit_stack: Optional[ExitStack] = None
+
+
+def _is_access_denied(exc: BaseException) -> bool:
+    """True if *exc* is a botocore AccessDeniedException (any service)."""
+    return isinstance(exc, ClientError) and exc.response.get("Error", {}).get("Code") == "AccessDeniedException"
 
 
 def _get_model() -> OpenAIModel:
@@ -100,6 +114,14 @@ def _build_session_manager(session_id: str, actor_id: str):
     if config.MEMORY_PROVIDER != "agentcore":
         return None
 
+    # The A2AServer agent_factory is invoked once at construction with a
+    # placeholder context id ("__agent_card__") solely to derive agent-card
+    # metadata; that agent is never used for request handling. Skip memory
+    # attachment for it — AgentCore session ids must start with an
+    # alphanumeric character, which the placeholder does not satisfy.
+    if session_id == _AGENT_CARD_CONTEXT_ID:
+        return None
+
     mem_config = config.MEMORY_CONFIG
     memory_id = mem_config.get("memoryId")
     region = mem_config.get("region", config.AWS_REGION)
@@ -124,18 +146,23 @@ def _build_session_manager(session_id: str, actor_id: str):
     return sm
 
 
-def create_agent(session_id: Optional[str] = None, actor_id: str = "user") -> Agent:
-    """Create a Strands agent for a given session.
+@retry(
+    retry=retry_if_exception(_is_access_denied),
+    wait=wait_exponential(multiplier=1, max=16),
+    stop=stop_after_attempt(6),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _construct_agent(session_id: str, actor_id: str) -> Agent:
+    """Build the session manager + Agent.
 
-    Args:
-        session_id: Conversation session id. A new UUID is generated when None.
-        actor_id: Identity of the caller (default "user").
+    Retries on AccessDeniedException (first-boot IAM propagation race
+    between Pod Identity association and the AgentCore access policy)
+    with exponential backoff instead of crashing the process.
     """
-    session_id = session_id or str(uuid.uuid4())
     session_manager = _build_session_manager(session_id, actor_id)
     tools = _get_mcp_tools() or None
-
-    agent = Agent(
+    return Agent(
         model=_get_model(),
         system_prompt=config.SYSTEM_PROMPT,
         tools=tools,
@@ -144,6 +171,17 @@ def create_agent(session_id: Optional[str] = None, actor_id: str = "user") -> Ag
         description=config.AGENT_DESCRIPTION,
         session_manager=session_manager,
     )
+
+
+def create_agent(session_id: Optional[str] = None, actor_id: str = "user") -> Agent:
+    """Create a Strands agent for a given session.
+
+    Args:
+        session_id: Conversation session id. A new UUID is generated when None.
+        actor_id: Identity of the caller (default "user").
+    """
+    session_id = session_id or str(uuid.uuid4())
+    agent = _construct_agent(session_id, actor_id)
     logger.info(f"Agent created: {config.AGENT_NAME} session={session_id}")
     return agent
 
