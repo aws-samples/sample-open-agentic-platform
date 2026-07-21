@@ -20,57 +20,12 @@ the platform reconciles it across a hub and any number of spoke clusters.
 Agent workloads sit on a layered stack — **Agent Platform Capabilities (APC)** on top of a
 platform-engineering foundation, all on Amazon EKS Auto Mode:
 
-```mermaid
-flowchart TB
-    subgraph WL["🤖 AGENT WORKLOADS"]
-        direction LR
-        w1[Financial Advisor]:::wl
-        w2[K8s Ops Agent]:::wl
-        w3[Multi-Tool Agent]:::wl
-        w4["Custom Agents (BYOA)"]:::wl
-    end
+<p align="center">
+  <img src="docs/architecture/diagrams/img/oap-layered.svg" alt="OAP layered architecture" width="100%">
+</p>
 
-    subgraph APC["⚡ AGENT PLATFORM CAPABILITIES (OAP)"]
-        direction LR
-        a1[Model as a Service]:::cap
-        a2[Agent Identities]:::cap
-        a3[Agent Gateway]:::cap
-        a4[Agent Isolation]:::cap
-        a5[Agent Runtime]:::cap
-        a6[Agent Lifecycle]:::cap
-        a7[Agent Memory]:::cap
-        a8[Agent Browser]:::cap
-        a9[Agent Code Interpreter]:::cap
-        a10[Agent Observability]:::cap
-        a11[Agent Evaluation]:::cap
-    end
-
-    subgraph PE["🛠️ PLATFORM ENGINEERING"]
-        direction LR
-        p1[Developer Portal]:::op
-        p2[Identity & Access]:::op
-        p3[Infra as Code]:::op
-        p4[Continuous Delivery]:::op
-        p5[Workflow Orchestration]:::op
-        p6[Service Discovery]:::op
-        p7[Code / Config / Artifact / Secret Repos]:::app
-    end
-
-    XCUT["🔎 Observability  ·  🔐 Security & Governance  ·  ✍️ Signing"]:::xcut
-    EKS["☁️ COMPUTE PLATFORM — Amazon EKS Auto Mode  ·  AWS Cloud"]:::eks
-
-    WL --> APC --> PE --> XCUT --> EKS
-
-    classDef wl fill:#6b3fa0,stroke:#4a2b70,color:#fff,font-weight:bold;
-    classDef cap fill:#ec7211,stroke:#c85d0e,color:#fff,font-weight:bold;
-    classDef op fill:#232f3e,stroke:#0f1b2a,color:#fff;
-    classDef app fill:#2570b8,stroke:#1a4d80,color:#fff;
-    classDef xcut fill:#3a7fc4,stroke:#255a94,color:#fff,font-weight:bold;
-    classDef eks fill:#0f1b2a,stroke:#000,color:#fff,font-weight:bold;
-    style WL fill:#f3ecfa,stroke:#6b3fa0,color:#4a2b70
-    style APC fill:#fdf0e3,stroke:#ec7211,color:#c85d0e
-    style PE fill:#eef1f5,stroke:#232f3e,color:#232f3e
-```
+> _Diagrams are editable draw.io sources under [`docs/architecture/diagrams/src/`](docs/architecture/diagrams/src/)
+> (open in [draw.io](https://app.diagrams.net) or the VS Code Draw.io extension) with SVGs exported to `img/`._
 
 ---
 
@@ -273,25 +228,9 @@ The Dark Factory turns a **GitHub issue into a reviewed, merged PR, autonomously
    ephemeral-namespace deploy tests — every step reporting onto the PR.
 4. A human approves; a separate Argo workflow squash-merges and reaps the sandbox.
 
-```mermaid
-flowchart LR
-    I["🏷️ GitHub issue<br/>labeled dark-factory"]:::gh --> S["Argo Sensor"]:::hub
-    S --> R["df-run workflow"]:::hub
-    R --> K["🔒 Kata micro-VM<br/>coder: Claude Code / Kiro<br/><i>credential-less · network-locked</i>"]:::vm
-    K --> PR["🔀 Pull Request"]:::gh
-    PR --> DV["AWS DevOps Agent<br/>release readiness"]:::agent
-    DV --> SEC["AWS Security Agent<br/>OWASP · secrets · IAM"]:::agent
-    SEC --> GATES["Holdout gate ·<br/>terraform validate ·<br/>deploy test"]:::hub
-    GATES --> H{"👤 Human<br/>approve?"}:::human
-    H -->|yes| M["df-merge-teardown<br/>squash-merge + reap VM"]:::hub
-    M --> DONE["✅ Merged to main"]:::gh
-
-    classDef gh fill:#1a1f2b,stroke:#6e7681,color:#e6edf3;
-    classDef hub fill:#12314f,stroke:#2570b8,color:#8ec5ff;
-    classDef vm fill:#2a1a40,stroke:#a06bd6,color:#d9b8f5;
-    classDef agent fill:#14100a,stroke:#ec7211,color:#f6b27a,font-weight:bold;
-    classDef human fill:#12331f,stroke:#3fa060,color:#9fe0b5;
-```
+<p align="center">
+  <img src="docs/architecture/diagrams/img/dark-factory-flow.svg" alt="Dark Factory — issue to merged PR flow" width="100%">
+</p>
 
 It is the platform's proof that you can run untrusted, code-writing agents safely alongside a control
 plane. See [`docs/dark-factory/`](docs/dark-factory/) and [`examples/dark-factory/`](examples/dark-factory/).
@@ -306,53 +245,9 @@ different backend. Agents are onboarded either **imageless** (CRD-defined, no co
 **BYO-image** (any OCI image / SDK). The abstraction layer (Kro / KubeVela orchestrating Crossplane ·
 ACK · OpenTofu) resolves your choice at deploy time.
 
-```mermaid
-flowchart TB
-    subgraph COMPUTE["🖥️ COMPUTE — cloud-agnostic"]
-        direction LR
-        c1[Amazon EKS]:::c
-        c2[ROSA]:::c
-        c3[SUSE Rancher]:::c
-        c4[Self-Managed K8s]:::c
-    end
-
-    subgraph ABS["🧩 AGENT ABSTRACTION — Kro / KubeVela CRDs"]
-        direction LR
-        im["Imageless Agents<br/>CRD-defined · no image · auto authN/authZ"]:::im
-        byo["BYO-Image Agents<br/>Strands · Spring AI · Rust · LangGraph · CrewAI · any OCI"]:::byo
-    end
-
-    subgraph CAP["⚙️ CAPABILITY BACKENDS — AgentCore managed · OR · OSS alternative"]
-        direction LR
-        m1["Memory<br/><b>AgentCore</b> / Milvus · Qdrant · Mem0"]:::m
-        m2["Gateway<br/><b>AgentCore</b> / KGateway · LiteLLM · Envoy"]:::m
-        m3["Identity<br/><b>AgentCore</b> / Keycloak · SPIFFE/SPIRE"]:::m
-        m4["Observability<br/><b>AgentCore</b> / Langfuse · OTel · Prometheus"]:::m
-        m5["Policy<br/><b>AgentCore</b> / NeMo · OPA · Guardrails"]:::m
-        m6["Evaluations<br/><b>AgentCore</b> / Ragas · DeepEval"]:::m
-        m7["Code Interp.<br/><b>AgentCore</b> / gVisor · Kata · Firecracker"]:::m
-        m8["Browser<br/><b>AgentCore</b> / Playwright · Selenium"]:::m
-    end
-
-    subgraph LLM["🧠 MODELS"]
-        direction LR
-        b["Amazon Bedrock<br/>Claude · Llama · Mistral · Nova · Titan"]:::b
-        s["Self-Hosted<br/>vLLM/RHOAI · llama.cpp · AWS Neuron"]:::s
-    end
-
-    COMPUTE --> ABS --> CAP --> LLM
-
-    classDef c fill:#12314f,stroke:#2570b8,color:#8ec5ff;
-    classDef im fill:#2a1a40,stroke:#a06bd6,color:#d9b8f5;
-    classDef byo fill:#12331f,stroke:#3fa060,color:#9fe0b5;
-    classDef m fill:#1a1f2b,stroke:#ec7211,color:#f6b27a;
-    classDef b fill:#2a1c10,stroke:#ec7211,color:#f6b27a;
-    classDef s fill:#12331f,stroke:#3fa060,color:#9fe0b5;
-    style COMPUTE fill:#0b1622,stroke:#2570b8,color:#8ec5ff
-    style ABS fill:#0f0b1a,stroke:#a06bd6,color:#d9b8f5
-    style CAP fill:#14100a,stroke:#ec7211,color:#f6b27a
-    style LLM fill:#0a0f0a,stroke:#3fa060,color:#9fe0b5
-```
+<p align="center">
+  <img src="docs/architecture/diagrams/img/oap-managed-or-oss.svg" alt="OAP — AgentCore managed or OSS alternative per capability" width="100%">
+</p>
 
 ### Capabilities → charts (in this repo)
 
