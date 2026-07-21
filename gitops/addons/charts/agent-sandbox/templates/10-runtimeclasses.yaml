@@ -1,0 +1,22 @@
+{{- /*
+Kata RuntimeClasses. A workload selects a VMM with `runtimeClassName: kata-clh`
+(or kata-qemu). The RuntimeClass admission controller force-merges the
+scheduling.nodeSelector + tolerations below onto the pod, steering it onto the
+matching Karpenter kata pool. The runtime binaries themselves are installed on
+the node by kata-deploy (a prerequisite provided by the base platform).
+*/ -}}
+{{- range .Values.kata.runtimeClasses }}
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "agent-sandbox.labels" $ | nindent 4 }}
+handler: {{ .handler }}
+scheduling:
+  nodeSelector:
+    {{- toYaml $.Values.kata.nodeSelector | nindent 4 }}
+  tolerations:
+    {{- toYaml $.Values.kata.tolerations | nindent 4 }}
+{{- end }}

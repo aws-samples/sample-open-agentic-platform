@@ -5,6 +5,7 @@ enabledAddons:
   ingress_class_alb: true
   aws_load_balancer_controller: true
   default_storage_class: true
+  cert_manager: true
   external_secrets: true
   external_dns: true
   # Security
@@ -15,6 +16,7 @@ enabledAddons:
   prometheus_node_exporter: true
   aws_for_fluentbit: true
   # Platform
+  platform_manifests_bootstrap: true   # wave -1: creates the system-<prefix> Karpenter NodePool that system pods pin to
   crossplane: true
   crossplane_aws: true
   kubevela: true
@@ -22,3 +24,19 @@ enabledAddons:
   # Agentic Platform
   agent_platform: true
   bifrost: true
+  otel_collector: true
+  monitoring: true
+  agent_core: true
+  agent_gateway: true
+  oam_components: true
+  # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool.
+  # Enabled on DEV (where the Dark Factory runs). ArgoCD manages the IN-CLUSTER
+  # pieces (operator, CRDs, RuntimeClasses, SandboxTemplate, pool-manager).
+  # The kata-capable node layer is NOT GitOps-managed — it requires a
+  # self-managed nested-virt MNG + the vpc-cni & kube-proxy addons provisioned
+  # out-of-band (AWS infra ArgoCD can't create). See
+  # gitops/addons/charts/agent-sandbox/nodepool/README.md for the proven recipe
+  # (validated live on spoke-dev 2026-07-10: real kata VM, guest kernel 6.18.35).
+  agent_sandbox: true
+  # kata-deploy installs the runtime on the kata MNG nodes (separate app).
+  agent_sandbox_kata: true

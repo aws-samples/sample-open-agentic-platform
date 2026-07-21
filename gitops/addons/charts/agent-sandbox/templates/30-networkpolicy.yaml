@@ -1,0 +1,65 @@
+{{- /*
+Default-deny egress for coder sandboxes, then allow ONLY what a coder needs:
+  - DNS (kube-dns)
+  - Bifrost LLM gateway (model calls)
+  - HTTPS to the PUBLIC internet for git/gh + package registries the build needs
+
+This breaks the "lethal trifecta": untrusted issue text runs in a pod that
+cannot reach arbitrary internal services or exfiltrate to arbitrary hosts.
+
+⚠️ HUB CONTROL-PLANE ISOLATION: the capability now runs on the hub, next to the
+fleet control plane (Keycloak, ArgoCD, external-secrets, Argo). Those services
+are reachable in-cluster via ClusterIPs / pod IPs inside the cluster + VPC
+private ranges. So the HTTPS-egress rule must allow the PUBLIC internet ONLY —
+it excludes RFC-1918 private ranges (and IMDS/link-local), which denies the
+coder any path to the control plane, the node, the API server, or peer pods.
+`values.privateCidrsDenied` lists the ranges carved out of the public allow.
+Selects coder pods by the label the SandboxTemplate stamps.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coder-sandbox-egress
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      agent-sandbox.io/role: coder
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution — port 53 only, to the cluster DNS service. Kept broad by
+    # namespace (not pinned to a k8s-app=kube-dns pod label) because EKS Auto
+    # Mode runs CoreDNS without that label; :53 is harmless and control-plane
+    # isolation is enforced by the :443 + private-CIDR rule below, not here.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Bifrost LLM gateway (in-cluster) — the ONLY control-plane-side service the
+    # coder may reach, and only on :8080.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: bifrost
+      ports:
+        - protocol: TCP
+          port: 8080
+    # HTTPS egress for git / gh / package registries — PUBLIC internet only.
+    # Private/link-local ranges are excluded so the coder cannot reach the hub's
+    # control-plane services, the node, the API server, or peer pods over :443.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- range .Values.networkPolicy.privateCidrsDenied }}
+              - {{ . | quote }}
+              {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443

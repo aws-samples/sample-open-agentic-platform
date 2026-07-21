@@ -1,0 +1,132 @@
+{{- /*
+RBAC for the Dark Factory (Flow B) Argo workflows.
+
+Argo runs workflow pods in the ARGO namespace, so the workflow ServiceAccount
+lives there. It manages SandboxClaims + reads sandboxes/pods in the
+agent-sandbox namespace (where the warm pool + coder pods live) via a Role
+bound cross-namespace. It deliberately has NO secrets access, no pod/exec, no
+cluster scope — the coder VM is credential-less and the workflow never shells
+into it.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dark-factory-workflow
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+---
+# In the ARGO namespace: the Argo executor needs to write its task results.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-workflow
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults", "workflowtasksets"]
+    verbs: ["create", "get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # df-iterate (runs as this SA) submits a df-run Workflow via the k8s API to
+  # route a PR comment back to the coder as a bounded revision.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-workflow
+  namespace: {{ .Values.argo.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-workflow
+    namespace: {{ .Values.argo.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-workflow
+---
+# In the AGENT-SANDBOX namespace: manage claims + read the bound sandbox/pods +
+# per-issue state ConfigMaps. Bound to the SA that lives in the argo namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dark-factory-workflow-sandbox
+  namespace: {{ .Values.warmPool.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dark-factory-workflow-sandbox
+  namespace: {{ .Values.warmPool.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-workflow
+    namespace: {{ .Values.argo.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dark-factory-workflow-sandbox
+{{- if .Values.deployTest.enabled }}
+---
+# P4 deploy-test: the ONLY cluster-scoped grant. Lets the workflow create/delete
+# ephemeral test namespaces and deploy the PR's manifests into them. Scoped to
+# namespaces + the common workload/config kinds — no secrets, no RBAC, no
+# cluster-wide resource mutation. This is deliberately the widest permission in
+# the chart and is confined to deploy-test.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dark-factory-deploy-test
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "delete", "patch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dark-factory-deploy-test
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: dark-factory-workflow
+    namespace: {{ .Values.argo.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dark-factory-deploy-test
+{{- end }}

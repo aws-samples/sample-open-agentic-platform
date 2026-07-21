@@ -1,0 +1,183 @@
+# Dark Factory (Flow B) — default values.
+# Deployed on the hub (control-plane) only, alongside Argo Workflows and the
+# Flow A agent-sandbox warm pool.
+
+# Namespace where the warm pool, SandboxClaims, and coder pods live (Flow A).
+# The workflow SA + RBAC are created here so claims are in-namespace.
+namespace: agent-sandbox-system
+
+# Argo Workflows install (already on the hub in the `argo` namespace).
+argo:
+  namespace: argo
+
+warmPool:
+  # The Flow A SandboxWarmPool the factory claims from.
+  name: coder-warmpool
+  # Namespace of the pool / where claims + coder pods are created.
+  namespace: agent-sandbox-system
+
+coder:
+  # In-VM control endpoint the workflow drives (the coder image listens here).
+  port: 8080
+  profile: claude-code
+  # Max minutes for a single coder run before the step times out.
+  runTimeoutMinutes: 30
+
+bifrost:
+  url: http://172.20.181.17:8080  # ClusterIP (Kata VM guest DNS cannot resolve svc names)
+
+github:
+  # Secret (in .namespace) holding the GitHub App / token the workflow uses to
+  # open the PR + maintain the sticky status comment. Key: token.
+  tokenSecret: dark-factory-github
+  tokenKey: token
+
+# Step-container image: needs kubectl + curl + jq to drive claims, poll the
+# coder, and call the GitHub API. alpine/k8s bundles kubectl; curl/jq added at start.
+stepImage: alpine/k8s:1.31.0
+
+# Concurrency: cap total in-flight df-run workflows against the kata pool size.
+maxConcurrentRuns: 3
+
+# Safety-net TTL on a SandboxClaim (reaper backstop if teardown never runs).
+claimTtlSeconds: 10800
+
+# ── P2: Holdout gate ─────────────────────────────────────────────────────────
+# Train/test separation for code (docs/dark-factory §6.1). Hidden BDD scenarios
+# + executable tests the coder NEVER sees are stored in a ConfigMap ON THE HUB
+# (rendered from holdout/<repo>/ below). A hub-side eval step (NOT the Kata VM)
+# checks out the coder's df/issue-N branch, runs the hidden executable tests, and
+# asks a DIFFERENT-FAMILY LLM judge (Nova, vs the coder's Claude — defeats
+# self-preference bias) whether each plain-English scenario is satisfied. A
+# scenario PASSES iff its executable test is green AND the judge says yes >=2/3
+# runs. Gate = passRatio >= threshold. The coder is credential-less to the k8s
+# API and never clones the holdout path, so it provably cannot read or edit it.
+holdout:
+  enabled: true
+  # Fraction of scenarios that must pass for the gate to be green.
+  threshold: 0.90
+  # 2-of-3 majority per scenario smooths judge non-determinism.
+  judgeRuns: 3
+  judgeQuorum: 2
+  # The judge model — MUST be a different family than the coder (claude-sonnet).
+  # Bifrost passes Bedrock model IDs through directly (models: ["*"]); verified
+  # us.amazon.nova-pro-v1:0 → 200 on /anthropic.
+  judgeModel: us.amazon.nova-pro-v1:0
+  # Bifrost gateway the judge reaches (ClusterIP — same reason as the coder).
+  bifrostUrl: http://172.20.181.17:8080
+  # v1: report-only (advisory). Set true to make a failed gate fail the workflow.
+  blocking: false
+  # Node image for the eval step: needs git + node + the languages the executable
+  # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+
+# ── P3: Review roles (Security + DevOps) ─────────────────────────────────────
+# Two independent, read-only reviewers run as PARALLEL hub-side DAG steps (NOT in
+# the coder VM — the coder never grades itself). Each role is a pluggable slot
+# (docs §6.2). v1 backend "auto" = deterministic linters (the hard signal:
+# npm audit, secret scan, dangerous sinks; devops: Dockerfile/k8s hygiene) PLUS a
+# different-family LLM reviewer (Nova, advisory) — same test+judge split as the
+# holdout. The managed "aws-agent" backend is a swappable option for when that API
+# is available. Fable-5 deep-sec is deliberately NOT used here (400 via Bifrost +
+# data-retention caveat — see docs §6.2). Advisory in v1: posts commit statuses,
+# never fails the workflow unless blockSeverity is raised above "none".
+review:
+  enabled: true
+  # Backend per role: auto | linters | llm | aws-agent.
+  security:
+    backend: auto
+  devops:
+    backend: auto
+  # LLM reviewer model — MUST be a different family than the coder (claude-sonnet).
+  reviewModel: us.amazon.nova-pro-v1:0
+  bifrostUrl: http://172.20.181.17:8080
+  # Advisory by default. Raise to low|medium|high|critical to make a finding at or
+  # above that severity fail the workflow (per-severity blocking, docs §6.2).
+  blockSeverity: none
+  # Reuse the coder image (has node + npm audit + git).
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+
+# ── P3b: Iterate on PR comment ───────────────────────────────────────────────
+# A human comment on a Dark Factory PR routes back to the coder as a revision
+# request (docs §8). df-iterate resolves the PR → df/issue-<n>, then re-submits
+# df-run with iterate-note = the comment (coder appends it to SPEC.md and revises
+# the existing branch). Bounded to maxIterations rounds (label counter on the PR);
+# past the cap, a human breaks the tie.
+iterate:
+  enabled: true
+  maxIterations: 3
+
+# ── P4: Conditional deploy-test (content-aware) ──────────────────────────────
+# For PRs that touch deployable artifacts, a TRUSTED hub step validates the change
+# with the RIGHT tool for the artifact type (docs §9 / diagram B.4). This is the
+# only step that holds K8s access — never the untrusted coder. detect-deployable
+# classifies the change and emits kind = k8s | terraform | none:
+#   - k8s       → deploy into an ephemeral namespace, wait Ready, teardown (trap).
+#   - terraform → terraform init -backend=false && terraform validate (+ fmt check).
+#                 Validation only — no AWS creds, no apply (no real infra created).
+# deploy-test runs only when kind != none; advisory in v1.
+deployTest:
+  enabled: true
+  # Regex (grep -E) of changed files that mark each artifact kind. k8s takes
+  # precedence when a PR touches both.
+  k8sPatterns: "(Chart\\.yaml|/templates/|k8s/|deployment\\.ya?ml|Dockerfile)"
+  terraformPatterns: "\\.tf$"
+  # Where each kind's files live in the repo (dir or file). If absent, the step
+  # logs "nothing to test" and passes (advisory).
+  manifestPath: "k8s/"        # k8s apply target
+  terraformPath: "."          # terraform working dir (repo root by default)
+  # Purpose-built image with kubectl + terraform + node + git + curl (content-aware
+  # deploy-test needs both toolchains). Built from examples/dark-factory/deploy-test.
+  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0
+  # Overall step deadline and the per-workload readiness wait (k8s only).
+  timeoutSeconds: 600
+  readyTimeoutSeconds: 120
+  # Advisory in v1 — posts dark-factory/deploy-test but never fails the run.
+  blocking: false
+
+# ── P4: Success metrics (Argo-native Prometheus) ─────────────────────────────
+# df-run emits Prometheus metrics via its metrics: block (df_runs_total by status,
+# df_run_duration_seconds). Scraped from the Argo workflow-controller by the
+# platform Prometheus; Langfuse covers LLM-level cost/trace drill-down.
+metrics:
+  enabled: true
+
+# ── P4: Reaper CronJob ───────────────────────────────────────────────────────
+# Crash-net for teardown: sweeps stale ephemeral deploy-test namespaces and
+# abandoned df-run SandboxClaims older than reapAfterSeconds. Backs up the per-run
+# onExit teardown + the claim's own TTL.
+reaper:
+  enabled: true
+  schedule: "*/15 * * * *"      # every 15 min
+  reapAfterSeconds: 10800       # 3h — matches claimTtlSeconds
+  image: alpine/k8s:1.31.0      # kubectl + coreutils date
+
+# Trigger — Argo Events: GitHub webhook EventSource + Sensor → df-run Workflow.
+trigger:
+  argoEvents:
+    enabled: true
+    namespace: argo-events
+    eventbusReplicas: 3
+    # JetStream version — MUST match an entry in the argo-events controller-config
+    # jetstream.versions list (verified live: 'latest' → nats:2.10.10).
+    jetstreamVersion: latest
+    # GitHub repos whose issues fire the factory.
+    repositories:
+      - owner: elamaran11
+        names:
+          - dark-factory-sandbox
+    # Public URL GitHub posts webhooks to (ALB ingress host + endpoint).
+    # Left empty; supplied at deploy time from the ingress_domain_name
+    # cluster-secret annotation via the dark-factory registry valuesObject.
+    webhookUrl: ""
+    webhookEndpoint: /dark-factory
+    webhookPort: 12000
+    # Secret (in argo-events ns) with keys: token (GitHub API), webhook-secret (HMAC).
+    githubSecret: dark-factory-github
+    # Expose the EventSource via the platform ALB ingress for GitHub to reach it.
+    ingress:
+      enabled: true
+      # Left empty; supplied at deploy time from the ingress_domain_name
+      # cluster-secret annotation via the dark-factory registry valuesObject.
+      host: ""
+      path: /dark-factory
