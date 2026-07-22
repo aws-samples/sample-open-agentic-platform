@@ -78,6 +78,13 @@ kata-deploy:
         enabled: true
       clh:
         enabled: true
+    # kata-deploy 4.0.0 defaults defaultShim to qemu-runtime-rs (the Rust runtime),
+    # which is NOT in our enabled set (disableAll + only qemu/clh) → the installer
+    # aborts ("DEFAULT_SHIM 'qemu-runtime-rs' must be one of the configured SHIMS")
+    # and never removes the startup taint. Pin it to an enabled shim (clh — matches
+    # the warmpool's runtimeClassName: kata-clh).
+    defaultShim:
+      amd64: clh
 
 # Agent Sandbox capability chart — RuntimeClasses, coder SandboxTemplate,
 # SandboxWarmPool, and the egress NetworkPolicy. Sync-wave 2: after the operator
