@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
     # PSS = baseline (NOT restricted). This namespace hosts BOTH the coder
-    # sandboxes AND the agent-sandbox operator/kata-readiness — and the upstream
+    # sandboxes AND the agent-sandbox operator — and the upstream
     # operator + kata tooling are not restricted-compliant (they'd be blocked).
     # The coder sandboxes get their real isolation from the KATA micro-VM
     # boundary + the restricted securityContext baked into the SandboxTemplate

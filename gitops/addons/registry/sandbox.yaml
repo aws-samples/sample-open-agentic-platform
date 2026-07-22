@@ -32,7 +32,7 @@ agent-sandbox-operator:
 kata-deploy:
   namespace: kube-system
   chartName: kata-deploy
-  defaultVersion: '3.32.0'
+  defaultVersion: '4.0.0'
   # OCI chart at oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy.
   # Do NOT set chartNamespace — the appset would build chart=<ns>/<name>
   # (kata-containers/kata-deploy) producing a wrong OCI path. The namespace is
@@ -45,32 +45,45 @@ kata-deploy:
       - key: enable_agent_sandbox_kata
         operator: In
         values: ['true']
+  # NOTE: kata-deploy is installed as a TOP-LEVEL chart (not a subchart of
+  # agent-sandbox — see the comment above), so its values must sit at the top
+  # level of valuesObject. A `kata-deploy:` wrapper here is silently ignored by
+  # the chart (it reads .Values.nodeSelector / .Values.tolerations, NOT
+  # .Values.kata-deploy.*), which previously left the DaemonSet with empty
+  # scheduling and stranded it on the untainted Auto Mode nodes.
   valuesObject:
-    kata-deploy:
-      image:
-        reference: quay.io/kata-containers/kata-deploy
-        tag: '3.32.0'
-      nodeSelector:
-        kata-enabled: 'true'
-      tolerations:
-        - key: kata
-          operator: Equal
-          value: 'true'
-          effect: NoSchedule
-        - key: katacontainers.io/runtime-not-ready
-          operator: Exists
-          effect: NoSchedule
-      shims:
-        disableAll: true
-        qemu:
-          enabled: true
-        clh:
-          enabled: true
+    image:
+      reference: quay.io/kata-containers/kata-deploy
+      tag: '4.0.0'
+    nodeSelector:
+      kata-enabled: 'true'
+    tolerations:
+      - key: kata
+        operator: Equal
+        value: 'true'
+        effect: NoSchedule
+      - key: katacontainers.io/runtime-not-ready
+        operator: Exists
+        effect: NoSchedule
+    # kata-deploy 4.0.0 (PR kata-containers#13284) removes this startup taint
+    # itself as the FINAL install step (after the runtime is installed + the node
+    # labeled), gating kata pods until the runtime is ready. Replaces the external
+    # kata-readiness DaemonSet (removed from the agent-sandbox chart). Key must
+    # match the NodePool's startupTaint (katacontainers.io/runtime-not-ready).
+    startupTaints:
+      - 'katacontainers.io/runtime-not-ready:NoSchedule'
+    shims:
+      disableAll: true
+      qemu:
+        enabled: true
+      clh:
+        enabled: true
 
-# Agent Sandbox capability chart — RuntimeClasses, kata-readiness (removes the
-# runtime-not-ready startup taint), coder SandboxTemplate, SandboxWarmPool, and
-# the egress NetworkPolicy. Sync-wave 2: after the operator (wave 0) + kata
-# runtime (wave 1). Consumers (the Dark Factory, Flow B) then claim from the
+# Agent Sandbox capability chart — RuntimeClasses, coder SandboxTemplate,
+# SandboxWarmPool, and the egress NetworkPolicy. Sync-wave 2: after the operator
+# (wave 0) + kata runtime (wave 1). The runtime-not-ready startup taint is now
+# removed by kata-deploy 4.0.0 itself (startupTaints), so the old kata-readiness
+# DaemonSet is gone. Consumers (the Dark Factory, Flow B) then claim from the
 # warm pool via a SandboxClaim(warmPoolRef).
 agent-sandbox:
   namespace: agent-sandbox-system

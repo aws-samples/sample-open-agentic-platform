@@ -110,12 +110,9 @@ networkPolicy:
     bifrostPort: 8080
     reconcileSeconds: 30
 
-# ── kata-readiness ───────────────────────────────────────────────────────────
-# Removes the runtime-not-ready startup taint once kata-deploy finishes on a
-# node. Required whenever nodes carry that startup taint (the kata MNG does).
-kataReadiness:
-  enabled: true
-  image: alpine/k8s:1.31.0   # needs kubectl
+# NOTE: kata-readiness removed — kata-deploy 4.0.0 (PR kata-containers#13284)
+# removes the runtime-not-ready startup taint itself as its final install step
+# (see startupTaints in the kata-deploy registry entry, sandbox.yaml).
 
 # ── Warm pool ────────────────────────────────────────────────────────────────
 warmPool:
@@ -176,68 +173,3 @@ coderTemplate:
     limits: { cpu: "2", memory: 4Gi }
   # LLM gateway the coder reaches (this platform uses Bifrost, not LiteLLM).
   bifrostUrl: http://172.20.181.17:8080  # ClusterIP — Kata VM guest DNS cannot resolve cluster svc names (P2: fix VM dnsConfig)
-
-# ── Kata nested-virt node pool — GitOps-managed via Crossplane ────────────────
-# Kata micro-VMs need hardware-virtualization nodes, which EKS Auto Mode's
-# Bottlerocket nodes can't provide. This provisions a self-managed nested-virt
-# Managed Node Group + its LaunchTemplate (cpuOptions.nestedVirtualization) +
-# the required vpc-cni / kube-proxy addons — all as Crossplane managed resources
-# (templates 16/17/18), so ArgoCD owns the node-group INFRA end-to-end (no more
-# out-of-band eksctl/terraform). The MNG carries the kata taint/labels, so only
-# kata sandbox pods (SandboxTemplate) + kata-deploy land on it. The old
-# nodepool/*.tf|eksctl files remain as reference only. See nodepool/README.md.
-#
-# DISABLED by default and cluster-agnostic — flip nodepool.enabled + supply the
-# cluster-specific coordinates from the per-cluster overlay (NOT this chart
-# default) so the chart stays reusable:
-#   gitops/overlays/clusters/<clusterName>/agent-sandbox/values.yaml
-# On a cluster that already has a kata node group, the external-name annotations
-# in the templates ADOPT it in place (no recreate).
-nodepool:
-  enabled: false
-  # Also adopt/manage the vpc-cni + kube-proxy EKS addons (needed by the MNG).
-  # Leave false if the base platform already owns these addons.
-  manageAddons: false
-  region: us-west-2
-  # Crossplane ProviderConfig (provider-aws-eks / -ec2). "default" on this platform.
-  providerConfigName: default
-  # Node group shape — cluster-agnostic defaults, safe to keep in the chart.
-  nodegroupName: kata-sandbox
-  instanceType: c8i.4xlarge          # 8i family → exposes VT-x for nested virt
-  minSize: 0                          # scale-to-zero when no sandbox is claimed
-  desiredSize: 1
-  maxSize: 3
-  launchTemplateVersion: "$Latest"
-  #
-  # ── Cluster-specific coordinates — DO NOT hardcode in this chart. ──────────
-  # These are per-cluster and must be supplied by the per-cluster overlay, NOT
-  # baked into the chart default, so the chart stays reusable across clusters:
-  #     gitops/overlays/clusters/<clusterName>/agent-sandbox/values.yaml
-  # (This is the path the appset actually layers — verified against the live
-  # Application's valueFiles. An older gitops/addons/clusters/<c>/addons/... tree
-  # may still exist; it is NOT read.)
-  #
-  # NOTE: clusterEndpoint + clusterCA are NOT secrets — the CA is the cluster's
-  # PUBLIC api-server certificate (verification only, no private key) and the
-  # endpoint is public DNS; both ship in every kubeconfig. They're relocated to
-  # the overlay for chart hygiene/reusability, not because they're sensitive.
-  # They get baked into the LaunchTemplate userData (nodeadm NodeConfig) at Helm
-  # render time — a k8s Secret/env can't feed a Crossplane field, so they must be
-  # known at render time. (Dropping the custom amiId lets EKS auto-inject them
-  # and removes them from git entirely — a future refactor.)
-  #   clusterName:      <eks cluster name>   (also used for external-name adoption)
-  #   clusterEndpoint:  https://<id>.<region>.eks.amazonaws.com
-  #   clusterCA:        <base64 cluster certificate-authority data>
-  #   serviceCidr:      <cluster service IPv4 CIDR>
-  #   nodeRoleArn:      arn:aws:iam::<acct>:role/<kata-node-role>
-  #   subnetIds:        [ subnet-..., subnet-... ]
-  #   amiId:            <EKS-optimized AL2023 AMI for the cluster k8s version>
-  #   launchTemplateId: <existing LT id to ADOPT in place> (blank = create fresh)
-  clusterName: ""
-  clusterEndpoint: ""
-  clusterCA: ""
-  serviceCidr: ""
-  nodeRoleArn: ""
-  subnetIds: []
-  amiId: ""
-  launchTemplateId: ""
