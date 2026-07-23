@@ -99,7 +99,13 @@ networkPolicy:
   # live: closes the external-secrets/kube-api ClusterIP socket while keeping
   # Bifrost + public egress + DNS working. Only runs on the tainted kata node.
   clusteripFirewall:
-    enabled: true
+    # DISABLED: superseded by NetworkPolicy 30 (privateCidrsDenied lists the EKS
+    # service CIDR 172.20.0.0/16 explicitly, which blocks control-plane ClusterIPs
+    # on VPC-CNI without raw iptables) + Admin ClusterNetworkPolicy 31. Verified on
+    # spoke-dev: NP alone blocks the API-server ClusterIP and allows Bifrost. The
+    # iptables DaemonSet also over-broadly hooked the whole node FORWARD chain,
+    # blocking non-hostNetwork infra pods (e.g. kata-deploy) from the API server.
+    enabled: false
     # Runs in kube-system (privileged node infra home) — agent-sandbox-system
     # enforces `baseline` PodSecurity which forbids hostNetwork + NET_ADMIN.
     namespace: kube-system
