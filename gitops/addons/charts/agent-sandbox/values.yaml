@@ -24,24 +24,53 @@ operator:
 
 # ── Kata micro-VM runtime ────────────────────────────────────────────────────
 kata:
-  # Default VMM for coder sandboxes. Cloud Hypervisor (clh) boots fast and is
-  # the platform default; qemu and fc (Firecracker) are also installed.
-  defaultRuntimeClass: kata-clh
-  # RuntimeClasses to render. Each carries the nodeSelector + toleration that
-  # steers a pod onto the matching Karpenter kata pool.
+  # VMM the WARM POOL (SandboxTemplate) runs on — a key of runtimeClasses below.
+  # Flip this one value to swap the VMM for every warm/claimed sandbox:
+  #   clh  → Cloud Hypervisor (default; boots fast, nested-virt kata-nested pool)
+  #   qemu → QEMU            (same kata pool as clh — same kata-deploy runtime)
+  #   fc   → Firecracker     (SEPARATE kata-fc pool + kata-deploy-fc + devmapper;
+  #                           requires kata_nodepool kataFc + kata-deploy-fc enabled)
+  # All runtimeClasses are still RENDERED regardless (an ad-hoc pod may select any
+  # of them); `vmm` only steers the warm pool. Changing it recreates the
+  # SandboxTemplate → the pool refills onto the new VMM's nodes.
+  vmm: clh
+  # RuntimeClasses to render, keyed by VMM. EACH carries the nodeSelector +
+  # tolerations that steer a pod onto the MATCHING Karpenter pool — clh/qemu share
+  # the kata pool (taint `kata`, label katacontainers.io/kata-runtime), fc uses the
+  # firecracker pool (taint `kata-fc`, label katacontainers.io/kata-runtime-fc).
+  # The RuntimeClass admission controller force-merges this scheduling onto every
+  # pod that selects the class, so a workload only needs runtimeClassName.
   runtimeClasses:
-    - name: kata-clh
+    clh:
+      name: kata-clh
       handler: kata-clh
-    - name: kata-qemu
+      nodeSelector:
+        katacontainers.io/kata-runtime: "true"
+      tolerations:
+        - key: kata
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+    qemu:
+      name: kata-qemu
       handler: kata-qemu
-  # Node scheduling applied to every kata RuntimeClass.
-  nodeSelector:
-    katacontainers.io/kata-runtime: "true"
-  tolerations:
-    - key: kata
-      operator: Equal
-      value: "true"
-      effect: NoSchedule
+      nodeSelector:
+        katacontainers.io/kata-runtime: "true"
+      tolerations:
+        - key: kata
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+    fc:
+      name: kata-fc
+      handler: kata-fc
+      nodeSelector:
+        katacontainers.io/kata-runtime-fc: "true"
+      tolerations:
+        - key: kata-fc
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
 
 # ── NetworkPolicy (egress lockdown) ──────────────────────────────────────────
 networkPolicy:

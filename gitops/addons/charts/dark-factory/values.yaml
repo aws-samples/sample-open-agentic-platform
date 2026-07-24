@@ -30,7 +30,16 @@ coder:
   runTimeoutMinutes: 30
 
 bifrost:
-  url: http://172.20.181.17:8080  # ClusterIP (Kata VM guest DNS cannot resolve svc names)
+  # LLM gateway URL used by BOTH the in-VM coder and the hub-side holdout/review
+  # steps. Injected per-cluster from the `bifrost_url` cluster-secret annotation
+  # by the dark-factory registry entry (registry/sandbox.yaml), mirroring
+  # agent-sandbox's coderTemplate.bifrostUrl — so no hardcoded ClusterIP.
+  # Default = in-cluster svc DNS (works for the hub-side steps out of the box).
+  # CAVEAT (P2): the coder runs INSIDE a Kata VM whose guest DNS cannot resolve
+  # svc names, so on a cluster where the VM dnsConfig fix isn't in yet, set the
+  # `bifrost_url` annotation to a reachable ClusterIP (e.g. http://<clusterip>:8080)
+  # so the coder can reach Bifrost. The hub-side steps are fine with svc DNS.
+  url: http://bifrost.bifrost.svc.cluster.local:8080
 
 # ── Observability: LLM tracing → Langfuse (provided by Bifrost) ──────────────
 # LLM traces/cost/tokens are exported to Langfuse by BIFROST's telemetry plugin
@@ -84,12 +93,14 @@ holdout:
   # Bifrost passes Bedrock model IDs through directly (models: ["*"]); verified
   # us.amazon.nova-pro-v1:0 → 200 on /anthropic.
   judgeModel: us.amazon.nova-pro-v1:0
-  # Bifrost gateway the judge reaches (ClusterIP — same reason as the coder).
-  bifrostUrl: http://172.20.181.17:8080
+  # Bifrost gateway the judge reaches — this is a HUB-SIDE step (not in the Kata
+  # VM), so it uses the shared bifrost.url above (svc DNS resolves here).
   # v1: report-only (advisory). Set true to make a failed gate fail the workflow.
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
+  # NOTE: ECR account 940019131157 (+ the coder/deploy-test image tags) is an
+  # EXAMPLE registry — repoint every dark-factory image below at your own ECR.
   evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
 
 # ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
@@ -330,6 +341,9 @@ trigger:
     # jetstream.versions list (verified live: 'latest' → nats:2.10.10).
     jetstreamVersion: latest
     # GitHub repos whose issues fire the factory.
+    # EXAMPLE VALUE — this is the openclaw author's demo repo. Override with YOUR
+    # own owner/repo(s); the holdout/<owner>-<repo>/ fixtures under this chart are
+    # likewise example scenarios tied to dark-factory-sandbox.
     repositories:
       - owner: elamaran11
         names:

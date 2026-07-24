@@ -28,7 +28,7 @@ const { execFileSync } = require("child_process");
 const REPO_DIR = process.env.REPO_DIR || "/workspace/repo";
 const DIFF = (() => { try { return fs.readFileSync(process.env.DIFF || "/tmp/diff.patch", "utf8"); } catch { return ""; } })();
 const SCENARIOS = process.env.SCENARIOS || "/holdout/scenarios.json";
-const BIFROST_URL = (process.env.BIFROST_URL || "http://172.20.181.17:8080").replace(/\/+$/, "");
+const BIFROST_URL = (process.env.BIFROST_URL || "http://bifrost.bifrost.svc.cluster.local:8080").replace(/\/+$/, "");
 const JUDGE_MODEL = process.env.JUDGE_MODEL || "us.amazon.nova-pro-v1:0";
 const JUDGE_RUNS = parseInt(process.env.JUDGE_RUNS || "3", 10);
 const JUDGE_QUORUM = parseInt(process.env.JUDGE_QUORUM || "2", 10);

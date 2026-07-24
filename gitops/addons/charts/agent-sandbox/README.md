@@ -33,7 +33,7 @@ only *runs* on spoke-dev (prod pool stays dormant).
 
 | Value | Default | Purpose |
 |---|---|---|
-| `kata.defaultRuntimeClass` | `kata-clh` | VMM for coder sandboxes |
+| `kata.vmm` | `clh` | VMM the warm pool runs on — flip to `qemu` (same kata pool) or `fc` (Firecracker; needs the kata-fc pool + kata-deploy-fc). Selects a key of `kata.runtimeClasses`. |
 | `warmPool.targetIdle` | `3` | Idle sandboxes kept ready |
 | `warmPool.idleScaleToZeroSeconds` | `900` | Idle → `replicas:0` (PVC kept) |
 | `warmPool.reapAfterSeconds` | `3600` | Reap abandoned claimed sandboxes |

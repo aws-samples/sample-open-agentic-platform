@@ -4,8 +4,10 @@
 #   wave 1  kata-deploy             (Kata runtime on kata-capable MNG nodes)
 #   wave 2  agent-sandbox           (RuntimeClasses, SandboxTemplate, warm pool)
 # Enabled on DEV only (gitops/overlays/environments/dev/enabled-addons.yaml).
-# The kata-capable node layer is NOT GitOps-managed — see
-# gitops/addons/charts/agent-sandbox/nodepool/README.md.
+# The kata-capable node layer IS GitOps-managed now, via the `kata-nodepool`
+# addon below (self-managed Karpenter EC2NodeClass + NodePool) over the platform
+# `karpenter` controller addon — superseding the out-of-band MNG the old
+# gitops/addons/charts/agent-sandbox/nodepool/README.md describes.
 
 # Upstream agent-sandbox operator (v0.5.1): the controller + CRDs. Must land
 # before the kata runtime (wave 1) and the capability chart's CRs (wave 2).
@@ -24,7 +26,7 @@ agent-sandbox-operator:
         values: ['true']
 
 # kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
-# kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
+# kata-qemu) on the tainted kata nodes. Separate app (not a subchart dep of
 # agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by
 # enable_agent_sandbox_kata — only clusters with a kata-capable nested-virt MNG
 # (see docs/dark-factory §12a) should carry that label. Sync-wave 1: runtime is
@@ -86,6 +88,97 @@ kata-deploy:
     defaultShim:
       amd64: clh
 
+# kata-deploy-fc — a SECOND kata-deploy 4.0.0 release for the FIRECRACKER runtime,
+# targeting the kata-fc nodes (kata-nodepool kataFc/kataFcMetal pools). Firecracker
+# can't share the clh/qemu install: it needs its own fc shim (snapshotter=devmapper,
+# which the node userData pre-configures) and its objects would collide with the
+# main kata-deploy release. env.multiInstallSuffix=fc renames the chart's fixed
+# objects (kata-deploy-sa-fc, -role-fc, -rb-fc, DaemonSet kata-deploy-fc) so the two
+# coexist. runtimeClasses.enabled=false: the kata-fc RuntimeClass is owned by the
+# agent-sandbox chart (10-runtimeclasses.yaml), not duplicated here. Gated by
+# enable_agent_sandbox_kata_fc — OFF by default (fc path is unverified on this
+# platform). Sync-wave 1: same as kata-deploy (runtime before the warm pool).
+kata-deploy-fc:
+  namespace: kube-system
+  chartName: kata-deploy
+  defaultVersion: '4.0.0'
+  chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  selector:
+    matchExpressions:
+      - key: enable_agent_sandbox_kata_fc
+        operator: In
+        values: ['true']
+  valuesObject:
+    image:
+      reference: quay.io/kata-containers/kata-deploy
+      tag: '4.0.0'
+    # Rename the fixed objects with an -fc suffix so this release coexists with the
+    # main kata-deploy (qemu/clh) release in the same namespace.
+    env:
+      multiInstallSuffix: fc
+    # agent-sandbox owns the kata-fc RuntimeClass; don't create a duplicate here.
+    runtimeClasses:
+      enabled: false
+    # Land only on the fc nodes (kata-nodepool sets kata-fc-enabled + the kata-fc
+    # taint + the runtime-not-ready startup taint).
+    nodeSelector:
+      kata-fc-enabled: 'true'
+    tolerations:
+      - key: kata-fc
+        operator: Equal
+        value: 'true'
+        effect: NoSchedule
+      - key: katacontainers.io/runtime-not-ready
+        operator: Exists
+        effect: NoSchedule
+    # Self-removed once the fc runtime is installed (matches the kata-fc NodePool
+    # startupTaint), gating fc pods until the node is ready.
+    startupTaints:
+      - 'katacontainers.io/runtime-not-ready:NoSchedule'
+    # Only the fc shim (snapshotter=devmapper — the node userData builds the
+    # thin-pool + wires the containerd devmapper snapshotter; kata-deploy-fc adds
+    # only the runtimes.kata-fc handler).
+    shims:
+      disableAll: true
+      fc:
+        enabled: true
+    # 4.0.0 defaults defaultShim to qemu-runtime-rs (not enabled here) → the
+    # installer aborts and never removes the startup taint. Pin it to fc.
+    defaultShim:
+      amd64: fc
+
+# kata-nodepool — the self-managed Karpenter EC2NodeClass + NodePool that
+# provision the nested-virt kata nodes (the consuming layer over the platform
+# `karpenter` controller addon). Replaces the out-of-band self-managed MNG the
+# old nodepool/README describes: subnets, cluster SG and node role are DISCOVERED
+# from cluster tags, so no AWS infra is created out-of-band. Gated by
+# enable_kata_nodepool. Requires the `karpenter` controller addon (CRDs + IAM,
+# platform registry) and enable_agent_sandbox_kata (runtime) on the same cluster.
+# Sync-wave 1: the node layer — the NodePool exists before the warm pool (wave 2)
+# creates the pending pods that trigger provisioning. The EC2NodeClass/NodePool
+# CRDs (karpenter.k8s.aws / karpenter.sh) are owned by the platform karpenter app
+# (a separate Application); until it has synced them, this app's dry-run would
+# fail. The two CRs carry a per-resource SkipDryRunOnMissingResource sync-option
+# annotation (the appset-chart replaces syncPolicy wholesale, so a registry-level
+# syncOptions key would be ignored) + the _defaults retry (limit -1) lets it
+# converge once the CRDs land.
+kata-nodepool:
+  namespace: kube-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/kata-nodepool'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  selector:
+    matchExpressions:
+      - key: enable_kata_nodepool
+        operator: In
+        values: ['true']
+  valuesObject:
+    aws:
+      clusterName: '{{.metadata.annotations.aws_cluster_name}}'
+
 # Agent Sandbox capability chart — RuntimeClasses, coder SandboxTemplate,
 # SandboxWarmPool, and the egress NetworkPolicy. Sync-wave 2: after the operator
 # (wave 0) + kata runtime (wave 1). The runtime-not-ready startup taint is now
@@ -121,6 +214,14 @@ dark-factory:
   selectorMatchLabels:
     environment: control-plane
   valuesObject:
+    # Bifrost gateway URL — injected from the bifrost_url cluster-secret annotation
+    # (same default+index pattern as agent-sandbox's coderTemplate.bifrostUrl), so
+    # the in-VM coder + hub-side holdout/review steps share one per-cluster value
+    # instead of a hardcoded ClusterIP. Defaults to svc DNS when the annotation is
+    # absent. On a cluster where the Kata VM guest can't resolve svc DNS, set the
+    # annotation to a reachable ClusterIP so the coder reaches Bifrost.
+    bifrost:
+      url: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
     # Derive the webhook URL + ingress host from the cluster-secret
     # ingress_domain_name annotation (set per-cluster by the platform), instead
     # of a hardcoded domain in the chart defaults. Mirrors the agent-gateway

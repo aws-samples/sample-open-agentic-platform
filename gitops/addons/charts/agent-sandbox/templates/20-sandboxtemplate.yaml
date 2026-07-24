@@ -30,12 +30,16 @@ spec:
         {{- include "agent-sandbox.selectorLabels" . | nindent 8 }}
         agent-sandbox.io/role: coder
     spec:
-      runtimeClassName: {{ .Values.kata.defaultRuntimeClass }}
+      {{- /* Warm-pool VMM selected by kata.vmm (a key of kata.runtimeClasses).
+             runtimeClassName + matching node scheduling both come from that one
+             entry, so flipping kata.vmm moves the pool onto the right pool. */ -}}
+      {{- $rc := index .Values.kata.runtimeClasses .Values.kata.vmm | required (printf "kata.vmm=%q has no matching entry in kata.runtimeClasses" .Values.kata.vmm) }}
+      runtimeClassName: {{ $rc.name }}
       automountServiceAccountToken: false
       nodeSelector:
-        {{- toYaml .Values.kata.nodeSelector | nindent 8 }}
+        {{- toYaml $rc.nodeSelector | nindent 8 }}
       tolerations:
-        {{- toYaml .Values.kata.tolerations | nindent 8 }}
+        {{- toYaml $rc.tolerations | nindent 8 }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

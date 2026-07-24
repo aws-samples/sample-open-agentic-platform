@@ -5,18 +5,18 @@ scheduling.nodeSelector + tolerations below onto the pod, steering it onto the
 matching Karpenter kata pool. The runtime binaries themselves are installed on
 the node by kata-deploy (a prerequisite provided by the base platform).
 */ -}}
-{{- range .Values.kata.runtimeClasses }}
+{{- range $vmm, $rc := .Values.kata.runtimeClasses }}
 ---
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
-  name: {{ .name }}
+  name: {{ $rc.name }}
   labels:
     {{- include "agent-sandbox.labels" $ | nindent 4 }}
-handler: {{ .handler }}
+handler: {{ $rc.handler }}
 scheduling:
   nodeSelector:
-    {{- toYaml $.Values.kata.nodeSelector | nindent 4 }}
+    {{- toYaml $rc.nodeSelector | nindent 4 }}
   tolerations:
-    {{- toYaml $.Values.kata.tolerations | nindent 4 }}
+    {{- toYaml $rc.tolerations | nindent 4 }}
 {{- end }}

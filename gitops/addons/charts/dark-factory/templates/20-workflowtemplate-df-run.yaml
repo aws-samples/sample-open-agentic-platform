@@ -352,7 +352,7 @@ spec:
                 name: {{ .Values.github.tokenSecret }}
                 key: {{ .Values.github.tokenKey }}
           - name: BIFROST_URL
-            value: {{ .Values.holdout.bifrostUrl | quote }}
+            value: {{ .Values.bifrost.url | quote }}
           - name: JUDGE_MODEL
             value: {{ .Values.holdout.judgeModel | quote }}
           - name: JUDGE_RUNS
