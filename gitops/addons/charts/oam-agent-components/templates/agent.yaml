@@ -64,6 +64,9 @@ spec:
         				containers: [{
         					name:  context.name
         					image: parameter.image
+        					if parameter.observability.mode == "decentralized" {
+        						command: ["opentelemetry-instrument", "python", "-m", "app.main"]
+        					}
         					ports: [{
         						name:          "a2a"
         						containerPort: 8083
