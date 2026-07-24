@@ -40,6 +40,7 @@ enabledAddons:
   cni_metrics_helper: false
   # Platform
   crossplane: true
+  platform_manifests_bootstrap: true
   kro: false
   kro_manifests: false
   kro_manifests_hub: false
