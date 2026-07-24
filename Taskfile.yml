@@ -303,6 +303,10 @@ tasks:
         kubectl --context {{.HUB_CLUSTER_NAME}} annotate externalsecret fleet-secret-hub -n argocd \
           force-sync=$(date +%s) --overwrite
         printf '✓ Fleet secret refresh triggered\n'
+      # Run the platform's full observability seeding (AMP creds, Grafana API key,
+      # Keycloak SAML update, spoke scraper data). This populates hub/secrets with
+      # the fields that grafana-admin-credentials and grafana-amp-creds ExternalSecrets need.
+      - cd {{.PLATFORM_DIR}} && task kind-crossplane:secrets-manager:seed-observability
 
   # ─── Ingress / Domain Post-Install ───────────────────────────────────────────
 
