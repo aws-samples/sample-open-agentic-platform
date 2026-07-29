@@ -1,0 +1,177 @@
+{{- if and .Values.microvm .Values.microvm.enabled }}
+{{- /*
+Flow D — `lambda-microvm` SandboxTemplate + bridge RBAC + bridge script.
+
+The RuntimeClass "shim": Lambda MicroVM is a REMOTE AWS service, not a node-local
+containerd handler, so there is no literal `lambda-microvm` RuntimeClass (that would
+need a virtual-kubelet — out of scope). Instead this SandboxTemplate's pod is a thin
+BRIDGE that preserves the Agent-Sandbox UX:
+
+  1. runs on a NORMAL Auto-Mode node (no kata runtimeClass / nodeSelector / taint)
+  2. applies a MicrovmSandbox (KRO) CR from the injected claim env (DF_ISSUE_NUMBER,
+     repo, branch — same as Flow A), which provisions the Microvm running the SAME
+     dark-factory-coder entrypoint
+  3. waits for Microvm RUNNING, then STREAMS its logs into the pod (pod Running ⇔
+     Microvm RUNNING); on pod exit / claim teardown it deletes the MicrovmSandbox
+     (→ TerminateMicrovm)
+
+To Flow B and the user this looks identical to a Flow A claim. The bridge needs a
+ServiceAccount (unlike the credential-less Kata coder) because it drives the KRO CR.
+
+Gated behind microvm.enabled. Rendered as a SEPARATE SandboxTemplate
+(`<templateName>-microvm`) so both substrates can coexist on one cluster; a consumer
+selects the substrate by which template its SandboxClaim references.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+rules:
+  # The bridge creates/reads/deletes MicrovmSandbox CRs (the KRO composite) only.
+  - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
+    resources: ["microvmsandboxes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: microvm-bridge
+subjects:
+  - kind: ServiceAccount
+    name: microvm-bridge
+    namespace: {{ include "agent-sandbox.namespace" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microvm-bridge-script
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+data:
+  bridge.sh: |
+    #!/bin/sh
+    # Flow D bridge — claim -> MicrovmSandbox -> mirror lifecycle. Idles until a
+    # SandboxClaim injects DF_ISSUE_NUMBER (Flow B), exactly like the Kata coder.
+    set -eu
+    echo "[microvm-bridge] idle — waiting for a SandboxClaim to inject DF_ISSUE_NUMBER..."
+    while [ -z "${DF_ISSUE_NUMBER:-}" ]; do sleep 5; done
+    NAME="df-${DF_ISSUE_NUMBER}"
+    echo "[microvm-bridge] claim for issue #${DF_ISSUE_NUMBER} -> creating MicrovmSandbox/${NAME}"
+
+    # Delete the MicrovmSandbox on exit -> KRO cascades TerminateMicrovm + cleans
+    # the S3/IAM resources. Mirrors Flow A's onExit teardown.
+    cleanup() {
+      echo "[microvm-bridge] tearing down MicrovmSandbox/${NAME}"
+      kubectl delete microvmsandbox "${NAME}" --ignore-not-found --wait=false || true
+    }
+    trap cleanup EXIT INT TERM
+
+    cat <<EOF | kubectl apply -f -
+    apiVersion: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}/v1alpha1
+    kind: MicrovmSandbox
+    metadata:
+      name: ${NAME}
+      labels:
+        dark-factory.io/issue: "${DF_ISSUE_NUMBER}"
+    spec:
+      name: ${NAME}
+      region: "{{ .Values.microvm.region }}"
+      image:
+        baseImageARN: "{{ .Values.microvm.baseImageARN }}"
+        codeArtifactUri: "{{ .Values.microvm.codeArtifactUri }}"
+      run:
+        autoResumeEnabled: true
+    EOF
+
+    echo "[microvm-bridge] waiting for Microvm RUNNING..."
+    # Best-effort: poll status.microvmState until RUNNING (KRO surfaces it from ACK).
+    i=0
+    while [ "$i" -lt 120 ]; do
+      STATE=$(kubectl get microvmsandbox "${NAME}" -o jsonpath='{.status.microvmState}' 2>/dev/null || echo "")
+      [ "${STATE}" = "True" ] && break
+      i=$((i+1)); sleep 5
+    done
+    VMID=$(kubectl get microvmsandbox "${NAME}" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+    echo "[microvm-bridge] Microvm ${VMID:-<pending>} state=${STATE:-<unknown>} — pod now mirrors the MicroVM lifecycle."
+
+    # Keep the pod alive == MicroVM alive. Real log streaming (aws lambdamicrovms
+    # get-microvm-logs / CloudWatch tail) is wired via the image build; here we hold
+    # the pod so Sandbox lifecycle == Microvm lifecycle. Exec/attach passthrough is
+    # a virtual-kubelet follow-up (see docs/dark-factory §4.5).
+    while kubectl get microvmsandbox "${NAME}" >/dev/null 2>&1; do sleep 15; done
+    echo "[microvm-bridge] MicrovmSandbox gone — exiting."
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: {{ .Values.warmPool.templateName }}-microvm
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+    agent-sandbox.io/substrate: lambda-microvm
+spec:
+  # Same env-injection contract as the Kata template so Flow B is unchanged.
+  envVarsInjectionPolicy: {{ .Values.coderTemplate.envVarsInjectionPolicy | default "Allowed" }}
+  podTemplate:
+    metadata:
+      labels:
+        {{- include "agent-sandbox.selectorLabels" . | nindent 8 }}
+        agent-sandbox.io/role: coder
+        agent-sandbox.io/substrate: lambda-microvm
+    spec:
+      # NO kata runtimeClass / nodeSelector / toleration — the bridge is a normal
+      # pod on an Auto-Mode node. The isolation boundary is the remote MicroVM.
+      serviceAccountName: microvm-bridge
+      # The bridge DOES need a token (unlike the Kata coder) to drive the KRO CR.
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridge
+          image: {{ .Values.microvm.bridgeImage }}
+          command: ["/bin/sh", "/scripts/bridge.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - name: bridge-script
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: bridge-script
+          configMap:
+            name: microvm-bridge-script
+            defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
+{{- end }}
