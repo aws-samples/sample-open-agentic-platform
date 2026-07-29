@@ -26,6 +26,7 @@ spokes as normal deployments.
 2. [Two flows at a glance](#2-two-flows-at-a-glance)
 3. [Flow A — Agent Sandbox capability](#3-flow-a--agent-sandbox-capability-permanent-platform-feature)
 4. [Flow B — the Dark Factory pipeline](#4-flow-b--the-dark-factory-pipeline)
+   - [Flow D — Lambda MicroVM substrate (alternative to Flow A)](#45-flow-d--lambda-microvm-substrate-alternative-to-flow-a)
 5. [The pluggable coding assistant](#5-the-pluggable-coding-assistant)
 6. [Independent verification](#6-independent-verification-the-heart-of-the-pattern)
 7. [Live status in the PR](#7-live-status-in-the-pr)
@@ -83,6 +84,15 @@ useful on its own and the factory is a consumer of it.
 > **Why split them?** The sandbox capability is generically useful (any agent workload can claim
 > an isolated VM). The Dark Factory is one *consumer* of that capability. Keeping them separate
 > means the isolation substrate can ship, be tested, and be reused independently of the factory.
+
+> **Flow D — a second substrate.** Flow A's isolation boundary is a **Kata micro-VM pod** on a
+> platform-owned nested-virt node group. **Flow D** offers an *alternative* Flow-A substrate — an
+> **AWS Lambda MicroVM** (serverless micro-VM, no node group) provisioned via the ACK `lambdamicrovms`
+> controller and composed by a single **KRO `ResourceGraphDefinition`**. Flow B is unchanged and can
+> target either substrate through the same `SandboxClaim` contract. See
+> [§4.5](#45-flow-d--lambda-microvm-substrate-alternative-to-flow-a) and
+> [`diagrams/flow-d-microvm-sandbox.md`](diagrams/flow-d-microvm-sandbox.md). *(Flow C is reserved for
+> other work.)*
 
 > **Why the hub, not a spoke?** The Dark Factory is a **pre-dev build/author** activity: it *writes*
 > code and needs GitHub write access. That belongs on the **hub — the control/build plane** — not on
@@ -253,6 +263,65 @@ UI — the substrate for scaling across many concurrent issues.
 |---|---|---|
 | *"Add a `weather-agent` to the examples"* | Deploy into an **ephemeral namespace** on the hub → run holdout scenarios → delete namespace | Namespace + branch artifacts |
 | *"Build an EKS cluster with X"* | **Dry-run / crossplane-render** by default; a `deep-test` label spins a **real ephemeral `PlatformCluster`** (appmod-blueprints composition) | Delete the `PlatformCluster` claim |
+
+---
+
+## 4.5. Flow D — Lambda MicroVM substrate (alternative to Flow A)
+
+> 📊 **See the diagrams:** [`diagrams/flow-d-microvm-sandbox.md`](diagrams/flow-d-microvm-sandbox.md)
+> (substrate architecture + platform/app ownership split + the RuntimeClass-shim bridge).
+
+Flow A's isolation boundary is a **Kata micro-VM pod** on a platform-owned nested-virt node group.
+**Flow D is a second Flow-A substrate**: an **AWS Lambda MicroVM** — a *serverless* micro-VM with no
+node group to run or pay for while idle, per-claim lifecycle, and sub-second warm starts. Flow B is
+unchanged: it still creates a `SandboxClaim`, a pod still shows up, and the **same `dark-factory-coder`**
+runs its coding/testing loop — except the coder executes inside a Lambda MicroVM. *(Flow C is reserved
+for other work; this substrate is Flow D.)*
+
+### How it's built — KRO RGD over ACK primitives
+
+| Layer | Mechanism | Notes |
+|---|---|---|
+| **Composition** | **Managed KRO** (EKS Capability) + one `MicrovmSandbox` `ResourceGraphDefinition` | One CR expands into all primitives below |
+| **GA primitives** | **Managed ACK** (EKS Capability) — `iam` Role, `s3` Bucket | AWS-run; the image store + build/exec roles |
+| **MicroVM primitives** | **Self-managed ACK** — the pre-GA `lambdamicrovms` controller | `MicrovmImage` + `Microvm` CRDs (`lambdamicrovms.services.k8s.aws/v1alpha1`) |
+
+> **Why self-managed for the MicroVM controller?** Managed ACK bundles only controllers whose service
+> is **GA upstream**. `lambdamicrovms` is **pre-GA** (`v1alpha1`), so it isn't in Managed ACK yet — it
+> runs as its own GitOps addon. **Managed ACK + self-managed lambdamicrovms coexist** (different CRD
+> groups → no conflict). When `lambdamicrovms` goes GA, delete the self-managed addon and Managed ACK
+> adopts it — **the RGD is unchanged**. This "install both now" posture is deliberate and futuristic.
+
+### Platform-owned vs app-owned (encoded in the two ACK CRDs)
+
+- **Platform owns the image/substrate** — declarative, ACK-managed: `MicrovmImage`
+  (`baseImageARN`, `buildRoleArn`, `codeArtifact.uri` in S3, egress connectors). The image is built
+  **from the existing `dark-factory-coder` image** + its `entrypoint.js`.
+- **App teams own the instance lifecycle** — `Microvm` (`imageIdentifier`, `executionRoleArn`,
+  `ingress/egressNetworkConnectors`, `idlePolicy{autoResumeEnabled, maxIdleDurationSeconds,
+  suspendedDurationSeconds}`) — created per claim, torn down with it.
+
+The single `MicrovmSandbox` RGD surfaces both halves so each owner sets its own fields, while
+consumers see just one CRD.
+
+### The RuntimeClass shim (claim → pod → MicroVM)
+
+A literal K8s `RuntimeClass` (like `kata-clh`) maps to a **node-local containerd handler**; Lambda
+MicroVM is a **remote AWS service**, so a true node-level RuntimeClass would require a virtual-kubelet
+provider (a large Go runtime — **out of scope**). Flow D instead ships a **`lambda-microvm`
+SandboxTemplate variant** whose pod is a lightweight **bridge**: it applies the `MicrovmSandbox` CR,
+then **streams the MicroVM's logs into the pod** and maps lifecycle (pod Running ⇔ `Microvm` RUNNING;
+pod exit → `TerminateMicrovm`). To Flow B and the user the UX is identical to Flow A. Interactive
+exec/attach passthrough is **best-effort**; full fidelity is a virtual-kubelet follow-up.
+
+### Delivery & status
+
+Shipped as GitOps, **disabled by default** (like the kata nodepool): a `microvm:` values block gates
+the RGD + SandboxTemplate + self-managed controller addon; the hub overlay carries cluster-specific
+values. The platform-capability enablement (Managed ACK + Managed KRO) lands separately in the
+**appmod-blueprints** platform repo (they're EKS Capabilities, like the Managed ArgoCD the hub already
+runs). This PR delivers the **design + GitOps scaffold**; the live end-to-end path (enable capabilities
+→ sync controller → run a MicroVM coder) is the follow-up.
 
 ---
 
