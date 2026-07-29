@@ -235,3 +235,36 @@ nodepool:
   subnetIds: []
   amiId: ""
   launchTemplateId: ""
+
+# ── Flow D — Lambda MicroVM substrate (alternative to the Kata nodepool) ──────
+# A SECOND Agent-Sandbox substrate: instead of a Kata pod on the nested-virt node
+# group, the coder runs in an AWS Lambda MicroVM provisioned by the ACK
+# lambdamicrovms controller and composed by a single KRO ResourceGraphDefinition
+# (templates/50-rgd-microvm-sandbox.yaml). A `lambda-microvm` SandboxTemplate
+# bridge (templates/51-...) preserves the Agent-Sandbox UX. See docs/dark-factory
+# §4.5 and diagrams/flow-d-microvm-sandbox.md.
+#
+# DISABLED by default (like the kata nodepool): flip enabled=true on a cluster that
+# has the Managed KRO + Managed ACK capabilities and the self-managed
+# ack-lambdamicrovms controller (addons.yaml). Cluster-specific ARNs belong in the
+# per-cluster overlay, NOT here.
+microvm:
+  enabled: false
+  region: us-west-2
+  # API group the generated MicrovmSandbox CRD is served under (KRO schema.group).
+  apiGroup: sandbox.agents.x-k8s.io
+  # Bridge pod image: reuse an image with kubectl (applies the MicrovmSandbox CR)
+  # + the AWS CLI (streams MicroVM logs). alpine/k8s bundles kubectl.
+  bridgeImage: alpine/k8s:1.31.0
+  # The coder code-artifact + base image are cluster/account specific → overlay.
+  # image:
+  #   baseImageARN:    arn:aws:lambdamicrovms:<region>:<acct>:image/<base>
+  #   codeArtifactUri: s3://<bucket>/dark-factory-coder/<version>.zip
+  baseImageARN: ""
+  codeArtifactUri: ""
+  # Safe cluster-agnostic defaults for the RGD schema (overlay sets the ARNs).
+  defaults:
+    maxIdleDurationSeconds: 900
+    suspendedDurationSeconds: 300
+    ingressConnectorARN: ""
+    egressConnectorARN: ""
