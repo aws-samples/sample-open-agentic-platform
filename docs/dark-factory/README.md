@@ -287,10 +287,16 @@ for other work; this substrate is Flow D.)*
 | **MicroVM primitives** | **Self-managed ACK** — the pre-GA `lambdamicrovms` controller | `MicrovmImage` + `Microvm` CRDs (`lambdamicrovms.services.k8s.aws/v1alpha1`) |
 
 > **Why self-managed for the MicroVM controller?** Managed ACK bundles only controllers whose service
-> is **GA upstream**. `lambdamicrovms` is **pre-GA** (`v1alpha1`), so it isn't in Managed ACK yet — it
+> is **GA upstream** (see the [ACK community services / GA list](https://aws-controllers-k8s.github.io/community/docs/community/services/)).
+> `lambdamicrovms` is **pre-GA** (`v1alpha1`, not on that list), so it isn't in Managed ACK yet — it
 > runs as its own GitOps addon. **Managed ACK + self-managed lambdamicrovms coexist** (different CRD
 > groups → no conflict). When `lambdamicrovms` goes GA, delete the self-managed addon and Managed ACK
 > adopts it — **the RGD is unchanged**. This "install both now" posture is deliberate and futuristic.
+>
+> The **Managed KRO + Managed ACK capabilities themselves** are enabled at the platform layer in the
+> **appmod-blueprints** repo (an EKS Capability toggle) — see that repo's
+> `docs/EKS-Capabilities-KRO-ACK-Setup.md`. This repo owns only the **self-managed `lambdamicrovms`
+> controller + the KRO `MicrovmSandbox` RGD + the sandbox shim** (Flow D).
 
 ### Platform-owned vs app-owned (encoded in the two ACK CRDs)
 
