@@ -50,6 +50,37 @@ enabledAddons:
   kubevela: true
   devlake: false
   gitlab: false
+  # Self-managed Karpenter + the Kata node layer, running ALONGSIDE EKS Auto Mode.
+  #
+  # STEP 1 of moving the sandbox onto the hub. The Dark Factory orchestrator runs
+  # here (argo + argo-events), and its claim step creates a SandboxClaim with no
+  # cross-cluster mechanism — so the warm pool has to live on the same cluster.
+  # That requires kata-capable nodes, which Auto Mode's Bottlerocket nodes are not.
+  #
+  #   karpenter      controller + Crossplane IAM (platform addon). Coexists with
+  #                  Auto Mode by nodeClassRef.group partition: Auto Mode owns
+  #                  eks.amazonaws.com, self-managed owns karpenter.k8s.aws.
+  #   kata_nodepool  the consuming layer (EC2NodeClass + NodePool). Subnets, cluster
+  #                  SG and node role are discovered from cluster tags — verified
+  #                  present on hub — so no infra is created out-of-band.
+  #
+  # A self-managed node also needs the vpc-cni + kube-proxy EKS addons (Auto Mode's
+  # built-in networking covers only its OWN nodes). Hub is a pure Auto Mode cluster
+  # with no existing owner for those addons, so node.manageAddons is turned on in
+  # gitops/overlays/clusters/hub/karpenter/values.yaml — which reaches the
+  # platform-owned karpenter chart via the external-overlay-repo ("layer 5")
+  # wiring in gitops/fleet/hub/values.yaml.
+  #
+  # STEP 2 (separate change): move agent_sandbox + agent_sandbox_kata here and
+  # disable them on the dev overlay.
+  #
+  # NOTE the gate for step 2 is NOT "a kata node exists" — Karpenter is
+  # demand-driven, so the kata NodePool sits at 0 nodes until a pending pod needs
+  # it, and the warm pool created by agent_sandbox IS that demand. The gate is
+  # instead: the vpc-cni + kube-proxy Addon MRs are Ready on hub, and the
+  # EC2NodeClass + NodePool exist. The node then appears once step 2 lands.
+  karpenter: true
+  kata_nodepool: true
   # ACK controllers
   ack_iam: false
   ack_eks: false
