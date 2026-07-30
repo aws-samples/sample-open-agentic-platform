@@ -25,6 +25,43 @@ logger = logging.getLogger(__name__)
 _model: Optional[OpenAIModel] = None
 _mcp_tools: list = []
 _mcp_exit_stack: Optional[ExitStack] = None
+_agentcore_tools: list = []
+
+
+def _get_agentcore_tools() -> list:
+    """Initialize AgentCore tools (CodeInterpreter, Browser) based on env config."""
+    global _agentcore_tools
+    if _agentcore_tools:
+        return _agentcore_tools
+
+    tools = []
+
+    # CodeInterpreter
+    if config.CODE_INTERPRETER_ID:
+        try:
+            from strands_tools.code_interpreter import AgentCoreCodeInterpreter
+            ci = AgentCoreCodeInterpreter(region=config.CODE_INTERPRETER_REGION)
+            tools.append(ci.code_interpreter)
+            logger.info(f"AgentCore CodeInterpreter initialized (region={config.CODE_INTERPRETER_REGION})")
+        except ImportError:
+            logger.warning("strands_tools.code_interpreter not available — install strands-agents-tools")
+        except Exception as exc:
+            logger.warning(f"Failed to initialize CodeInterpreter: {exc}")
+
+    # Browser
+    if config.BROWSER_ID:
+        try:
+            from strands_tools.browser import AgentCoreBrowser
+            browser = AgentCoreBrowser(region=config.BROWSER_REGION)
+            tools.extend(browser.browser_tools)
+            logger.info(f"AgentCore Browser initialized (region={config.BROWSER_REGION})")
+        except ImportError:
+            logger.warning("strands_tools.browser not available — install strands-agents-tools[browser]")
+        except Exception as exc:
+            logger.warning(f"Failed to initialize Browser: {exc}")
+
+    _agentcore_tools = tools
+    return _agentcore_tools
 
 
 def _get_model() -> OpenAIModel:
@@ -133,7 +170,8 @@ def create_agent(session_id: Optional[str] = None, actor_id: str = "user") -> Ag
     """
     session_id = session_id or str(uuid.uuid4())
     session_manager = _build_session_manager(session_id, actor_id)
-    tools = _get_mcp_tools() or None
+    all_tools = _get_mcp_tools() + _get_agentcore_tools()
+    tools = all_tools or None
 
     agent = Agent(
         model=_get_model(),
