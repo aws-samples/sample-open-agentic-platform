@@ -1,0 +1,175 @@
+{{- if and .Values.microvm .Values.microvm.enabled }}
+{{- /*
+Flow D — microvm-lifecycle controller (suspend/resume via Sandbox.operatingMode).
+
+WHY THIS EXISTS: the Agent Sandbox CRD exposes `spec.operatingMode ∈ {Running,
+Suspended}` (the declarative suspend/resume intent), but the ACK Microvm CR has NO
+suspend field — its spec is create-time only; suspend/resume are IMPERATIVE SDK ops
+(`suspend-microvm`/`resume-microvm`) that the ACK controller deliberately does NOT
+reconcile. So switching operatingMode does nothing on its own. This tiny always-on
+reconcile loop closes that gap:
+
+  Sandbox.operatingMode: Running   -> Suspended :  aws lambda-microvms suspend-microvm
+  Sandbox.operatingMode: Suspended -> Running   :  aws lambda-microvms resume-microvm
+
+It resolves the MicroVM id from the MicrovmSandbox (KRO) status (microvmID). The
+MicrovmSandbox is NOT deleted on suspend (only on claim teardown -> terminate), so
+the VM survives suspend/resume cycles. This is a reconcile loop (not preStop hooks)
+so it is robust to pod/node loss and resume needs no live pod — pure shim, no
+virtual-kubelet, no new image (alpine/k8s = kubectl + aws cli), matching the
+pool-manager/bridge pattern. Auth via EKS Pod Identity (empty SA annotations; the
+pod-identity association granting lambda-microvms Suspend/Resume/Get is created by
+the platform).
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: microvm-lifecycle
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: microvm-lifecycle
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+rules:
+  # Read Sandboxes (watch operatingMode) + the MicrovmSandbox composites (read microvmID).
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
+    resources: ["microvmsandboxes"]
+    verbs: ["get", "list", "watch"]
+  # Record the last-applied mode on the Sandbox (annotation) to detect transitions.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: microvm-lifecycle
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: microvm-lifecycle
+subjects:
+  - kind: ServiceAccount
+    name: microvm-lifecycle
+    namespace: {{ include "agent-sandbox.namespace" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microvm-lifecycle-script
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+data:
+  reconcile.sh: |
+    #!/bin/sh
+    # Reconcile Sandbox.operatingMode -> Lambda MicroVM suspend/resume.
+    # Idempotent: we stamp the last-acted mode on an annotation and only act on change.
+    set -eu
+    NS="{{ include "agent-sandbox.namespace" . }}"
+    REGION="{{ .Values.microvm.region }}"
+    APIGROUP="{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}"
+    ANN="microvm-lifecycle.agents.x-k8s.io/last-mode"
+    INTERVAL="{{ .Values.microvm.lifecycle.intervalSeconds | default 15 }}"
+    echo "[microvm-lifecycle] reconciling every ${INTERVAL}s (ns=${NS} region=${REGION})"
+    while true; do
+      # Only Sandboxes on the lambda-microvm substrate (bridge sets this label).
+      for sb in $(kubectl get sandbox -n "$NS" \
+            -l agent-sandbox.io/substrate=lambda-microvm \
+            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+        MODE=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "Running")
+        LAST=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath="{.metadata.annotations.${ANN}}" 2>/dev/null || echo "")
+        [ "$MODE" = "$LAST" ] && continue   # no transition
+        # Resolve the MicroVM id from the matching MicrovmSandbox (name = df-<issue>) via its status.
+        VMID=$(kubectl get microvmsandbox -n "$NS" \
+                 -o jsonpath="{range .items[?(@.metadata.labels.agent-sandbox\.io/sandbox=='${sb}')]}{.status.microvmID}{end}" 2>/dev/null || echo "")
+        # Fallback: single-claim naming — try the sandbox name directly.
+        [ -z "$VMID" ] && VMID=$(kubectl get microvmsandbox "$sb" -n "$NS" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+        if [ -z "$VMID" ]; then
+          echo "[microvm-lifecycle] $sb: mode=$MODE but no microvmID yet — will retry"
+          continue
+        fi
+        case "$MODE" in
+          Suspended)
+            echo "[microvm-lifecycle] $sb: Running->Suspended -> suspend-microvm $VMID"
+            aws lambda-microvms suspend-microvm --microvm-identifier "$VMID" --region "$REGION" 2>&1 || true
+            ;;
+          Running)
+            echo "[microvm-lifecycle] $sb: Suspended->Running -> resume-microvm $VMID"
+            aws lambda-microvms resume-microvm --microvm-identifier "$VMID" --region "$REGION" 2>&1 || true
+            ;;
+          *)
+            echo "[microvm-lifecycle] $sb: unknown operatingMode '$MODE' — skipping"; continue ;;
+        esac
+        # Stamp the mode we acted on so we don't repeat the call.
+        kubectl annotate sandbox "$sb" -n "$NS" "${ANN}=${MODE}" --overwrite >/dev/null 2>&1 || true
+      done
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: microvm-lifecycle
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agent-sandbox.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: microvm-lifecycle
+  template:
+    metadata:
+      labels:
+        {{- include "agent-sandbox.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: microvm-lifecycle
+    spec:
+      serviceAccountName: microvm-lifecycle
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: lifecycle
+          image: {{ .Values.microvm.bridgeImage }}
+          command: ["/bin/sh", "/scripts/reconcile.sh"]
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.microvm.region | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: script
+          configMap:
+            name: microvm-lifecycle-script
+            defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
+{{- end }}

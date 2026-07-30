@@ -38,10 +38,14 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 rules:
-  # The bridge creates/reads/deletes MicrovmSandbox CRs (the KRO composite) only.
+  # The bridge creates/reads/deletes MicrovmSandbox CRs (the KRO composite).
   - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
     resources: ["microvmsandboxes"]
     verbs: ["create", "get", "list", "watch", "delete"]
+  # Read its owning Sandbox in preStop to tell a suspend from a real teardown.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -75,16 +79,29 @@ data:
     echo "[microvm-bridge] idle — waiting for a SandboxClaim to inject DF_ISSUE_NUMBER..."
     while [ -z "${DF_ISSUE_NUMBER:-}" ]; do sleep 5; done
     NAME="df-${DF_ISSUE_NUMBER}"
-    echo "[microvm-bridge] claim for issue #${DF_ISSUE_NUMBER} -> creating MicrovmSandbox/${NAME}"
+    # SANDBOX_NAME is injected via the downward API (the owning Sandbox CR's name) so
+    # the microvm-lifecycle controller can correlate this MicrovmSandbox to the Sandbox
+    # whose operatingMode it watches for suspend/resume.
+    SANDBOX_NAME="${SANDBOX_NAME:-$NAME}"
+    echo "[microvm-bridge] claim for issue #${DF_ISSUE_NUMBER} (sandbox=${SANDBOX_NAME}) -> ensuring MicrovmSandbox/${NAME}"
 
-    # Delete the MicrovmSandbox on exit -> KRO cascades TerminateMicrovm + cleans
-    # the S3/IAM resources. Mirrors Flow A's onExit teardown.
+    # Teardown on exit ONLY on real claim end, not on a suspend (suspend deletes the
+    # pod but must KEEP the MicrovmSandbox so resume works). We distinguish via a
+    # marker file the pod writes when it sees operatingMode=Suspended. Default =
+    # teardown (claim ended / crash) -> KRO cascades TerminateMicrovm + cleans S3/IAM.
     cleanup() {
+      if [ -f /tmp/suspending ]; then
+        echo "[microvm-bridge] pod stopping for SUSPEND — keeping MicrovmSandbox/${NAME}"
+        return
+      fi
       echo "[microvm-bridge] tearing down MicrovmSandbox/${NAME}"
       kubectl delete microvmsandbox "${NAME}" --ignore-not-found --wait=false || true
     }
     trap cleanup EXIT INT TERM
 
+    # Idempotent create/adopt (resume-or-create): if the MicrovmSandbox already exists
+    # from a prior suspend cycle, kubectl apply is a no-op and we just re-attach. The
+    # microvm-lifecycle controller handles the actual resume-microvm on operatingMode.
     cat <<EOF | kubectl apply -f -
     apiVersion: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}/v1alpha1
     kind: MicrovmSandbox
@@ -92,6 +109,7 @@ data:
       name: ${NAME}
       labels:
         dark-factory.io/issue: "${DF_ISSUE_NUMBER}"
+        agent-sandbox.io/sandbox: "${SANDBOX_NAME}"
     spec:
       name: ${NAME}
       region: "{{ .Values.microvm.region }}"
@@ -154,6 +172,21 @@ spec:
         - name: bridge
           image: {{ .Values.microvm.bridgeImage }}
           command: ["/bin/sh", "/scripts/bridge.sh"]
+          # Preflight suspend marker: if this pod is being deleted because the owning
+          # Sandbox went operatingMode=Suspended, the microvm-lifecycle controller has
+          # (or will) suspend the MicroVM — the bridge must NOT tear down the
+          # MicrovmSandbox. The controller writes operatingMode; the bridge checks it.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # If the owning Sandbox is Suspended, mark so cleanup() keeps the CR.
+                    M=$(kubectl get sandbox "df-${DF_ISSUE_NUMBER:-}" \
+                        -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "")
+                    [ "$M" = "Suspended" ] && touch /tmp/suspending || true
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

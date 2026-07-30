@@ -270,3 +270,7 @@ microvm:
   defaults:
     maxIdleDurationSeconds: 900
     suspendedDurationSeconds: 300
+  # microvm-lifecycle controller (templates/52) — reconciles Sandbox.operatingMode
+  # -> suspend/resume-microvm. How often the loop runs.
+  lifecycle:
+    intervalSeconds: 15
