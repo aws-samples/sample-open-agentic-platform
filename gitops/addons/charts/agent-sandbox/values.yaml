@@ -6,21 +6,38 @@
 # keeps a warm buffer of idle sandboxes ready.
 
 # Namespace the sandbox capability runs in (operator, pool-manager, warm pool).
+#
+# This chart PLACES resources here but no longer CREATES the namespace — the
+# agent-sandbox-operator addon owns the Namespace object (sync-wave 0, so it
+# exists WITH its PSS labels before this chart's wave-2 workloads land in it).
+# Both charts used to define it, which left the two apps permanently OutOfSync
+# fighting over one resource.
+#
+# Changing this value therefore only moves THIS chart's CRs. To move the whole
+# capability, also set namespace.name on the agent-sandbox-operator entry in
+# gitops/addons/registry/sandbox.yaml — otherwise this chart's CRs land in a
+# namespace created implicitly by the CreateNamespace=true syncOption, which is
+# UNLABELLED and therefore has no Pod Security enforcement.
 namespace: agent-sandbox-system
 
 # ── Sandbox operator (agents.x-k8s.io) ───────────────────────────────────────
-operator:
-  # Upstream agent-sandbox controller image.
-  image: public.ecr.aws/t6v6o5d5/agent-sandbox:v0.1.0
-  replicas: 1
-  # Install the Sandbox / SandboxTemplate / SandboxClaim CRDs with the chart.
-  # Disable if the cluster already has a newer operator managing the CRDs.
-  installCRDs: true
+# The operator (controller + CRDs) is a SEPARATE addon — it is not configured
+# from here. This chart has never rendered an operator Deployment (no template
+# consumed the old `operator:` block that sat here, so its image/replicas/
+# installCRDs keys were silently dead; editing them changed nothing).
+#
+# Real knobs live on the agent-sandbox-operator entry in
+# gitops/addons/registry/sandbox.yaml → valuesObject:
+#   image.tag             the controller image tag (upstream registry.k8s.io)
+#   controller.extensions MUST stay true — serves SandboxTemplate/Claim/WarmPool
+#   namespace.*           that app owns agent-sandbox-system + its PSS labels
 
 # NOTE: The Kata *runtime installer* (kata-deploy) is delivered as a SEPARATE
 # gated ArgoCD app (enable_agent_sandbox_kata), not from this chart — see the
-# addon catalog and docs/dark-factory §12a. This chart owns the RuntimeClasses,
-# operator, template, network policy, and pool-manager.
+# addon catalog and docs/dark-factory §12a. That app installs the runtime on the
+# node but its own RuntimeClass rendering is DISABLED (runtimeClasses.enabled=false
+# on its registry entry): this chart owns the RuntimeClasses, template, network
+# policy, and pool-manager.
 
 # ── Kata micro-VM runtime ────────────────────────────────────────────────────
 kata:
@@ -30,20 +47,49 @@ kata:
   #   qemu → QEMU            (same kata pool as clh — same kata-deploy runtime)
   #   fc   → Firecracker     (SEPARATE kata-fc pool + kata-deploy-fc + devmapper;
   #                           requires kata_nodepool kataFc + kata-deploy-fc enabled)
-  # All runtimeClasses are still RENDERED regardless (an ad-hoc pod may select any
-  # of them); `vmm` only steers the warm pool. Changing it recreates the
-  # SandboxTemplate → the pool refills onto the new VMM's nodes.
+  # `vmm` only steers the warm pool. Changing it recreates the SandboxTemplate →
+  # the pool refills onto the new VMM's nodes.
   vmm: clh
-  # RuntimeClasses to render, keyed by VMM. EACH carries the nodeSelector +
-  # tolerations that steer a pod onto the MATCHING Karpenter pool — clh/qemu share
-  # the kata pool (taint `kata`, label katacontainers.io/kata-runtime), fc uses the
-  # firecracker pool (taint `kata-fc`, label katacontainers.io/kata-runtime-fc).
-  # The RuntimeClass admission controller force-merges this scheduling onto every
-  # pod that selects the class, so a workload only needs runtimeClassName.
+  # RuntimeClasses to render (10-runtimeclasses.yaml), keyed by VMM. THIS CHART IS
+  # THE SINGLE OWNER of these objects — kata-deploy's own rendering is turned off
+  # (runtimeClasses.enabled=false on its registry entry). Both used to render
+  # kata-clh/kata-qemu, which left the two Apps permanently OutOfSync.
+  #
+  # This chart owns them because kata-deploy's chart has NO toleration support:
+  # it emits scheduling.nodeSelector only, while kata-nodepool taints its nodes
+  # (kata / kata-fc =true:NoSchedule), so a pod selecting only runtimeClassName
+  # would get the selector and then sit Pending on the taint. kata-deploy also
+  # can't name the Firecracker class `kata-fc` (its multiInstallSuffix makes it
+  # kata-fc-fc).
+  #
+  # EACH entry carries the nodeSelector + tolerations that steer a pod onto the
+  # MATCHING Karpenter pool — clh/qemu share the kata pool (taint `kata`, label
+  # katacontainers.io/kata-runtime), fc uses the firecracker pool (taint `kata-fc`,
+  # label katacontainers.io/kata-runtime-fc). The RuntimeClass admission controller
+  # force-merges that scheduling onto every pod selecting the class, so a workload
+  # only needs runtimeClassName.
+  #
+  # These values are DOUBLY load-bearing: 20-sandboxtemplate.yaml also reads the
+  # entry `vmm` selects to stamp runtimeClassName + nodeSelector + tolerations
+  # directly onto the warm-pool pod spec.
+  #
+  # `handler` must match a containerd handler kata-deploy actually installed (it is
+  # driven by that chart's `shims`); a class whose handler has no runtime on the
+  # node will fail at pod creation, not at render.
+  #
+  # `overhead` is copied from kata-deploy 4.0.0's built-in per-shim table so the
+  # kubelet reserves memory for the VMM process — HAND-MAINTAINED, so re-check it
+  # when bumping the kata-deploy version.
+  #
+  # All classes are RENDERED regardless of `vmm` (an ad-hoc pod may select any).
   runtimeClasses:
     clh:
       name: kata-clh
       handler: kata-clh
+      # kata-deploy 4.0.0 built-in overhead for the clh shim.
+      overhead:
+        memory: 130Mi
+        cpu: 250m
       nodeSelector:
         katacontainers.io/kata-runtime: "true"
       tolerations:
@@ -54,6 +100,13 @@ kata:
     qemu:
       name: kata-qemu
       handler: kata-qemu
+      # kata-deploy 4.0.0 built-in overhead for the qemu shims — deliberately
+      # HIGHER than clh: QEMU's own anon RSS is ~160Mi+ before any guest RAM, and
+      # with sandbox_cgroup_only the VMM runs inside the pod cgroup, so a smaller
+      # overhead lets the VMM be OOM-killed on memory-limited pods.
+      overhead:
+        memory: 320Mi
+        cpu: 250m
       nodeSelector:
         katacontainers.io/kata-runtime: "true"
       tolerations:
@@ -64,6 +117,16 @@ kata:
     fc:
       name: kata-fc
       handler: kata-fc
+      # kata-deploy 4.0.0 built-in overhead for the fc shim.
+      #
+      # NOTE: this class is rendered unconditionally, but it only WORKS on a
+      # cluster that also has the fc runtime installed + fc nodes — i.e.
+      # enable_agent_sandbox_kata_fc plus kata_nodepool kataFc. Elsewhere it is an
+      # inert declaration (selecting it leaves the pod Pending, since no node
+      # carries katacontainers.io/kata-runtime-fc).
+      overhead:
+        memory: 130Mi
+        cpu: 250m
       nodeSelector:
         katacontainers.io/kata-runtime-fc: "true"
       tolerations:

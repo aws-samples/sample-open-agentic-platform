@@ -128,9 +128,9 @@ alwaysSelector:
 
 | Piece | Source in this repo | Role |
 |---|---|---|
-| **Sandbox operator + CRDs** (`agents.x-k8s.io` + `extensions.agents.x-k8s.io/v1beta1`) | `gitops/addons/charts/agent-sandbox/upstream/` (vendored v0.5.1, sync-wave 0) | Materializes one Kata-VM pod per `Sandbox`; serves `SandboxClaim`/`SandboxTemplate`/`SandboxWarmPool` + the conversion webhook |
+| **Sandbox operator + CRDs** (`agents.x-k8s.io` + `extensions.agents.x-k8s.io/v1beta1`) | `gitops/addons/charts/agent-sandbox-operator/` (upstream `helm/` chart vendored at tag v0.5.1, sync-wave 0) | Materializes one Kata-VM pod per `Sandbox`; serves `SandboxClaim`/`SandboxTemplate`/`SandboxWarmPool` + the conversion webhook. Also owns the `agent-sandbox-system` **Namespace** (wave 0 ⇒ exists with PSS labels before wave-2 workloads). Needs `controller.extensions: true` — the `extensions.*` types are off by default |
 | **Kata runtime (Cloud Hypervisor default)** | `kata-deploy` OCI chart (sync-wave 1) | Installs the containerd handlers on the tainted kata nodes |
-| **RuntimeClasses** `kata-clh` · `kata-qemu` | `agent-sandbox/templates/10-runtimeclasses.yaml` (sync-wave 2) | Workload picks its VMM via `runtimeClassName` |
+| **RuntimeClasses** `kata-clh` · `kata-qemu` · `kata-fc` | `agent-sandbox/templates/10-runtimeclasses.yaml` (sync-wave 2) | Workload picks its VMM via `runtimeClassName`; the class force-merges `nodeSelector` **and tolerations** onto the pod, so selecting it is enough to land on the tainted kata pool. Owned here rather than by `kata-deploy` (whose chart emits no tolerations and would misname `kata-fc`) — its `runtimeClasses.enabled` is set `false` |
 | **`SandboxTemplate` `coder-sandbox`** | `agent-sandbox/templates/20-sandboxtemplate.yaml` | The coder pod spec the warm pool clones (isolation invariants baked in) |
 | **`SandboxWarmPool` `coder-warmpool`** | `agent-sandbox/templates/40-sandboxwarmpool.yaml` | Native operator primitive — keeps N idle sandboxes pre-warmed; refills on claim |
 | **NetworkPolicy** (egress lockdown) | `agent-sandbox/templates/30-networkpolicy.yaml` | Default-deny egress; allow only DNS + Bifrost + HTTPS — **plus, on the hub, deny the control-plane services** (see [§10](#10-security-model)) |

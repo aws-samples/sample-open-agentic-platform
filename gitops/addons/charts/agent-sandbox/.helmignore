@@ -7,11 +7,11 @@
 # files were removed outright.
 nodepool/
 #
-# upstream/ is intentionally NOT ignored. It is a chart in its own right (it has its
-# own Chart.yaml) and is deployed as a SEPARATE Application from the registry path
-# gitops/addons/charts/agent-sandbox/upstream. Ignore patterns apply relative to the
-# chart root being loaded, so this file does not affect that app either way — but
-# leaving upstream/ present keeps the directory self-describing.
+# NOTE: upstream/ used to live here — the vendored operator manifests, deployed as a
+# separate Application from gitops/addons/charts/agent-sandbox/upstream. It is now a
+# top-level sibling chart, gitops/addons/charts/agent-sandbox-operator (upstream's own
+# helm/ chart vendored at a tag), so the nesting — and the confusion about which
+# directory was which app — is gone.
 .git/
 .gitignore
 .DS_Store
