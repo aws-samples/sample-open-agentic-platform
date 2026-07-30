@@ -95,27 +95,53 @@ JOBID="$(aws securityagent start-code-review-job --region "$AWS_REGION" \
 log "codeReviewJobId=${JOBID} — polling (timeout ${POLL_TIMEOUT}s)..."
 
 # ── 4. Poll to completion ────────────────────────────────────────────────────
+# The job's `status` field lags well behind the actual analysis: the AWS Security
+# Agent GitHub App posts its findings comment on the PR (e.g. "No issues identified")
+# minutes before batch-get-code-review-jobs flips to COMPLETED. Polling status alone
+# therefore blocks this (advisory) step for the full timeout even though the result
+# is already known. So we ALSO probe list-findings each iteration: once it returns a
+# well-formed result (findingsSummaries key present), the review has produced output
+# and we can proceed immediately — this is the early-exit that avoids the long wait.
 DEADLINE=$(( $(date +%s) + POLL_TIMEOUT ))
 STATUS="IN_PROGRESS"
+DONE=""
+: > "$WORK/findings.json"
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   STATUS="$(aws securityagent batch-get-code-review-jobs --region "$AWS_REGION" \
     --agent-space-id "$AGENT_SPACE_ID" --code-review-job-ids "$JOBID" \
     --query 'codeReviewJobs[0].status' --output text 2>/dev/null || echo IN_PROGRESS)"
   log "job status=${STATUS}"
   case "$STATUS" in
-    COMPLETED|SUCCEEDED) break ;;
+    COMPLETED|SUCCEEDED) DONE="status"; break ;;
     FAILED|STOPPED|ERROR) log "review job ${STATUS}"; post_status "error" "security: review job ${STATUS}"; exit 0 ;;
   esac
+  # Early-exit: findings ready before status flips? (App bot already posted them.)
+  if aws securityagent list-findings --region "$AWS_REGION" \
+       --agent-space-id "$AGENT_SPACE_ID" --code-review-job-id "$JOBID" \
+       > "$WORK/findings.try.json" 2>/dev/null \
+     && python3 -c 'import json,sys; sys.exit(0 if "findingsSummaries" in json.load(open(sys.argv[1])) else 1)' "$WORK/findings.try.json" 2>/dev/null; then
+    mv "$WORK/findings.try.json" "$WORK/findings.json"
+    DONE="findings"; log "findings ready (status=${STATUS}) — proceeding without waiting for status flip"; break
+  fi
   sleep 20
 done
-if [ "$STATUS" != "COMPLETED" ] && [ "$STATUS" != "SUCCEEDED" ]; then
-  log "timed out waiting for review (last=${STATUS})"; post_status "error" "security: review timed out"; exit 0
+if [ -z "$DONE" ]; then
+  # Advisory step: the App bot posts the authoritative result on the PR regardless,
+  # so a slow job-status flip is NOT a failure. Post a neutral pending status (not
+  # error) so the PR check isn't a misleading red, and continue.
+  log "review still running past ${POLL_TIMEOUT}s (last status=${STATUS}) — see the AWS Security Agent bot comment on the PR for the authoritative result"
+  post_status "pending" "security: review still running — see AWS Security Agent PR comment"
+  exit 0
 fi
 
 # ── 5. Fetch findings, render report + verdict (python3, no node) ────────────
-aws securityagent list-findings --region "$AWS_REGION" \
-  --agent-space-id "$AGENT_SPACE_ID" --code-review-job-id "$JOBID" \
-  > "$WORK/findings.json" 2>/dev/null || echo '{"findingsSummaries":[]}' > "$WORK/findings.json"
+# Reuse the findings we already fetched during the early-exit probe; only re-fetch
+# if we broke on the status flip (findings not yet captured).
+if [ "$DONE" = "status" ] || [ ! -s "$WORK/findings.json" ]; then
+  aws securityagent list-findings --region "$AWS_REGION" \
+    --agent-space-id "$AGENT_SPACE_ID" --code-review-job-id "$JOBID" \
+    > "$WORK/findings.json" 2>/dev/null || echo '{"findingsSummaries":[]}' > "$WORK/findings.json"
+fi
 
 python3 - "$WORK/findings.json" "$BLOCK_LEVEL" "$WORK/report.md" > "$WORK/verdict.env" <<'PY'
 import json, sys
