@@ -14,7 +14,13 @@ a consumer (the lambda-microvm SandboxTemplate bridge, or any agent) creates a s
 
 OWNERSHIP SPLIT is expressed IN THE SCHEMA:
   spec.image.*  — PLATFORM-owned (base image, code artifact) — set once per image
-  spec.run.*    — APP-owned (per-claim instance: idle policy, connectors, env)
+  spec.run.*    — APP-owned (per-claim instance: idle policy)
+
+NETWORK: Lambda MicroVMs have PUBLIC internet egress by DEFAULT, so no network
+connectors are attached here (the coder only needs outbound git/gh/registry, like
+Flow A). Ingress connectors (AWS-managed, inbound HTTPS) and VPC egress connectors
+(created out-of-band via `aws lambda-core create-network-connector`) are optional
+add-ons a future variant can wire in; they are intentionally omitted from v1.
 
 CONTROLLER SPLIT: the s3/iam resources are reconciled by MANAGED ACK (GA controllers);
 MicrovmImage/Microvm by the SELF-MANAGED lambdamicrovms controller (pre-GA). The RGD is
@@ -38,22 +44,22 @@ spec:
     spec:
       # ── PLATFORM-owned: the image / substrate (set once per image) ──────────
       image:
-        # ARN of the AWS-published base MicroVM image to build from.
+        # ARN of the AWS-published base MicroVM image to build from, e.g.
+        # arn:aws:lambda:<region>:aws:microvm-image:al2023-1 (ARM_64 — the only arch
+        # Lambda MicroVM supports).
         baseImageARN: string
-        # S3 URI of the coder code artifact baked into the image. This is the SAME
-        # dark-factory-coder payload used by Flow A — MicroVM substrate, same coder.
+        # URI of the coder code artifact for the image. Lambda MicroVM accepts an
+        # ECR image URI *or* an S3 path — Flow D points at the SAME dark-factory-coder
+        # (built for arm64), so no S3 repackaging is needed.
         codeArtifactUri: string
-        # Public-egress connector ARN the image build is allowed (platform policy).
-        egressConnectorARN: string | default="{{ .Values.microvm.defaults.egressConnectorARN }}"
       # ── APP-owned: the per-claim instance lifecycle ─────────────────────────
       run:
         # Idle policy — MicroVM auto-suspend/resume to keep idle cost near zero.
+        # (Declarative suspend/resume via Sandbox.operatingMode is driven by the
+        # microvm-lifecycle controller, not this field — see template 52.)
         autoResumeEnabled: boolean | default=true
         maxIdleDurationSeconds: integer | default={{ .Values.microvm.defaults.maxIdleDurationSeconds }}
         suspendedDurationSeconds: integer | default={{ .Values.microvm.defaults.suspendedDurationSeconds }}
-        # Connector ARNs governing the running MicroVM's network.
-        ingressConnectorARN: string | default="{{ .Values.microvm.defaults.ingressConnectorARN }}"
-        egressConnectorARN: string | default="{{ .Values.microvm.defaults.egressConnectorARN }}"
       # Common: AWS region + a name stem for the created resources.
       region: string | default="{{ .Values.microvm.region }}"
       name: string
@@ -73,6 +79,9 @@ spec:
         spec:
           name: ${schema.spec.name}-microvm-artifacts
     # 2) IAM role the image BUILD assumes (GA — Managed ACK). Platform-owned.
+    #    Lambda assumes this during create-microvm-image to pull the code artifact
+    #    (ECR/S3) + write build logs. Trust = lambda.amazonaws.com (verified in the
+    #    Lambda MicroVM getting-started docs), with inline ECR-read + S3-read + logs.
     - id: buildRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -81,10 +90,18 @@ spec:
           name: ${schema.spec.name}-microvm-build
         spec:
           name: ${schema.spec.name}-microvm-build
-          policyRefs: []
           assumeRolePolicyDocument: |
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambdamicrovms.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sts:AssumeRole","sts:TagSession"]}]}
+          inlinePolicies:
+            microvm-build: |
+              {"Version":"2012-10-17","Statement":[
+                {"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Resource":"*"},
+                {"Effect":"Allow","Action":["s3:GetObject"],"Resource":"arn:aws:s3:::*-microvm-artifacts/*"},
+                {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"arn:aws:logs:*:*:*"}
+              ]}
     # 3) IAM role the RUNNING MicroVM assumes (GA — Managed ACK). App-owned exec identity.
+    #    Minimal by default (the coder reaches models via Bifrost, git/gh via public
+    #    egress — no AWS API needed); trust = lambda.amazonaws.com.
     - id: execRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -93,9 +110,8 @@ spec:
           name: ${schema.spec.name}-microvm-exec
         spec:
           name: ${schema.spec.name}-microvm-exec
-          policyRefs: []
           assumeRolePolicyDocument: |
-            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambdamicrovms.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+            {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sts:AssumeRole","sts:TagSession"]}]}
     # 4) MicrovmImage (pre-GA — SELF-MANAGED lambdamicrovms controller). Platform-owned.
     - id: image
       template:
@@ -109,8 +125,6 @@ spec:
           buildRoleARN: ${buildRole.status.ackResourceMetadata.arn}
           codeArtifact:
             uri: ${schema.spec.image.codeArtifactUri}
-          egressNetworkConnectors:
-            - ${schema.spec.image.egressConnectorARN}
     # 5) Microvm instance (pre-GA — SELF-MANAGED). App-owned lifecycle. Runs the
     #    same dark-factory-coder entrypoint that Flow A's Kata pod runs.
     - id: microvm
@@ -122,10 +136,7 @@ spec:
         spec:
           imageIdentifier: ${image.status.ackResourceMetadata.arn}
           executionRoleARN: ${execRole.status.ackResourceMetadata.arn}
-          ingressNetworkConnectors:
-            - ${schema.spec.run.ingressConnectorARN}
-          egressNetworkConnectors:
-            - ${schema.spec.run.egressConnectorARN}
+          # No network connectors → default public internet egress (see header).
           idlePolicy:
             autoResumeEnabled: ${schema.spec.run.autoResumeEnabled}
             maxIdleDurationSeconds: ${schema.spec.run.maxIdleDurationSeconds}

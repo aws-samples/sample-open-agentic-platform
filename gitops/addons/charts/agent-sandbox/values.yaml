@@ -257,14 +257,16 @@ microvm:
   # + the AWS CLI (streams MicroVM logs). alpine/k8s bundles kubectl.
   bridgeImage: alpine/k8s:1.31.0
   # The coder code-artifact + base image are cluster/account specific → overlay.
+  # Lambda MicroVM is ARM_64-only; codeArtifactUri accepts an ECR image URI or S3 path.
   # image:
-  #   baseImageARN:    arn:aws:lambdamicrovms:<region>:<acct>:image/<base>
-  #   codeArtifactUri: s3://<bucket>/dark-factory-coder/<version>.zip
+  #   baseImageARN:    arn:aws:lambda:<region>:aws:microvm-image:al2023-1
+  #   codeArtifactUri: <acct>.dkr.ecr.<region>.amazonaws.com/dark-factory-coder:<tag>-arm64
   baseImageARN: ""
   codeArtifactUri: ""
-  # Safe cluster-agnostic defaults for the RGD schema (overlay sets the ARNs).
+  # Idle policy defaults for the RGD schema (auto-suspend/resume). Declarative
+  # suspend/resume via Sandbox.operatingMode is handled by the microvm-lifecycle
+  # controller (templates/52), independent of these. No network connectors:
+  # Lambda MicroVMs default to public internet egress, which is all the coder needs.
   defaults:
     maxIdleDurationSeconds: 900
     suspendedDurationSeconds: 300
-    ingressConnectorARN: ""
-    egressConnectorARN: ""
