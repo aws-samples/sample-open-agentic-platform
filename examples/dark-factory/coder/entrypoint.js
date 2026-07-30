@@ -256,11 +256,25 @@ function runCoder(repoDir) {
   // Inherit stdio so the coder CLI's own output + errors stream into the pod
   // logs (kubectl logs), instead of being swallowed by execFileSync's exception.
   const opts = { cwd: repoDir, env, stdio: "inherit", maxBuffer: 64 * 1024 * 1024 };
-  const prompt = `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`;
+  // The coder also writes a concise, human-readable summary of WHAT it changed to
+  // artifacts/description.md — this becomes the "Changes" section of the PR body
+  // (in addition to the verification section). Keep it short: what changed + why,
+  // as reviewer-facing markdown bullets.
+  const descPath = `${WORKSPACE}/artifacts/description.md`;
+  const prompt =
+    `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work. ` +
+    `Then write a concise description of the changes you made (what changed and why, as a few markdown bullet points, ` +
+    `reviewer-facing — no preamble) to ${descPath}.`;
   if (ENGINE === "kiro") {
     // Kiro CLI headless — the coder image carries the `kiro` binary; it reads the
     // same Bifrost/Bedrock env above. --headless drives it non-interactively.
+    // Append the description instruction so kiro produces the same artifact.
     console.log("[coder] engine=kiro (kiro run --headless)");
+    try {
+      fs.appendFileSync(`${WORKSPACE}/SPEC.md`,
+        `\n\n---\n\n## After implementing\n\nWrite a concise description of the changes you made ` +
+        `(what changed and why, a few reviewer-facing markdown bullets, no preamble) to ${descPath}.\n`);
+    } catch { /* non-fatal */ }
     return execFileSync("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], opts);
   }
   console.log("[coder] engine=claude (claude -p)");
@@ -429,9 +443,17 @@ async function main() {
         ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
         : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
     }
+    // Coder-authored description of the changes (artifacts/description.md). Shown
+    // as a "Changes" section ahead of the verification block. Falls back to a
+    // neutral line if the coder didn't produce one, so the PR body is never empty.
+    const desc = readSecret(`${WORKSPACE}/artifacts/description.md`);
+    const changesSection = desc
+      ? ["### 📝 Changes", "", desc, ""]
+      : ["### 📝 Changes", "", "_Implemented per the linked issue; see the diff for details._", ""];
     const prBody = [
       `Closes #${ISSUE}.`,
       "",
+      ...changesSection,
       "<!-- dark-factory:status -->",
       "### 🏭 Dark Factory — verification",
       `- ✅ **Build + unit tests:** ${test.summary}`,
