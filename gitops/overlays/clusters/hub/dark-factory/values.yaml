@@ -1,0 +1,31 @@
+# Hub (control-plane) overlay for the dark-factory addon.
+#
+# Supplies the container images the chart deliberately leaves EMPTY. Image URIs are
+# account-specific, so shipping a concrete ECR URI as a public chart default would
+# leak an account ID to everyone who installs the chart (PR #32 review item 1). The
+# chart wraps each of these in Helm `required`, so a cluster without this overlay
+# fails at render with a named error rather than silently emitting `image:` empty
+# and failing later at pod creation.
+#
+# ⚠️ These URIs point at ECR account 940019131157, which is NOT this deployment's
+# account (259732043995). They are the values the chart previously defaulted to,
+# preserved here so behaviour is unchanged — but they are almost certainly NOT
+# pullable from this account. Nothing has exercised them: the images are only
+# pulled when a df-run workflow actually executes, and the WorkflowTemplates report
+# Synced/Healthy merely by existing.
+#
+# To make the factory runnable: build the images from examples/dark-factory/{coder,
+# deploy-test} into THIS account's ECR and repoint the three values below.
+
+holdout:
+  # git + node + the languages the hidden executable tests run in.
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+
+review:
+  # node + npm audit + git. Also used by df-iterate and df-merge-teardown.
+  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+
+deployTest:
+  # kubectl + terraform + node + git + curl (content-aware deploy-test needs both
+  # toolchains).
+  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0

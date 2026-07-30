@@ -180,15 +180,42 @@ poolManager:
 coderTemplate:
   # Allow Flow B to inject per-claim env (SPEC/repo/branch/profile) via SandboxClaim.
   envVarsInjectionPolicy: Overrides
-  # Mount a k8s Secret at /etc/secrets (mode 0400) so the coder can read the
-  # short-TTL gh-token (+ optional bifrost key). Secret must exist in the
-  # capability namespace with key 'gh-token'.
+  # Mount a k8s Secret at /etc/secrets (mode 0400) so the coder can read its
+  # GitHub token. This is the CODER credential — a separate, lower-privilege
+  # credential from the hub-side orchestrator/events tokens (review C1), because
+  # the coder runs model-written code whose prompt is attacker-controllable
+  # issue text.
+  #
+  # Scope: Contents:write on the target repo and NOTHING else — it must not be
+  # able to merge (Pull requests:write) or administer webhooks (Webhooks:write).
+  # Contents:write still permits a direct branch push, so branch protection on
+  # the default branch is REQUIRED for this boundary to mean anything.
   secretsMount:
     enabled: true
-    secretName: dark-factory-github
-  # Sandbox coder image. Placeholder busybox until the Dark Factory coder image
-  # (examples/dark-factory/coder, entrypoint.js) is built + pushed to ECR — then
-  # set this to that image so a claim actually runs the coder.
+    secretName: dark-factory-github-coder
+    # Filename the coder reads under /etc/secrets.
+    key: gh-token
+    # Provision secretName from AWS Secrets Manager via external-secrets.
+    # NOTE: this is a standing credential. The stronger design (review C1 as
+    # written) mints a short-TTL GitHub App installation token per run and
+    # injects it via the SandboxClaim, so the VM never holds a reusable secret.
+    externalSecret:
+      enabled: true
+      clusterSecretStore: aws-secrets-manager
+      # Set dynamically: <cluster>/dark-factory/github/coder — injected from the
+      # aws_cluster_name annotation via the registry valuesObject. Cluster-scoped
+      # so this cluster's ESO IRSA can be limited to <cluster>/* and therefore
+      # CANNOT read the hub's orchestrator/events tokens. Empty default keeps the
+      # ExternalSecret inert until injected.
+      secretManagerKey: ""
+      property: token
+      refreshInterval: 1h
+  # Sandbox coder image — built from examples/dark-factory/coder (entrypoint.js).
+  #
+  # NOTE: ECR account 940019131157 is an EXAMPLE registry. The agent-sandbox
+  # registry entry (gitops/addons/registry/sandbox.yaml) overrides this per cluster,
+  # templating the URI from the aws_account_id + aws_region cluster annotations, so
+  # a deployment does not need to edit this default or add an overlay.
   image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
   # Warm pods idle until a SandboxClaim injects DF_ISSUE_NUMBER, then exec the
   # baked-in coder entrypoint (node /app/entrypoint.js). If the image has no such
@@ -207,4 +234,12 @@ coderTemplate:
     requests: { cpu: "1", memory: 2Gi }
     limits: { cpu: "2", memory: 4Gi }
   # LLM gateway the coder reaches (this platform uses Bifrost, not LiteLLM).
-  bifrostUrl: http://172.20.181.17:8080  # ClusterIP — Kata VM guest DNS cannot resolve cluster svc names (P2: fix VM dnsConfig)
+  # In-cluster service DNS. The registry entry injects this per-cluster from the
+  # `bifrost_url` cluster-secret annotation (registry/sandbox.yaml), so this is the
+  # fallback when that annotation is absent.
+  #
+  # Was previously a hardcoded ClusterIP, which shipped one cluster's ephemeral
+  # address as the chart default. If a Kata VM guest cannot resolve cluster svc
+  # names (a known P2 — fix the VM dnsConfig), set the `bifrost_url` annotation on
+  # that cluster to a reachable ClusterIP rather than editing this default.
+  bifrostUrl: http://bifrost.bifrost.svc.cluster.local:8080

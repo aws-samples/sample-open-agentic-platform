@@ -26,6 +26,9 @@ metadata:
     # The karpenter.k8s.aws CRD is owned by the platform `karpenter` app; skip the
     # dry-run against this Application until that CRD exists (retry converges it).
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Lower wave than the NodePool: a NodePool's nodeClassRef must resolve to an
+    # existing EC2NodeClass, so the NodeClass is applied first within this app.
+    argocd.argoproj.io/sync-wave: "0"
   labels:
     app.kubernetes.io/managed-by: {{ $.Release.Service }}
     app.kubernetes.io/part-of: kata-nodepool

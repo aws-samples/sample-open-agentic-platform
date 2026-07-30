@@ -25,6 +25,9 @@ metadata:
     # The karpenter.sh NodePool CRD is shared with Auto Mode but may be absent on a
     # freshly-bootstrapped cluster before the karpenter app syncs; skip dry-run.
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    # Higher wave than the EC2NodeClass (wave 0): this NodePool's nodeClassRef must
+    # resolve to an already-applied EC2NodeClass, so it syncs after the NodeClass.
+    argocd.argoproj.io/sync-wave: "1"
   labels:
     app.kubernetes.io/managed-by: {{ $.Release.Service }}
     app.kubernetes.io/part-of: kata-nodepool

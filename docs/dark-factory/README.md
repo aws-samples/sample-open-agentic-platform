@@ -32,6 +32,7 @@ spokes as normal deployments.
 8. [Human-in-the-loop & the comment loop](#8-human-in-the-loop--the-iterative-comment-loop)
 9. [Lifecycle, teardown & cost](#9-lifecycle-teardown--cost)
 10. [Security model](#10-security-model)
+10a. [GitHub credentials: Secrets Manager setup](#10a-github-credentials-secrets-manager-setup)
 11. [Industry alignment & anti-patterns](#11-industry-alignment--anti-patterns-what-the-world-agrees-on)
 12. [Phased delivery](#12-phased-delivery)
 13. [Open questions / future work](#13-open-questions--future-work)
@@ -590,6 +591,116 @@ Plus the always-on basics:
   (demonstrated against GitHub-issue-driven agents in the wild). The mitigations above exist
   specifically to break that trifecta: keep credentials out of the issue-ingesting context, deny
   egress (including the hub's own control plane), and treat all issue/repo content as hostile input.
+
+---
+
+## 10a. GitHub credentials: Secrets Manager setup
+
+The factory needs **three separate GitHub credentials**, not one. This is the fix for the
+review finding that the coder VM was handed the orchestrator's full-power token: the coder runs
+model-written code whose prompt is attacker-controllable issue text, so it must not hold a
+credential that can merge to `main` or administer webhooks.
+
+Each is a `ClusterSecretStore`-backed `ExternalSecret` reading AWS Secrets Manager. Nothing is
+created by hand in-cluster.
+
+### The three credentials
+
+| Credential | Cluster / namespace | SM key | k8s keys | GitHub permission |
+|---|---|---|---|---|
+| `dark-factory-github-events` | hub / `argo-events` | `<cluster>/dark-factory/github/events` | `token`, `webhook-secret` | Metadata **read**, Contents **read**, Webhooks **write** |
+| `dark-factory-github-orchestrator` | hub / `argo` | `<cluster>/dark-factory/github/orchestrator` | `token` | Pull requests **write**, Commit statuses **write** |
+| `dark-factory-github-coder` | *sandbox cluster* / `agent-sandbox-system` | `<cluster>/dark-factory/github/coder` | `gh-token` | Contents **write** — and nothing else |
+
+Notes that matter:
+
+- **The orchestrator secret lives in `argo`, not the release namespace.** The `df-run` /
+  `df-iterate` / `df-merge-teardown` WorkflowTemplates are created in `.Values.argo.namespace`,
+  and a Workflow pod resolves `secretKeyRef` in *its own* namespace. Secrets are namespace-scoped,
+  so putting it anywhere else leaves the workflows unable to read it.
+- **Events needs Webhooks:write** because `trigger.argoEvents.active: true` makes Argo Events
+  self-register the repo webhook. A strictly read-only token *will* fail registration. To make it
+  read-only instead, set `active: false` and register the webhook yourself.
+- **`webhook-secret` is not a GitHub credential** — it is an arbitrary strong random string used to
+  validate GitHub's `X-Hub-Signature-256`. It only has to be consistent.
+- **The coder's SM key is on whichever cluster runs the warm pool** (today the spoke). The
+  `<cluster>/` prefix resolves from that cluster's `aws_cluster_name` annotation, so it follows the
+  pool automatically.
+- **Contents:write still allows a direct push.** The coder cannot *merge* (that needs Pull
+  requests:write), but branch protection on the default branch is **required** for this boundary to
+  mean anything. That is the same protection [§9](#9-lifecycle-teardown--cost)'s merge gate depends on.
+
+### Why the keys are cluster-scoped
+
+The SM paths are prefixed `<cluster>/` (injected from the `aws_cluster_name` cluster-secret
+annotation via the addon registry, the same pattern as `keycloak-clients`). That lets each
+cluster's external-secrets IRSA be scoped to `<cluster>/*` — so the sandbox cluster **cannot read
+the hub's orchestrator token** even if something asks it to. A flat shared prefix would re-merge at
+the IAM layer exactly what the three-way split separates.
+
+### Creating the secrets
+
+Mint the three GitHub credentials first (a GitHub App installation is preferable to PATs — see the
+follow-up below), then:
+
+```bash
+REGION=us-west-2
+HUB=hub                 # cluster running argo + argo-events
+SANDBOX=spoke-dev       # cluster running the warm pool
+WEBHOOK_SECRET="$(openssl rand -hex 20)"
+
+# 1. events (hub) — read + webhook admin, plus the HMAC
+aws secretsmanager create-secret --region "$REGION" \
+  --name "${HUB}/dark-factory/github/events" \
+  --secret-string "$(jq -n --arg t "$EVENTS_TOKEN" --arg w "$WEBHOOK_SECRET" \
+      '{token:$t, "webhook-secret":$w}')"
+
+# 2. orchestrator (hub) — PRs + commit statuses + merge
+aws secretsmanager create-secret --region "$REGION" \
+  --name "${HUB}/dark-factory/github/orchestrator" \
+  --secret-string "$(jq -n --arg t "$ORCHESTRATOR_TOKEN" '{token:$t}')"
+
+# 3. coder (sandbox cluster) — Contents:write ONLY
+aws secretsmanager create-secret --region "$REGION" \
+  --name "${SANDBOX}/dark-factory/github/coder" \
+  --secret-string "$(jq -n --arg t "$CODER_TOKEN" '{token:$t}')"
+```
+
+Pass tokens via environment variables as above rather than inline, so they do not land in shell
+history. To rotate, use `put-secret-value` with the same `--name`; ESO picks the change up within
+`refreshInterval` (1h by default).
+
+### Verifying
+
+```bash
+# ExternalSecrets should report SecretSynced
+kubectl --context "$HUB"     get externalsecret -A | grep dark-factory-github
+kubectl --context "$SANDBOX" get externalsecret -n agent-sandbox-system | grep dark-factory-github
+
+# and the resulting Secrets should carry the expected keys
+kubectl --context "$HUB" get secret dark-factory-github-events -n argo-events \
+  -o jsonpath='{range $k,$v := .data}{$k}{"\n"}{end}'
+```
+
+If an `ExternalSecret` reports `SecretSyncedError`, check in this order: the SM secret exists in the
+right region; its JSON contains the property names above; and **the cluster's external-secrets IRSA
+policy covers the `<cluster>/dark-factory/github/*` prefix** — if that policy enumerates specific
+secret ARNs rather than a prefix, new paths fail with `AccessDenied` and no amount of chart
+configuration fixes it.
+
+Symptom when a credential is missing: the consuming pods sit in `ContainerCreating` with
+`MountVolume.SetUp failed … secret "dark-factory-github-*" not found`, indefinitely. Nothing
+crashes and nothing retries visibly — the mount just never satisfies.
+
+### Follow-up: per-run minted tokens
+
+All three are **standing** credentials. The stronger design, and what [§10](#10-security-model)
+describes as the coder's "short-TTL token", mints a GitHub App installation token **per run**
+scoped to the target repo, injected via the `SandboxClaim`, so the VM never holds anything
+reusable. external-secrets ships a `GithubAccessToken` generator that can do this and can
+down-scope permissions per token, so one App can serve all three roles. Keep the App **private
+key** on the hub only: anything holding it can mint any permission the App has, so placing it on
+the sandbox cluster would undo the split.
 
 ---
 

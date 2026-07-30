@@ -47,19 +47,31 @@ bifrost:
 # per-claim wiring needed — deliberately not duplicated here. See docs §7a.
 
 github:
-  # Secret (in .namespace) holding the GitHub App / token the workflow uses to
-  # open the PR + maintain the sticky status comment. Key: token.
-  tokenSecret: dark-factory-github
+  # ORCHESTRATOR credential. The df-run / df-iterate / df-merge workflows use it
+  # to open the PR, maintain the sticky status comment, and perform the merge.
+  # Lives on the HUB in argo.namespace (below) — NOT the release namespace: the
+  # Workflow pods resolve secretKeyRef in their own namespace, and the
+  # WorkflowTemplates are created in argo.namespace.
+  #
+  # Scope: Pull requests:write + Commit statuses:write.
+  # This is deliberately NOT the credential the coder VM receives (review C1) —
+  # the coder gets its own lower-privilege token, see the agent-sandbox chart's
+  # coderTemplate.secretsMount.
+  tokenSecret: dark-factory-github-orchestrator
   tokenKey: token
-  # Sync the token from AWS Secrets Manager via ExternalSecret (same mechanism as
-  # the rest of the platform) instead of a manual kubectl-created secret — so it's
-  # GitOps-managed, reproducible on rebuild, and auto-rotated. The SM secret is a
-  # JSON blob with keys: token, webhook-secret. Creates dark-factory-github in the
-  # argo / argo-events / agent-sandbox-system namespaces (see 05-externalsecret).
+  # Provision tokenSecret from AWS Secrets Manager via external-secrets. The SM
+  # secret must hold the token under the `property` key below. Set enabled=false
+  # to manage the k8s Secret out-of-band instead.
   externalSecret:
     enabled: true
     clusterSecretStore: aws-secrets-manager
-    secretsManagerKey: dark-factory/github
+    # Set dynamically: <cluster>/dark-factory/github/orchestrator — injected from
+    # the aws_cluster_name annotation via the registry valuesObject (same pattern
+    # as langfuse/keycloak). Cluster-scoped so each cluster's ESO IRSA can be
+    # limited to its OWN prefix: the spoke then cannot read this hub token.
+    # Empty default keeps the ExternalSecret inert until injected.
+    secretManagerKey: ""
+    property: token
     refreshInterval: 1h
 
 # Step-container image: needs kubectl + curl + jq to drive claims, poll the
@@ -293,7 +305,9 @@ deployTest:
   terraformPath: "infra"      # terraform working dir (repo uses infra/ + app/ layout)
   # Purpose-built image with kubectl + terraform + node + git + curl (content-aware
   # deploy-test needs both toolchains). Built from examples/dark-factory/deploy-test.
-  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0
+  # REQUIRED, empty by design — set per cluster in
+  # overlays/clusters/<cluster>/dark-factory/values.yaml.
+  image: ""
   # Overall step deadline and the per-workload readiness wait (k8s only).
   timeoutSeconds: 600
   readyTimeoutSeconds: 120
@@ -354,8 +368,36 @@ trigger:
     webhookUrl: ""
     webhookEndpoint: /dark-factory
     webhookPort: 12000
-    # Secret (in argo-events ns) with keys: token (GitHub API), webhook-secret (HMAC).
-    githubSecret: dark-factory-github
+    # EVENTS credential (hub, argo-events ns) with keys: token (GitHub API),
+    # webhook-secret (HMAC for X-Hub-Signature-256). Separate from the
+    # orchestrator + coder credentials (review C1).
+    #
+    # Scope (with active=true below): Metadata:read + Contents:read +
+    # Webhooks:write (admin:repo_hook). The hook-admin permission is REQUIRED
+    # because Argo Events self-registers the repo webhook — a strictly
+    # read-only token will fail registration.
+    #
+    # This token intentionally has NO Pull requests:write and NO merge rights,
+    # so it cannot approve, merge, or push. It also lives in the trusted hub
+    # (argo-events ns), never inside the untrusted coder VM — which is the
+    # boundary review C1 is about.
+    #
+    # To make it strictly read-only instead, set active=false and register the
+    # webhook yourself (repo settings / IaC).
+    githubSecret: dark-factory-github-events
+    # Auto-register the webhook on each repo (requires Webhooks:write above).
+    active: true
+    # Provision githubSecret from AWS Secrets Manager via external-secrets. The
+    # SM secret must hold BOTH properties below.
+    externalSecret:
+      enabled: true
+      clusterSecretStore: aws-secrets-manager
+      # Set dynamically: <cluster>/dark-factory/github/events — see the
+      # orchestrator externalSecret above for why this is cluster-scoped.
+      secretManagerKey: ""
+      tokenProperty: token
+      webhookSecretProperty: webhook-secret
+      refreshInterval: 1h
     # Expose the EventSource via the platform ALB ingress for GitHub to reach it.
     ingress:
       enabled: true

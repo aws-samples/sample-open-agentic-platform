@@ -1,0 +1,18 @@
+# spoke-dev overlay for the agent-sandbox capability.
+#
+# Supplies the coder image the chart deliberately leaves EMPTY. Image URIs are
+# account-specific, so shipping a concrete ECR URI as a public chart default would
+# leak an account ID to everyone who installs the chart (PR #32 review item 1). The
+# SandboxTemplate wraps this in Helm `required`, so a cluster without this overlay
+# fails at render with a named error rather than silently emitting `image:` empty
+# and failing later at pod creation.
+#
+# ⚠️ This URI points at ECR account 940019131157, which is NOT this deployment's
+# account (259732043995) — it is the value the chart previously defaulted to,
+# preserved here so behaviour is unchanged. If it is not pullable from this
+# account the warm pods will report ImagePullBackOff rather than idling.
+#
+# To make the coder real: build examples/dark-factory/coder (entrypoint.js) into
+# THIS account's ECR and repoint the value below.
+coderTemplate:
+  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11

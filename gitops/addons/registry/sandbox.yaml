@@ -199,6 +199,12 @@ agent-sandbox:
   valuesObject:
     coderTemplate:
       bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+      # CODER GitHub credential, cluster-scoped in Secrets Manager so THIS
+      # cluster's ESO IRSA can be limited to <cluster>/* — the spoke then cannot
+      # read the hub's orchestrator/events tokens (review C1 boundary).
+      secretsMount:
+        externalSecret:
+          secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/dark-factory/github/coder'
 
 # Dark Factory — autonomous agent coding controller. Hub-only (consumes the
 # sandbox warm pool via SandboxClaim). Wave 3: after the capability chart
@@ -222,7 +228,17 @@ dark-factory:
     # annotation to a reachable ClusterIP so the coder reaches Bifrost.
     bifrost:
       url: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
-    # Derive the webhook URL + ingress host from the cluster-secret
+    # GitHub credentials, cluster-scoped in Secrets Manager (same pattern as
+    # langfuse/keycloak in observability.yaml). Three DISTINCT credentials so the
+    # untrusted coder VM never holds the orchestrator's merge-capable token
+    # (review C1). The coder's own key is injected by the agent-sandbox entry.
+    github:
+      externalSecret:
+        secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/dark-factory/github/orchestrator'
+    # NOTE: ONE trigger: block only — a second one would silently override this
+    # (duplicate YAML keys: last wins), dropping the externalSecret key.
+    #
+    # webhookUrl + ingress.host derive from the cluster-secret
     # ingress_domain_name annotation (set per-cluster by the platform), instead
     # of a hardcoded domain in the chart defaults. Mirrors the agent-gateway
     # pattern (gateway.yaml). GitHub posts webhooks to webhookUrl+webhookEndpoint;
@@ -232,3 +248,5 @@ dark-factory:
         webhookUrl: 'https://{{.metadata.annotations.ingress_domain_name}}'
         ingress:
           host: '{{.metadata.annotations.ingress_domain_name}}'
+        externalSecret:
+          secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/dark-factory/github/events'
