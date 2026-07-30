@@ -41,23 +41,21 @@ nodepool:
 
 # ── Flow D — Lambda MicroVM substrate (hub) ──────────────────────────────────
 # Alternative to the Kata `nodepool` above: run the coder in an AWS Lambda MicroVM
-# instead of a Kata pod. DORMANT (enabled:false) until the hub has the Managed KRO
-# + Managed ACK capabilities and the self-managed ack-lambdamicrovms controller
-# (see gitops/addons/bootstrap/default/addons.yaml). The connector/image ARNs below
-# are account/region specific and must be filled in before enabling — they are
-# public identifiers, not secrets, but are left blank until the MicroVM base image
-# + network connectors exist in the account.
+# instead of a Kata pod. DORMANT (enabled:false) until the self-managed
+# ack-lambdamicrovms controller is synced (see gitops/addons/bootstrap/default/
+# addons.yaml). Managed KRO + Managed ACK capabilities are ACTIVE on the hub.
+# The ARNs below are public identifiers (not secrets).
 microvm:
   enabled: false
   region: us-west-2
   apiGroup: sandbox.agents.x-k8s.io
   bridgeImage: alpine/k8s:1.31.0
-  # Built from the SAME dark-factory-coder image (coderTemplate.image) + entrypoint.js,
-  # published to the S3 codeArtifact bucket. Fill in when the base image exists.
-  baseImageARN: ""          # arn:aws:lambdamicrovms:us-west-2:940019131157:image/<base>
-  codeArtifactUri: ""        # s3://<bucket>/dark-factory-coder/<version>.zip
+  # AWS-published base MicroVM image (ARM_64 — the only arch Lambda MicroVM supports).
+  baseImageARN: "arn:aws:lambda:us-west-2:aws:microvm-image:al2023-1"
+  # The SAME dark-factory-coder, built for arm64 (MicroVM is ARM_64-only) and pushed
+  # to ECR. codeArtifactUri accepts an ECR image URI directly — no S3 repackaging.
+  # NOTE: fill the real arm64 tag once built+pushed (task: arm64 coder image).
+  codeArtifactUri: "940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.3-arm64"
   defaults:
     maxIdleDurationSeconds: 900
     suspendedDurationSeconds: 300
-    ingressConnectorARN: ""  # arn:aws:lambdamicrovms:...:connector/ALL_INGRESS
-    egressConnectorARN: ""   # arn:aws:lambdamicrovms:...:connector/INTERNET_EGRESS
