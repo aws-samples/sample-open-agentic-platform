@@ -100,6 +100,35 @@ exec/attach passthrough is **best-effort** (full fidelity would need virtual-kub
 
 ---
 
+## D.3a — Suspend / resume (Sandbox.operatingMode → MicroVM)
+
+The Agent Sandbox CRD exposes `spec.operatingMode ∈ {Running, Suspended}` — the declarative
+suspend/resume intent. But the ACK `Microvm` CR has **no suspend field**: its spec is create-time
+only, `State` is status-only, and `suspend-microvm`/`resume-microvm` are **imperative SDK ops the ACK
+controller deliberately does not reconcile**. So flipping `operatingMode` does nothing on its own — a
+controller must translate intent into the SDK call.
+
+Flow D closes that gap with a tiny always-on **`microvm-lifecycle`** reconcile loop (a ConfigMap
+script on `alpine/k8s`, same pattern as the pool-manager — **no virtual-kubelet, no new image**):
+
+```
+Sandbox.operatingMode: Running   → Suspended :  aws lambda-microvms suspend-microvm --microvm-identifier <id>
+Sandbox.operatingMode: Suspended → Running   :  aws lambda-microvms resume-microvm  --microvm-identifier <id>
+```
+
+- `<id>` (the `microvmID`) is resolved from the `MicrovmSandbox` (KRO) status; the loop is idempotent
+  (stamps a `last-mode` annotation, acts only on transitions).
+- The `MicrovmSandbox` is **kept** across suspend (the bridge's `preStop` detects `operatingMode:
+  Suspended` and skips teardown), so the VM survives suspend/resume; it's deleted only on real claim
+  teardown → `TerminateMicrovm`.
+- Chosen over bridge `preStop` hooks alone because a reconcile loop is **robust to pod/node loss** and
+  resume needs no live pod. This is the open-source **Sandbox-CRD-driven** suspend/resume you get with
+  the MicroVM substrate.
+
+*Edit: `src/flow-d-suspend-resume.drawio` → `img/flow-d-suspend-resume.png`.*
+
+---
+
 ## D.4 — Future: when `lambdamicrovms` goes GA
 
 `lambdamicrovms` is currently **pre-GA** (`v1alpha1`), so its controller is self-managed. When it

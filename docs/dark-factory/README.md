@@ -320,6 +320,16 @@ then **streams the MicroVM's logs into the pod** and maps lifecycle (pod Running
 pod exit → `TerminateMicrovm`). To Flow B and the user the UX is identical to Flow A. Interactive
 exec/attach passthrough is **best-effort**; full fidelity is a virtual-kubelet follow-up.
 
+### Suspend / resume (Sandbox CRD)
+
+Because the substrate is a Lambda MicroVM (not a pod), Flow D gives you **declarative
+suspend/resume through the Agent Sandbox CRD**: set `Sandbox.spec.operatingMode: Suspended` and a
+small **`microvm-lifecycle`** reconcile loop calls `suspend-microvm` (and `resume-microvm` on
+`Running`) by the MicroVM id — the VM's state is retained across the cycle, and the `MicrovmSandbox` is
+kept (torn down only on real claim end). The ACK `Microvm` CR has no suspend field, so this loop
+supplies the missing intent→SDK translation — pure shim, no virtual-kubelet. See
+[`diagrams/flow-d-microvm-sandbox.md` §D.3a](diagrams/flow-d-microvm-sandbox.md).
+
 ### Delivery & status
 
 Shipped as GitOps, **disabled by default** (like the kata nodepool): a `microvm:` values block gates
