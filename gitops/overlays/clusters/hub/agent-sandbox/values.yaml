@@ -1,0 +1,22 @@
+# Hub (control-plane) overlay for the agent-sandbox capability.
+#
+# WHY THIS FILE IS REQUIRED
+# coderTemplate.image is intentionally EMPTY in the chart defaults (image URIs are
+# account-specific and must not ship in a public chart), and the SandboxTemplate
+# wraps it in Helm `required`. Without this file, agent-sandbox-hub fails to render
+# with "coderTemplate.image is required" rather than silently emitting an empty
+# image. Mirrors gitops/overlays/clusters/spoke-dev/agent-sandbox/values.yaml.
+#
+# The sandbox now runs HERE rather than on the spoke: df-run's claim step creates a
+# SandboxClaim with no cross-cluster mechanism, so the warm pool must sit on the
+# same cluster as the Dark Factory orchestrator (argo + argo-events).
+#
+# ⚠️ This URI points at ECR account 940019131157, which is NOT this deployment's
+# account (259732043995) — it is the value the chart previously defaulted to,
+# preserved so behaviour is unchanged. If it is not pullable from this account the
+# warm pods will report ImagePullBackOff rather than idling.
+#
+# To make the coder real: build examples/dark-factory/coder (entrypoint.js) into
+# THIS account's ECR and repoint the value below.
+coderTemplate:
+  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11

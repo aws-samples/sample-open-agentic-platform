@@ -46,9 +46,20 @@ enabledAddons:
   # manageAddons gate or already present). Superseded the out-of-band MNG recipe
   # in gitops/addons/charts/agent-sandbox/nodepool/README.md (validated live on
   # spoke-dev 2026-07-10: real kata VM, guest kernel 6.18.35).
-  agent_sandbox: true
+  #
+  # MOVED TO THE HUB (2026-07-30). df-run's claim step creates a SandboxClaim with
+  # no cross-cluster mechanism (no --context, no remote kubeconfig), so a pool on
+  # the spoke could never be claimed by the hub-side orchestrator — Flow B could
+  # not complete. The capability now runs on the control-plane cluster alongside
+  # argo + argo-events. See overlays/environments/control-plane/enabled-addons.yaml.
+  #
+  # Disabling prunes the operator, its CRDs, the RuntimeClasses/SandboxTemplate and
+  # the warm pool from this cluster (preserveResourcesOnDeletion is false), which is
+  # the intent of a move. The three stuck coder-warmpool pods here go with them.
+  agent_sandbox: false
   # kata-deploy installs the clh/qemu runtime on the kata nodes (separate app).
-  agent_sandbox_kata: true
+  # Off with the capability above — nothing on this cluster needs the runtime now.
+  agent_sandbox_kata: false
   # kata-deploy-fc — the Firecracker runtime (second kata-deploy release) for the
   # kata-fc nodes. OFF: the fc path (devmapper + fc pools) is unverified on this
   # platform. To use Firecracker: enable this, set kataFc.enabled=true on the
@@ -60,4 +71,11 @@ enabledAddons:
   # subnets/SG/role are discovered from cluster tags, so no infra is created
   # out-of-band. Requires `karpenter: true` (controller) + enable_agent_sandbox_kata
   # (runtime). See gitops/addons/charts/kata-nodepool.
-  kata_nodepool: true
+  #
+  # Off with the sandbox move: with no warm pool on this cluster there is no pending
+  # kata pod, so the pool would sit at 0 nodes forever. Disabling prunes the
+  # kata-nested EC2NodeClass + NodePool, and the kata node they provisioned is
+  # deprovisioned with them (consolidationPolicy WhenEmptyOrUnderutilized). This
+  # touches only karpenter.k8s.aws-group CRs — Auto Mode's own nodepools
+  # (group eks.amazonaws.com) are a separate partition and are unaffected.
+  kata_nodepool: false

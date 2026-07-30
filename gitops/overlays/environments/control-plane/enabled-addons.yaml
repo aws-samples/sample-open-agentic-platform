@@ -71,14 +71,13 @@ enabledAddons:
   # platform-owned karpenter chart via the external-overlay-repo ("layer 5")
   # wiring in gitops/fleet/hub/values.yaml.
   #
-  # STEP 2 (separate change): move agent_sandbox + agent_sandbox_kata here and
-  # disable them on the dev overlay.
-  #
-  # NOTE the gate for step 2 is NOT "a kata node exists" — Karpenter is
-  # demand-driven, so the kata NodePool sits at 0 nodes until a pending pod needs
-  # it, and the warm pool created by agent_sandbox IS that demand. The gate is
-  # instead: the vpc-cni + kube-proxy Addon MRs are Ready on hub, and the
-  # EC2NodeClass + NodePool exist. The node then appears once step 2 lands.
+  # Step 1 gate VERIFIED live on hub before step 2 was enabled below:
+  #   hub-karpenter-vpc-cni / -kube-proxy Addon MRs  SYNCED=True READY=True
+  #   hub live EKS addons                            vpc-cni, kube-proxy present
+  #   ec2nodeclass/kata-nested, nodepool/kata-nested READY=True, 0 nodes
+  # 0 nodes is correct: Karpenter is demand-driven, so the pool stays empty until
+  # a pending pod matches the kata taint + label. The warm pool below IS that
+  # demand — which is why "wait for a kata node" could never have been the gate.
   karpenter: true
   kata_nodepool: true
   # ACK controllers
@@ -109,3 +108,21 @@ enabledAddons:
   agent_core: true
   agent_gateway: true
   oam_components: true
+  # Agent Sandbox capability — Kata micro-VM sandboxes + warm pool (STEP 2 of the
+  # move off the spoke; disabled on the dev overlay in the same change).
+  #
+  # It lives HERE because the Dark Factory orchestrator runs here: df-run's claim
+  # step creates a SandboxClaim with no cross-cluster mechanism (no --context, no
+  # remote kubeconfig), and hub had no sandbox CRDs at all — so with the pool on
+  # the spoke, Flow B could not complete. Co-locating removes the problem rather
+  # than bridging it.
+  #
+  # enable_agent_sandbox gates BOTH the upstream operator (which installs the
+  # sandbox CRDs) and the capability chart (RuntimeClasses, SandboxTemplate, warm
+  # pool). coderTemplate.image is supplied by
+  # gitops/overlays/clusters/hub/agent-sandbox/values.yaml — the chart default is
+  # empty behind a Helm `required`, so that overlay is mandatory, not optional.
+  agent_sandbox: true
+  # kata-deploy installs the clh/qemu runtime onto the kata nodes (separate app).
+  # Required, or the warm pool's runtimeClassName has no handler on the node.
+  agent_sandbox_kata: true
