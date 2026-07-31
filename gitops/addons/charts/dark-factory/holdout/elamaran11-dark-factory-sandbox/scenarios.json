@@ -65,6 +65,20 @@
       "appliesWhen": "/isPrime/.test(diff)"
     },
     {
+      "id": "iseven-basic",
+      "feature": "isEven(n) correctly identifies even integers",
+      "scenario": "Given isEven, When I call it, Then isEven(4)=true, isEven(7)=false, isEven(0)=true, isEven(-2)=true, isEven(-3)=false. The zero + negative cases defeat a stub keyed to one example.",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); if(m.isEven(4)!==true||m.isEven(7)!==false||m.isEven(0)!==true||m.isEven(-2)!==true||m.isEven(-3)!==false){console.error('isEven wrong');process.exit(1)} console.log('ok')",
+      "appliesWhen": "/isEven/.test(diff)"
+    },
+    {
+      "id": "isodd-basic",
+      "feature": "isOdd(n) is the logical inverse of isEven",
+      "scenario": "Given isOdd, When I call it, Then isOdd(7)=true, isOdd(4)=false, isOdd(0)=false, isOdd(-3)=true. isOdd must be the exact inverse of isEven for the same inputs.",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); if(m.isOdd(7)!==true||m.isOdd(4)!==false||m.isOdd(0)!==false||m.isOdd(-3)!==true){console.error('isOdd wrong');process.exit(1)} console.log('ok')",
+      "appliesWhen": "/isOdd/.test(diff)"
+    },
+    {
       "id": "add-regression",
       "feature": "the pre-existing add function is not broken (regression)",
       "scenario": "Given the module still exports add, When I call add(2, 3), Then it returns 5. Any change to index.js must not regress this baseline behaviour.",
