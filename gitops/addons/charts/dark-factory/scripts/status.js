@@ -89,20 +89,81 @@ async function main() {
     const mark = na ? "⬜" : icon(s.state);
     return `- ${mark} **${label}:** ${s.desc || s.state}`;
   };
-  // DevOps row: prefer the real DevOps Agent check-run if configured, else the
-  // dark-factory/devops status (label-mode / coder-plugin path).
-  const devopsRow = DEVOPS_CHECK && by[DEVOPS_CHECK]
-    ? `- ${icon(by[DEVOPS_CHECK].state)} **DevOps review (AWS DevOps Agent):** ${by[DEVOPS_CHECK].desc || by[DEVOPS_CHECK].state}`
-    : row("devops", "DevOps review (AWS DevOps Agent)");
-  // Security row: prefer the real Security Agent GitHub App check-run (inline-bot
-  // review) when present; else fall back to our headless dark-factory/security
-  // relayed status. Both paths run — the App is the richer signal when installed.
-  const securityRow = SECURITY_CHECK && by[SECURITY_CHECK]
-    ? `- ${icon(by[SECURITY_CHECK].state)} **Security review (AWS Security Agent):** ${by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state}`
-    : row("security", "Security review (AWS Security Agent)");
-  // Overall state = worst across the dark-factory/* + agent verdicts we collected.
+
+  // ── THE REAL AWS AGENTS ARE THE SOURCE OF TRUTH ──────────────────────────────
+  // Both agents run TWICE on a PR and the copies can DISAGREE: the GitHub App bots
+  // (aws-security-agent[bot], aws-devops-agent-*[bot]) review the PR directly, while
+  // our hub-side steps drive the SAME agents headlessly + post dark-factory/* commit
+  // statuses. The headless copy has been observed to miss findings the App bot caught
+  // (e.g. a wildcard-ARN IAM policy) — so trusting the headless status produced a
+  // FALSE "no findings / LGTM" next to a bot review listing real findings. Fix: the
+  // consolidation reads the AGENT BOTS' OWN reviews as authoritative. The headless
+  // dark-factory/* statuses are demoted to a fallback ONLY when a bot didn't post.
+  //
+  // The bots post a formal REVIEW (state COMMENTED) whose body begins with a summary,
+  // plus INLINE review comments per finding. They do NOT emit a check-run for findings
+  // and never use CHANGES_REQUESTED, so we parse the review body + count inline
+  // comments rather than reading a state flag.
+  const reviews = (await api("GET", `/repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`).catch(() => [])) || [];
+  const prComments = (await api("GET", `/repos/${REPO}/pulls/${pr.number}/comments?per_page=100`).catch(() => [])) || [];
+  const latestBotReview = (pred) => (reviews.filter((r) => pred((r.user || {}).login || "")).slice(-1)[0]) || null;
+  const inlineCountBy = (pred) => prComments.filter((c) => pred((c.user || {}).login || "")).length;
+  const isSecBot = (l) => /^aws-security-agent(\[bot\]|-.*\[bot\])?$/i.test(l) || /security-agent/i.test(l) && /\[bot\]/i.test(l);
+  const isDevBot = (l) => /aws-devops-agent/i.test(l) && /\[bot\]/i.test(l);
+
+  // Parse an agent bot review body into {state, desc}. A body that reports one or
+  // more findings → failure; an explicit "no findings / no issues" → success; a bot
+  // that only said it's "reviewing…" (no verdict yet) → pending.
+  const parseAgentVerdict = (body, inlineFindings) => {
+    const b = (body || "").toLowerCase();
+    const m = b.match(/(\d+)\s+(?:medium|high|low|critical|informational)?[- ]?severity?\s*finding/) ||
+              b.match(/identified\s+\*{0,2}(\d+)\b[^.]*finding/) || b.match(/\b(\d+)\s+finding/);
+    const declaredNum = m ? parseInt(m[1], 10) : null;
+    const saysClean = /no (issues identified|findings|security issues)|no issues were|looks good|lgtm/i.test(body || "");
+    const stillReviewing = /is reviewing|will post feedback|analysis in progress/i.test(body || "") && declaredNum === null && !saysClean;
+    const n = declaredNum !== null ? declaredNum : (inlineFindings > 0 ? inlineFindings : 0);
+    if (stillReviewing) return { state: "pending", desc: "review in progress", n: null };
+    if (n > 0) return { state: "failure", desc: `${n} finding(s) — changes requested`, n };
+    if (saysClean || (declaredNum === 0)) return { state: "success", desc: "no findings", n: 0 };
+    // A bot review with a body we couldn't classify + inline comments = treat as findings.
+    if (inlineFindings > 0) return { state: "failure", desc: `${inlineFindings} finding(s) — changes requested`, n: inlineFindings };
+    return null; // no usable bot signal
+  };
+
+  // Security: prefer the App bot's review; else its configured check; else headless status.
+  const secBotReview = latestBotReview(isSecBot);
+  const secBotInline = inlineCountBy(isSecBot);
+  const secBot = secBotReview ? parseAgentVerdict(secBotReview.body, secBotInline) : null;
+  const secResolved = secBot
+    || (SECURITY_CHECK && by[SECURITY_CHECK] ? { state: by[SECURITY_CHECK].state, desc: by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state } : null)
+    || (by["dark-factory/security"] ? { state: by["dark-factory/security"].state, desc: by["dark-factory/security"].desc || by["dark-factory/security"].state } : null);
+  const securityRow = secResolved
+    ? `- ${icon(secResolved.state)} **Security review (AWS Security Agent):** ${secResolved.desc}${secBot ? " _(agent review)_" : ""}`
+    : `- ⬜ **Security review (AWS Security Agent):** _not run_`;
+
+  // DevOps: the App bot's release-readiness verdict lives in its commit STATUS/check
+  // (change approved / BLOCK / proceed-with-caution) — that IS the real bot. But it
+  // also posts inline review comments; if the status says "approved" yet the bot left
+  // change-requesting inline comments, surface that (do not silently call it clean).
+  const devBotStatus = (DEVOPS_CHECK && by[DEVOPS_CHECK]) ? by[DEVOPS_CHECK] : by["dark-factory/devops"];
+  const devInline = inlineCountBy(isDevBot);
+  const devBlockedByStatus = devBotStatus && (devBotStatus.state === "failure" || /block|not (safe|ready)|changes? requested/i.test(devBotStatus.desc || ""));
+  const devResolved = devBotStatus
+    ? { state: devBlockedByStatus ? "failure" : devBotStatus.state, desc: devBotStatus.desc || devBotStatus.state }
+    : null;
+  const devopsRow = devResolved
+    ? `- ${icon(devResolved.state)} **DevOps review (AWS DevOps Agent):** ${devResolved.desc}${devInline ? ` _(+${devInline} inline comment(s))_` : ""}`
+    : `- ⬜ **DevOps review (AWS DevOps Agent):** _not run_`;
+
+  // Overall = worst across build/holdout + the RESOLVED agent verdicts (bot-first).
   const overall = (() => {
-    const vals = Object.entries(by).filter(([k]) => k.startsWith("dark-factory/") || k === DEVOPS_CHECK || k === SECURITY_CHECK).map(([, v]) => v.state);
+    const vals = [
+      (by["dark-factory/implementation"] || {}).state,
+      // holdout only counts when it actually evaluated (not n/a)
+      (by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || "")) ? by["dark-factory/holdout"].state : undefined,
+      secResolved ? secResolved.state : undefined,
+      devResolved ? devResolved.state : undefined,
+    ].filter((v) => v !== undefined);
     if (vals.includes("failure") || vals.includes("error")) return "failure";
     if (vals.includes("pending")) return "pending";
     return vals.length ? "success" : "pending";
@@ -150,7 +211,9 @@ async function main() {
   // gating on it would mean the review never posts. A still-pending DevOps verdict is
   // shown as "in progress" in the review body. Idempotent via a hidden marker.
   const implState = (by["dark-factory/implementation"] || {}).state;
-  const secState = SECURITY_CHECK && by[SECURITY_CHECK] ? by[SECURITY_CHECK].state : (by["dark-factory/security"] || {}).state;
+  // Ready once build is done and the Security agent has a verdict (its findings are
+  // the strict gate). DevOps may still be async-pending — shown as "in progress".
+  const secState = secResolved ? secResolved.state : undefined;
   const readyToReview = implState && implState !== "pending" && (!secState || secState !== "pending");
   if (POST_VERDICT_REVIEW && readyToReview) {
     const RVMARK = "<!-- dark-factory:verdict-review -->";
@@ -164,6 +227,16 @@ async function main() {
         const devLine = devopsRow.replace(/^- /, "");
         const holdoutLine = (by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || ""))
           ? "\n" + row("holdout", "Holdout gate").replace(/^- /, "") : "";
+        // Build a plain-English findings summary from whichever agents flagged issues.
+        const flagged = [];
+        if (secResolved && secResolved.state === "failure") flagged.push(`Security (${secResolved.desc})`);
+        if (devResolved && devResolved.state === "failure") flagged.push(`DevOps (${devResolved.desc})`);
+        const verdictLine =
+          overall === "failure"
+            ? `**Overall: ❌ Changes requested — do NOT merge.** ${flagged.length ? flagged.join(" and ") + " flagged issues" : "One or more checks failed"}. Address the agents' findings (see their inline review comments), push a fix, and the pipeline re-evaluates. This is NOT approved.`
+            : overall === "pending"
+              ? "**Overall: ⏳ Security cleared; DevOps review still in progress** — final verdict pending the DevOps release-readiness review. Not yet approved."
+              : "**Overall: ✅ All checks green** — Build, Holdout, Security, and DevOps agents all cleared with no findings. Looks good to merge (human approval still required).";
         const reviewBody = [
           RVMARK,
           "### 🏭 Dark Factory — consolidated agent verdict",
@@ -173,18 +246,21 @@ async function main() {
           secLine,
           devLine,
           "",
-          overall === "success"
-            ? "**Overall: ✅ all checks green** — Security + DevOps agents cleared. LGTM."
-            : overall === "failure"
-              ? "**Overall: ❌ one or more checks failed** — see the rows above."
-              : "**Overall: ✅ build + Security cleared; DevOps review in progress** — see the DevOps row / check for the final release-readiness verdict.",
+          verdictLine,
           "",
-          "_Autonomously implemented + independently verified by the AWS Security & DevOps agents (their checks are the source of truth). This consolidated review is posted by the Dark Factory pipeline so both verdicts are always visible on the PR._",
+          "_The AWS Security & DevOps agents' own reviews are the source of truth; this consolidated review reads their verdicts (findings block the merge) so both are always visible in one place. Posted by the Dark Factory pipeline as a COMMENT — a human still owns the merge decision._",
         ].filter((x) => x !== null).join("\n");
-        // COMMENT (not APPROVE): the human still owns the merge approval; this review
-        // surfaces the agent verdicts without standing in for human sign-off.
-        await api("POST", `/repos/${REPO}/pulls/${pr.number}/reviews`, { event: "COMMENT", body: reviewBody });
-        console.log(`[df-run] posted consolidated verdict review (overall=${overall})`);
+        // Event: REQUEST_CHANGES when an agent flagged findings (so the PR visibly
+        // shows changes-requested, not a bland comment); COMMENT otherwise. Never
+        // APPROVE — the human owns merge approval. If REQUEST_CHANGES is rejected
+        // (e.g. can't request changes on own PR in some setups), fall back to COMMENT.
+        const event = overall === "failure" ? "REQUEST_CHANGES" : "COMMENT";
+        try {
+          await api("POST", `/repos/${REPO}/pulls/${pr.number}/reviews`, { event, body: reviewBody });
+        } catch (e) {
+          await api("POST", `/repos/${REPO}/pulls/${pr.number}/reviews`, { event: "COMMENT", body: reviewBody });
+        }
+        console.log(`[df-run] posted consolidated verdict review (event=${event}, overall=${overall})`);
       }
     } catch (e) {
       console.log(`[df-run] verdict review skipped: ${e.message.slice(0, 140)}`);
