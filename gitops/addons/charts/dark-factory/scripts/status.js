@@ -240,12 +240,18 @@ async function main() {
         const flagged = [];
         if (secResolved && secResolved.state === "failure") flagged.push(`Security (${secResolved.desc})`);
         if (devResolved && devResolved.state === "failure") flagged.push(`DevOps (${devResolved.desc})`);
+        // When overall is green, note if the advisory holdout is red (it doesn't
+        // block the merge, but the wording shouldn't claim "no findings" if a row is ❌).
+        const holdoutRed = by["dark-factory/holdout"] && by["dark-factory/holdout"].state === "failure"
+          && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || "");
         const verdictLine =
           overall === "failure"
             ? `**Overall: ❌ Changes requested — do NOT merge.** ${flagged.length ? flagged.join(" and ") + " flagged issues" : "One or more checks failed"}. Address the agents' findings (see their inline review comments), push a fix, and the pipeline re-evaluates. This is NOT approved.`
             : overall === "pending"
               ? "**Overall: ⏳ Security cleared; DevOps review still in progress** — final verdict pending the DevOps release-readiness review. Not yet approved."
-              : "**Overall: ✅ All checks green** — Build, Holdout, Security, and DevOps agents all cleared with no findings. Looks good to merge (human approval still required).";
+              : holdoutRed
+                ? "**Overall: ✅ Cleared to merge** — the AWS Security & DevOps agents found no blocking issues (build + both agents green). The holdout gate is below threshold but is ADVISORY (a train/test quality signal, not a merge gate) — review it before merging. Human approval still required."
+                : "**Overall: ✅ All checks green** — Build, Holdout, Security, and DevOps agents all cleared with no findings. Looks good to merge (human approval still required).";
         const reviewBody = [
           RVMARK,
           "### 🏭 Dark Factory — consolidated agent verdict",
