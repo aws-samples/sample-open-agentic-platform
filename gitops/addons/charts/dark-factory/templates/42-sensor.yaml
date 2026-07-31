@@ -115,11 +115,18 @@ spec:
             value: ["User"]
           # SELF-TRIGGER GUARD (important): the factory's OWN comments (sticky status,
           # findings, iteration notices) are posted with a real PAT → user.type="User",
-          # so the check above does NOT exclude them, and each would re-fire df-iterate
-          # → new commit → more comments → runaway loop. All factory comments carry a
-          # "<!-- dark-factory:... -->" HTML marker. RE2 (Argo Events regex) has no
-          # negative lookahead to exclude-by-substring at the filter, so the DEFINITIVE
-          # guard lives in iterate.js (it drops any comment containing the marker).
+          # so the data check above does NOT exclude them. Each such comment would
+          # otherwise CREATE a df-iterate workflow (even though iterate.js then no-ops on
+          # the marker) — noisy runaway of empty workflows. So we ALSO exclude them HERE,
+          # at the sensor, with an EXPRESSION filter (expr-lang, argo-events >=1.9):
+          # drop any comment whose body contains a "dark-factory:" marker, so no workflow
+          # is even created. iterate.js keeps the marker + bot + identity guards as
+          # defense-in-depth (this expr is the primary stop).
+        exprs:
+          - expr: 'body_comment_body matches "(?s).*" && !(body_comment_body contains "dark-factory:")'
+            fields:
+              - name: body_comment_body
+                path: body.comment.body
 {{- end }}
   triggers:
     - template:
