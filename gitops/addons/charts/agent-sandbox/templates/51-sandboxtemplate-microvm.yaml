@@ -207,4 +207,23 @@ spec:
             defaultMode: 0555
         - name: tmp
           emptyDir: {}
+---
+{{- /*
+Lambda-MicroVM SandboxWarmPool. SandboxClaim.spec.warmPoolRef is REQUIRED (a claim
+can't bind a bare template), so Flow D needs its own pool the df-run claim step
+targets when the darkfactory-lambda label fires. Kept small (bridge pods are tiny);
+each idle member is a bridge waiting to apply a MicrovmSandbox on claim.
+*/ -}}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: {{ .Values.microvm.warmPool.name | default "coder-warmpool-microvm" }}
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+    agent-sandbox.io/substrate: lambda-microvm
+spec:
+  replicas: {{ .Values.microvm.warmPool.targetIdle | default 1 }}
+  sandboxTemplateRef:
+    name: {{ .Values.warmPool.templateName }}-microvm
 {{- end }}

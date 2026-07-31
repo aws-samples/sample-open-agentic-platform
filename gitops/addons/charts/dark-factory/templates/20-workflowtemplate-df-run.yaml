@@ -47,6 +47,13 @@ spec:
       # existing branch to address the feedback.
       - name: iterate-note
         value: ""
+      # Which label fired the run → selects the coder substrate:
+      #   dark-factory        → Kata micro-VM (default; Flow B)
+      #   darkfactory-lambda  → Lambda MicroVM (Flow D)
+      # The claim step branches on this. Defaults to dark-factory so manual /
+      # df-iterate submits (which don't pass it) stay on the Kata path.
+      - name: trigger-label
+        value: "dark-factory"
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
@@ -81,6 +88,11 @@ spec:
         tasks:
           - name: claim
             template: claim-sandbox
+            arguments:
+              parameters:
+                # darkfactory-lambda → Lambda-MicroVM pool; else the Kata pool.
+                - name: warm-pool
+                  value: "{{`{{=workflow.parameters['trigger-label'] == 'darkfactory-lambda' ? '`}}{{ .Values.warmPool.lambdaName | default "coder-warmpool-microvm" }}{{`' : '`}}{{ .Values.warmPool.name }}{{`'}}`}}"
           - name: drive-coder
             template: await-coder
             dependencies: [claim]
@@ -164,6 +176,12 @@ spec:
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
+      inputs:
+        parameters:
+          # Which SandboxWarmPool to claim from (Kata vs Lambda-MicroVM). The DAG
+          # computes this from the trigger-label; defaults to the Kata pool.
+          - name: warm-pool
+            value: {{ .Values.warmPool.name }}
       outputs:
         parameters:
           - name: sandbox
@@ -188,8 +206,11 @@ spec:
               dark-factory.io/issue-number: "{{`{{workflow.parameters.issue-number}}`}}"
               dark-factory.io/managed-by: df-run
           spec:
+            # Substrate branch: the claim binds whichever warm pool the DAG passes
+            # in (Kata coder-warmpool by default; the Lambda-MicroVM pool when the
+            # darkfactory-lambda label fired). Everything else is identical.
             warmPoolRef:
-              name: {{ .Values.warmPool.name }}
+              name: "{{`{{inputs.parameters.warm-pool}}`}}"
             lifecycle:
               ttlSecondsAfterFinished: {{ .Values.claimTtlSeconds }}
             env:

@@ -64,7 +64,11 @@ spec:
       eventName: dark-factory
       filters:
         data:
-          # Only fire when the `dark-factory` label was ADDED to an issue.
+          # Fire when EITHER dark-factory label is added:
+          #   dark-factory        → Kata micro-VM substrate (Flow B, default)
+          #   darkfactory-lambda  → Lambda MicroVM substrate (Flow D)
+          # The label chosen is passed to df-run as the `substrate` param, which
+          # branches the claim step. Everything else in the pipeline is identical.
           - path: headers.X-Github-Event
             type: string
             value: ["issues"]
@@ -73,7 +77,7 @@ spec:
             value: ["labeled"]
           - path: body.label.name
             type: string
-            value: ["dark-factory"]
+            value: ["dark-factory", "darkfactory-lambda"]
     - name: pr-approved
       eventSourceName: dark-factory-github
       eventName: dark-factory
@@ -154,6 +158,9 @@ spec:
                     - name: issue-title
                     - name: issue-body
                     - name: base-branch
+                    # The label that fired: "dark-factory" or "darkfactory-lambda".
+                    # df-run maps this to the substrate (kata vs lambda-microvm).
+                    - name: trigger-label
           # Map GitHub webhook fields → workflow parameters.
           parameters:
             # Deterministic workflow name = df-run-<issue-id> (the dedup key).
@@ -188,6 +195,10 @@ spec:
                 dependencyName: issue-labeled
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
+            - src:
+                dependencyName: issue-labeled
+                dataKey: body.label.name
+              dest: spec.arguments.parameters.6.value
 
     # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
     - template:

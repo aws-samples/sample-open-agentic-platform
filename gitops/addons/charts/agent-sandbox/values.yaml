@@ -274,3 +274,9 @@ microvm:
   # -> suspend/resume-microvm. How often the loop runs.
   lifecycle:
     intervalSeconds: 15
+  # Lambda-MicroVM warm pool the df-run claim binds when the darkfactory-lambda
+  # label fires (Flow D). Small — bridge pods are tiny (the real coder runs in the
+  # MicroVM, not the pod). templateName is <warmPool.templateName>-microvm.
+  warmPool:
+    name: coder-warmpool-microvm
+    targetIdle: 1

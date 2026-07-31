@@ -11,8 +11,12 @@ argo:
   namespace: argo
 
 warmPool:
-  # The Flow A SandboxWarmPool the factory claims from.
+  # The Flow A SandboxWarmPool the factory claims from (Kata substrate, default).
   name: coder-warmpool
+  # Flow D: the Lambda-MicroVM SandboxWarmPool the factory claims from when the
+  # darkfactory-lambda label fires (coder runs in a MicroVM). Must match
+  # agent-sandbox microvm.warmPool.name.
+  lambdaName: coder-warmpool-microvm
   # Namespace of the pool / where claims + coder pods are created.
   namespace: agent-sandbox-system
 
