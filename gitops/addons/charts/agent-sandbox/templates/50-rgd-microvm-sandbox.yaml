@@ -48,9 +48,11 @@ spec:
         # arn:aws:lambda:<region>:aws:microvm-image:al2023-1 (ARM_64 — the only arch
         # Lambda MicroVM supports).
         baseImageARN: string
-        # URI of the coder code artifact for the image. Lambda MicroVM accepts an
-        # ECR image URI *or* an S3 path — Flow D points at the SAME dark-factory-coder
-        # (built for arm64), so no S3 repackaging is needed.
+        # S3 URI of the coder code artifact zip (app + Dockerfile), e.g.
+        # s3://<bucket>/<key>. Lambda MicroVM's codeArtifact.uri is S3-ONLY — it is
+        # NOT an ECR image reference (the Dockerfile inside the zip MAY pull private
+        # ECR base layers, which is why buildRole keeps ecr:Get*/BatchGetImage). The
+        # artifact must be published to the bucket before the first build runs.
         codeArtifactUri: string
       # ── APP-owned: the per-claim instance lifecycle ─────────────────────────
       run:
@@ -65,8 +67,12 @@ spec:
       name: string
     status:
       # Surfaced from the ACK resources so the bridge pod can mirror lifecycle.
+      # microvmState is the Lambda MicroVM lifecycle state (PENDING/RUNNING/
+      # SUSPENDING/SUSPENDED/TERMINATING/TERMINATED) from Microvm.status.state —
+      # NOT a k8s condition. The bridge maps pod-Ready to RUNNING off this.
       microvmID: ${microvm.status.microvmID}
-      microvmState: ${microvm.status.conditions[0].status}
+      microvmState: ${microvm.status.state}
+      imageState: ${image.status.state}
       imageARN: ${image.status.ackResourceMetadata.arn}
   resources:
     # 1) S3 bucket that stores the MicroVM code artifact (GA — Managed ACK).
@@ -96,8 +102,8 @@ spec:
             microvm-build: |
               {"Version":"2012-10-17","Statement":[
                 {"Effect":"Allow","Action":["ecr:GetAuthorizationToken","ecr:BatchGetImage","ecr:GetDownloadUrlForLayer"],"Resource":"*"},
-                {"Effect":"Allow","Action":["s3:GetObject"],"Resource":"arn:aws:s3:::*-microvm-artifacts/*"},
-                {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"arn:aws:logs:*:*:*"}
+                {"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["arn:aws:s3:::${bucket.spec.name}","arn:aws:s3:::${bucket.spec.name}/*"]},
+                {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"arn:aws:logs:*:*:log-group:/aws/lambda/microvms/*"}
               ]}
     # 3) IAM role the RUNNING MicroVM assumes (GA — Managed ACK). App-owned exec identity.
     #    Minimal by default (the coder reaches models via Bifrost, git/gh via public
@@ -113,7 +119,12 @@ spec:
           assumeRolePolicyDocument: |
             {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sts:AssumeRole","sts:TagSession"]}]}
     # 4) MicrovmImage (pre-GA — SELF-MANAGED lambdamicrovms controller). Platform-owned.
+    #    readyWhen gates the Microvm (resource 5) on a genuinely SUCCESSFUL build —
+    #    state CREATED/UPDATED — so the instance never launches from a half-built or
+    #    failed image (KRO holds the Microvm until this predicate is true).
     - id: image
+      readyWhen:
+        - ${image.status.state == "CREATED" || image.status.state == "UPDATED"}
       template:
         apiVersion: lambdamicrovms.services.k8s.aws/v1alpha1
         kind: MicrovmImage
@@ -125,6 +136,17 @@ spec:
           buildRoleARN: ${buildRole.status.ackResourceMetadata.arn}
           codeArtifact:
             uri: ${schema.spec.image.codeArtifactUri}
+          # Lambda MicroVM is ARM_64-ONLY — the sole supported architecture. The
+          # code artifact + any bundled binaries must be arm64 (dark-factory-coder
+          # is built for arm64 for exactly this substrate).
+          cpuConfigurations:
+            - architecture: ARM_64
+          # CloudWatch build/runtime logs. On a CREATE_FAILED the controller can't
+          # see the build output — this is where it lands:
+          #   aws logs tail /aws/lambda/microvms/${schema.spec.name}-image
+          logging:
+            cloudWatch:
+              logGroup: /aws/lambda/microvms/${schema.spec.name}-image
     # 5) Microvm instance (pre-GA — SELF-MANAGED). App-owned lifecycle. Runs the
     #    same dark-factory-coder entrypoint that Flow A's Kata pod runs.
     - id: microvm
