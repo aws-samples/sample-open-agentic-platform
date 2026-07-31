@@ -133,6 +133,19 @@ holdout:
   enabled: true
   # Fraction of scenarios that must pass for the gate to be green.
   threshold: 0.90
+  # FAIL CLOSED when the gate cannot verify anything (review §3 fail-open).
+  #
+  # Two cases used to report SUCCESS having checked nothing, indistinguishable on
+  # the PR from a real pass:
+  #   - no holdout/<owner>-<repo>/ fixture at all → the step exited 0 and posted
+  #     no status whatsoever;
+  #   - a fixture present but ZERO scenarios applicable → ratio computed as 1.
+  # Both now report `NOT VERIFIED` as a failure.
+  #
+  # Set false to accept unverified changes — correct only on a repo where partial
+  # scenario coverage is expected and understood. Read as a real bool (hasKey, not
+  # Helm `default`, which treats false as empty and would flip it back to true).
+  requireScenarios: true
   # 2-of-3 majority per scenario smooths judge non-determinism.
   judgeRuns: 3
   judgeQuorum: 2
@@ -146,9 +159,13 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  # NOTE: ECR account 940019131157 (+ the coder/deploy-test image tags) is an
-  # EXAMPLE registry — repoint every dark-factory image below at your own ECR.
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
+  # REQUIRED, intentionally EMPTY: an ECR URI is account-specific and must not ship
+  # as a public chart default (review §1). The dark-factory registry entry
+  # (gitops/addons/registry/sandbox.yaml) supplies it, templating the registry from
+  # the cluster's aws_account_id + aws_region annotations — so no per-cluster overlay
+  # is needed. Wrapped in `required` at the point of use: unset fails at RENDER with
+  # a named error rather than emitting `image:` empty and failing at pod creation.
+  evalImage: ""
 
 # ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
 # Two independent reviewers, run OUTSIDE the coder VM (the coder never grades
@@ -197,18 +214,36 @@ postVerdictReview: true
 # which writes their IDs into `secretName`. IAM (IRSA role, service role, S3
 # bucket, OIDC provider) is committed Terraform in iam/securityagent.tf. The
 # per-run review step (scripts/security-agent.sh) reads the Secret. All values
-# below are the live, validated resources (account 940019131157, us-west-2).
+# below are OUTPUTS of that Terraform — account-specific, so they ship EMPTY.
 securityAgent:
-  enabled: true
+  # OPT-IN (was default true). Two reasons, both learned the hard way:
+  #
+  #  1. Every value below is ACCOUNT-SPECIFIC and must not ship as a chart default
+  #     in a public repo (review §1).
+  #  2. templates/06-securityagent-bootstrap.yaml is an ArgoCD **PreSync hook**. On
+  #     any cluster that cannot assume the role it dies with
+  #     `InvalidIdentityToken ... AssumeRoleWithWebIdentity` — and a failed PreSync
+  #     hook ABORTS THE WHOLE APP SYNC. Observed live: dark-factory-hub pinned at
+  #     OutOfSync/Missing through 20+ retries, so the cluster received none of the
+  #     chart's other changes. Defaulting true made the app undeployable for
+  #     everyone except the account that owns these ARNs.
+  #
+  # To enable: run iam/securityagent.tf in YOUR account, then set enabled + the four
+  # ARNs/bucket below per cluster (a per-cluster overlay or the registry entry).
+  enabled: false
   region: us-west-2
-  # Agent space name the bootstrap Job finds-or-creates (adopts as-0fa9566... ).
+  # Agent space name the bootstrap Job finds-or-creates.
   spaceName: dark-factory
-  # Committed IAM (iam/securityagent.tf) outputs — the chart consumes, never mints.
-  irsaRoleArn: arn:aws:iam::940019131157:role/df-securityagent-irsa
-  serviceRoleArn: arn:aws:iam::940019131157:role/service-role/df-securityagent-service-role
-  diffBucket: dark-factory-secagent-940019131157-us-west-2
+  # Committed IAM (iam/securityagent.tf) OUTPUTS — the chart consumes, never mints.
+  # Intentionally EMPTY: account-specific. irsaRoleArn is wrapped in `required` at
+  # the point of use, so enabling without setting it fails at render with a named
+  # error instead of minting a broken ServiceAccount.
+  irsaRoleArn: ""
+  serviceRoleArn: ""
+  # S3 bucket the diff is staged in (name embeds the account ID — set per cluster).
+  diffBucket: ""
   # IAM Identity Center instance (create-application → console renders the space).
-  idcInstanceArn: arn:aws:sso:::instance/ssoins-7907c8a7931ceef3
+  idcInstanceArn: ""
   # Secret (argo ns) the bootstrap Job writes + the review step reads.
   secretName: dark-factory-securityagent
   # Bootstrap Job image — MUST have a current aws-cli v2 (the securityagent
@@ -292,7 +327,7 @@ devopsAgent:
 
 # Image for hub-side agent steps: needs aws-cli + kubectl + node + git + zip.
 # Reuse the coder image (has node/git/zip); the bootstrap Job adds aws-cli.
-reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
+reviewImage: ""
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision
@@ -361,6 +396,27 @@ deployTest:
   enabled: true
   # Regex (grep -E) of changed files that mark each artifact kind. k8s takes
   # precedence when a PR touches both.
+  # Pod Security Standard ENFORCED on the ephemeral test namespace, applied at
+  # namespace-create time — before any coder-written manifest lands in it (review:
+  # HIGH). The namespace used to carry only dark-factory.io/* labels, so a manifest
+  # the model wrote could run a privileged pod with a hostPath mount = root on the
+  # node. PodSecurity is evaluated at pod ADMISSION, so labelling after create leaves
+  # an unchecked window; deploy-test.sh now creates namespace + labels + quota in one
+  # apply.
+  #
+  # restricted (default, fail-secure) rejects privileged, hostPath, host namespaces,
+  # AND root/non-seccomp containers — note that refuses ordinary images too (a plain
+  # nginx manifest fails, reported as a deploy-test failure with the PodSecurity
+  # reason surfaced). Use `baseline` to keep blocking privileged/hostPath/host-ns
+  # while allowing root containers.
+  podSecurityStandard: restricted
+  # Blast-radius cap on the same namespace. PVCs and LB/NodePort Services are
+  # forbidden outright (0) — an ephemeral probe has no need for them and they
+  # provision real infrastructure.
+  quota:
+    pods: 20
+    cpu: 4
+    memory: 8Gi
   k8sPatterns: "(Chart\\.yaml|/templates/|k8s/|deployment\\.ya?ml|Dockerfile)"
   terraformPatterns: "\\.tf$"
   # Where each kind's files live in the repo (dir or file). If absent, the step
