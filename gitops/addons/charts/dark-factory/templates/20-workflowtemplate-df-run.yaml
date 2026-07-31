@@ -353,14 +353,7 @@ spec:
           PR_NUM="{{`{{inputs.parameters.pr-number}}`}}"
           curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
             "${API}/pulls/${PR_NUM}/files?per_page=100" 2>/dev/null \
-            | python3 -c 'import json,sys
-try: files=json.load(sys.stdin)
-except Exception: files=[]
-out=[]
-for f in files:
-    out.append("diff --git a/%s b/%s" % (f.get("filename",""), f.get("filename","")))
-    if f.get("patch"): out.append(f["patch"])
-open("/tmp/diff.patch","w").write("\n".join(out))' 2>/dev/null || echo "" > /tmp/diff.patch
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); files=d if isinstance(d,list) else []; open("/tmp/diff.patch","w").write("\n".join("diff --git a/%s b/%s\n%s"%(f.get("filename",""),f.get("filename",""),f.get("patch","")) for f in files))' 2>/dev/null || echo "" > /tmp/diff.patch
           # Fallback: if the API path produced nothing, fall back to a local diff.
           [ -s /tmp/diff.patch ] || { git fetch --quiet --depth 1 origin "${BASE}" 2>/dev/null || true; git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch; }
           echo "[holdout] diff.patch $(wc -l < /tmp/diff.patch) lines (via compare API)"
