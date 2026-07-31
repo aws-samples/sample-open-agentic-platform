@@ -86,6 +86,13 @@
       "appliesWhen": "/clamp/.test(diff)"
     },
     {
+      "id": "sum-basic",
+      "feature": "sum(numbers) totals an array",
+      "scenario": "Given sum, When I call it, Then sum([1,2,3])=6, sum([])=0, sum([-1,1])=0, sum([10])=10, sum([5,5,5,5])=20.",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); const eq=(a,b)=>a===b; if(!eq(m.sum([1,2,3]),6)||!eq(m.sum([]),0)||!eq(m.sum([-1,1]),0)||!eq(m.sum([10]),10)||!eq(m.sum([5,5,5,5]),20)){console.error('sum wrong');process.exit(1)} console.log('ok')",
+      "appliesWhen": "/\\bsum\\b/.test(diff)"
+    },
+    {
       "id": "add-regression",
       "feature": "the pre-existing add function is not broken (regression)",
       "scenario": "Given the module still exports add, When I call add(2, 3), Then it returns 5. Any change to index.js must not regress this baseline behaviour.",
