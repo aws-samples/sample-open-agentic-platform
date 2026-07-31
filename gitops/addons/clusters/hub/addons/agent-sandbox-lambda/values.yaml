@@ -6,10 +6,16 @@
 # coder artifact is published to S3. Managed KRO + Managed ACK capabilities are
 # ACTIVE on the hub. The ARNs below are public identifiers (not secrets).
 microvm:
-  enabled: false
+  enabled: true
   region: us-west-2
   apiGroup: sandbox.agents.x-k8s.io
   bridgeImage: alpine/k8s:1.31.0
+  # Hub account (for the ACK PodIdentityAssociation role ARN).
+  accountId: "940019131157"
+  podIdentity:
+    clusterName: hub
+    controllerNamespace: ack-system
+    controllerServiceAccount: ack-lambdamicrovms-controller
   # AWS-published base MicroVM image (ARM_64 — the only arch Lambda MicroVM supports).
   baseImageARN: "arn:aws:lambda:us-west-2:aws:microvm-image:al2023-1"
   # Lambda MicroVM codeArtifact.uri is S3-ONLY (a zip with the coder app + a Dockerfile);

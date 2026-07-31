@@ -502,7 +502,7 @@ kata-deploy:
 # CRDs + controller are up before the agent-sandbox chart's MicrovmSandbox RGD
 # (wave 2) references them.
 ack-lambdamicrovms:
-  enabled: false
+  enabled: true
   namespace: ack-system
   chartName: lambdamicrovms-chart
   defaultVersion: '0.1.1'

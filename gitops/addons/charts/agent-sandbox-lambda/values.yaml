@@ -29,6 +29,20 @@ microvm:
   # AND the AWS CLI (RunMicrovm/suspend/resume/terminate). alpine/k8s bundles both.
   bridgeImage: alpine/k8s:1.31.0
 
+  # AWS account id — used to construct the controller role ARN for the ACK
+  # PodIdentityAssociation (which takes an ARN, not a role-ref). Overlay per cluster.
+  accountId: ""
+
+  # Controller bootstrap IAM (ALL-ACK: iam.services.k8s.aws Role + eks.services.k8s.aws
+  # PodIdentityAssociation — templates/shim/00-controller-pod-identity.yaml). This is
+  # the ONE IAM the KRO RGD can't self-create (creds-before-create). Managed by the
+  # Managed-ACK iam+eks controllers on the hub. The bridge/lifecycle SAs reuse this
+  # same role (they also call lambda-microvms).
+  podIdentity:
+    clusterName: hub
+    controllerNamespace: ack-system
+    controllerServiceAccount: ack-lambdamicrovms-controller
+
   # The ONE platform image built by KRO/ACK (10-rgd-microvm-image.yaml). Built ONCE
   # per cluster; the shim reads its status (imageARN + executionRoleARN) to RunMicrovm
   # per session. Lambda MicroVM is ARM_64-ONLY. codeArtifactUri is an S3 URI
