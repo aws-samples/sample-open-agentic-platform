@@ -148,7 +148,7 @@ REPO_URL="$REPO_URL" REVISION="$REPO_REVISION" BASEPATH="gitops/addons/" \
   HUB_CLUSTER_NAME="in-cluster" \
   PLATFORM_REPO_URL="$PLATFORM_REPO_URL" PLATFORM_REPO_REVISION="$PLATFORM_REPO_REVISION" \
   envsubst '${REPO_URL} ${REVISION} ${BASEPATH} ${HUB_CLUSTER_NAME} ${PLATFORM_REPO_URL} ${PLATFORM_REPO_REVISION}' \
-  < gitops/fleet/bootstrap/agent-platform-app.yaml | kubectl apply -f -
+  < gitops/bootstrap/agent-platform-app.yaml | kubectl apply -f -
 echo "✅ Agent-platform bootstrap deployed"
 echo ""
 

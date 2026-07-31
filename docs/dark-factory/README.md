@@ -134,7 +134,7 @@ alwaysSelector:
 | **`SandboxTemplate` `coder-sandbox`** | `agent-sandbox/templates/20-sandboxtemplate.yaml` | The coder pod spec the warm pool clones (isolation invariants baked in) |
 | **`SandboxWarmPool` `coder-warmpool`** | `agent-sandbox/templates/40-sandboxwarmpool.yaml` | Native operator primitive — keeps N idle sandboxes pre-warmed; refills on claim |
 | **NetworkPolicy** (egress lockdown) | `agent-sandbox/templates/30-networkpolicy.yaml` | Default-deny egress; allow only DNS + Bifrost + HTTPS — **plus, on the hub, deny the control-plane services** (see [§10](#10-security-model)) |
-| **kata-readiness DaemonSet** | `agent-sandbox/templates/15-kata-readiness.yaml` | Removes the `runtime-not-ready` startup taint once kata-deploy is healthy |
+| ~~kata-readiness DaemonSet~~ | *removed* | kata-deploy **4.0.0** (PR kata-containers#13284) removes the `runtime-not-ready` startup taint itself as its final install step, so the external DaemonSet is gone — see `startupTaints` on the kata-deploy registry entry |
 
 ### Hub prerequisites (Auto Mode can't host Kata)
 
@@ -144,9 +144,9 @@ self-managed nested-virt Managed Node Group** alongside Auto Mode:
 
 | Requirement | Detail |
 |---|---|
-| **Nested-virt MNG** | `c8i`/`m8i` instances with `cpu_options.nested_virtualization=enabled`, `/dev/kvm` present, `min=0` scale-to-zero. Artifacts in `gitops/addons/charts/agent-sandbox/nodepool/` (`kata-mng.tf` / eksctl / nodeadm userData). |
+| **Nested-virt nodes** | `c8i`/`m8i` instances with nested virtualization enabled, `/dev/kvm` present, scale-to-zero. Provisioned by the [`kata-nodepool`](../../gitops/addons/charts/kata-nodepool/README.md) chart (Karpenter `EC2NodeClass` + `NodePool`). The earlier self-managed-MNG artifacts under `agent-sandbox/nodepool/` are removed — see that directory's README for the superseded design. |
 | **Auto-Mode addon prereqs** | Self-managed nodes get neither CNI nor kube-proxy from Auto Mode — the `vpc-cni` **and** `kube-proxy` EKS addons must be installed or the kata node stays `NotReady` / kata-deploy crashloops. |
-| **Tainted + labelled** | Node registers `kata=true:NoSchedule` (workload taint) + `katacontainers.io/runtime-not-ready` (startup taint, removed by kata-readiness), labelled `kata-enabled=true` — so **coder VMs never co-schedule with hub control-plane pods**. |
+| **Tainted + labelled** | Node registers `kata=true:NoSchedule` (workload taint) + `katacontainers.io/runtime-not-ready` (startup taint, removed by kata-deploy 4.0.0 itself), labelled `kata-enabled=true` — so **coder VMs never co-schedule with hub control-plane pods**. |
 
 > These are hard requirements: without the nested-virt MNG the warm pool has nowhere to run; without
 > the taint + label + egress lockdown, an untrusted coder VM could land next to — or reach — the hub's

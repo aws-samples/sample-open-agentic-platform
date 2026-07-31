@@ -18,7 +18,7 @@ externalSecret:
 # ignoreMissingValueFiles, so paths we don't populate are silent no-ops.
 #
 # SCOPE: only the PLATFORM appset consumes these. The agentic appset
-# (gitops/fleet/bootstrap/agent-platform-app.yaml) never sets overlayRepoURLGit,
+# (gitops/bootstrap/agent-platform-app.yaml) never sets overlayRepoURLGit,
 # so agentic addons keep resolving overlays via layer 4 exactly as before — no
 # double-read of files like overlays/clusters/hub/agent-gateway/values.yaml.
 #

@@ -93,7 +93,9 @@ aws eks create-pod-identity-association \
 
 ### Deploy
 
-The `appset-chart` generator (sourced from the platform repo, appmod-blueprints — **not** vendored here) generates one ApplicationSet per addon from this repo's `gitops/addons/registry/` files. Deploy it as a multi-source ArgoCD Application:
+The `appset-chart` generator (sourced from the platform repo, appmod-blueprints — **not** vendored here) generates one ApplicationSet per addon from this repo's `gitops/addons/registry/` files. Deploy it as a multi-source ArgoCD Application.
+
+> **The canonical, maintained copy is [`gitops/bootstrap/agent-platform-app.yaml`](bootstrap/agent-platform-app.yaml)** — a template whose repo coordinates are injected with `envsubst` by `task agentic:bootstrap` (or `scripts/bootstrap.sh`). Prefer that file over the illustrative YAML below: **add new `registry/*.yaml` entries there**, since a hand-maintained duplicate drifts (this block was missing `registry/sandbox.yaml` until it was spotted, which silently omitted every agent-sandbox addon).
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -120,6 +122,7 @@ spec:
           - $values/gitops/addons/registry/gateway.yaml
           - $values/gitops/addons/registry/observability.yaml
           - $values/gitops/addons/registry/agentcore.yaml
+          - $values/gitops/addons/registry/sandbox.yaml
         valuesObject:
           # Umbrella gate only; per-addon enable_<addon> selectors (useSelectors:true
           # from _defaults) govern placement. Do NOT re-set repoURLGitBasePath here.
