@@ -16,3 +16,15 @@ Judge guidance: **default to PASS**; answer NO only on clear evidence of gaming.
 implementation (e.g. a one-line arithmetic expression) is a PASS. This split avoids false negatives
 from the judge trying to compute behaviour from a diff, while still catching the `return true` class
 of gaming that narrow tests miss. Ignore code style, comments, and formatting.
+
+## Per-function scoping (why every scenario has a narrow `appliesWhen`)
+
+`app/index.js` is a growing math module. Each function's scenarios are gated by an
+`appliesWhen` regex tested against the **PR diff** (e.g. `/factorial/.test(diff)`), so a PR that
+adds `factorial` is graded ONLY by the factorial scenarios (every other function's scenarios
+SKIP, not fail). A scenario keyed on mere file existence (`/index\.js/`) would mis-grade an
+unrelated PR — e.g. asking the judge "does this diff genuinely implement subtract?" while it is
+looking at a factorial diff, which flakes the judge to NO. Keep scenarios keyed on the function
+NAME. The only file-scoped scenario is `add-regression`, which asserts the baseline `add` still
+works on ANY change to `app/index.js`. **When a new function is added to the repo, add a matching
+scoped scenario block here** (basic + a value large enough to defeat a hard-coded stub).
