@@ -416,30 +416,26 @@ async function main() {
     //     (or "not connected" honestly if the plugin isn't wired).
     // Either way the hub sticky-status step overwrites this block with the live
     // verdict (from the check-run / statuses) once verification completes.
-    let devopsLine, secLine;
-    if (DEVOPS_AGENT_MODE === "off") {
-      devopsLine = "- ⏳ **DevOps review (AWS DevOps Agent):** _pending — AWS DevOps Agent reviews this PR…_";
-      secLine = "- ⏳ **Security review (AWS Security Agent):** _runs after DevOps clears…_";
-    } else {
-      const devopsIcon = devops.cleared ? "✅" : (devops.verdict === "not-connected" ? "⚠️" : (devops.verdict === "BLOCK" ? "⛔" : "⏳"));
-      devopsLine = devops.verdict === "not-connected"
-        ? "- ⚠️ **DevOps review (AWS DevOps Agent):** _not connected — one-time console setup required_"
-        : `- ${devopsIcon} **DevOps review (AWS DevOps Agent):** ${devops.verdict}`;
-      secLine = devops.cleared
-        ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
-        : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
-    }
+    // NEUTRAL placeholder only. The coder opens the PR BEFORE the hub verify steps
+    // + the AWS agents run, so it must NOT print per-step states (they'd be stale
+    // guesses that confused readers: "Holdout: running…" long after it finished,
+    // "Security: runs after DevOps…" while the bot was already done). The pipeline's
+    // ONE consolidated review (status.js → dark-factory:verdict-review) is the
+    // authoritative live status. We keep the dark-factory:status marker so status.js
+    // can still replace this block with the final verdict summary at the end.
     const prBody = [
       `Closes #${ISSUE}.`,
       "",
       "<!-- dark-factory:status -->",
       "### 🏭 Dark Factory — verification",
-      `- ✅ **Build + unit tests:** ${test.summary}`,
-      "- ⏳ **Holdout gate:** _running…_",
-      devopsLine,
-      secLine,
+      `- ✅ **Build + unit tests (in-VM):** ${test.summary}`,
       "",
-      "_Autonomously implemented in a hardware-isolated Kata micro-VM; DevOps + Security reviews are the real AWS Frontier Agents (see the checks below)._",
+      "⏳ **Verification in progress.** Hub gates (holdout, deploy-test) and the real",
+      "AWS DevOps + Security agents are reviewing this PR. Results are posted as a",
+      "single **consolidated verdict review** on this PR when they finish — that",
+      "review (not this body) is the source of truth for merge readiness.",
+      "",
+      "_Autonomously implemented in a hardware-isolated micro-VM. DevOps + Security reviews are the real AWS Frontier Agents._",
     ].join("\n");
     let prNumber = "";
     try {

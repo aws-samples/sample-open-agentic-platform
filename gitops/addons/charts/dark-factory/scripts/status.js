@@ -68,7 +68,7 @@ async function main() {
       for (const s of st.statuses || []) {
         if (seen[s.context]) continue;
         seen[s.context] = 1;
-        by[s.context] = { state: s.state, desc: s.description || "" };
+        by[s.context] = { state: s.state, desc: s.description || "", url: s.target_url || "" };
       }
     } catch (e) { /* skip this commit */ }
     try {
@@ -149,10 +149,14 @@ async function main() {
   const devInline = inlineCountBy(isDevBot);
   const devBlockedByStatus = devBotStatus && (devBotStatus.state === "failure" || /block|not (safe|ready)|changes? requested/i.test(devBotStatus.desc || ""));
   const devResolved = devBotStatus
-    ? { state: devBlockedByStatus ? "failure" : devBotStatus.state, desc: devBotStatus.desc || devBotStatus.state }
+    ? { state: devBlockedByStatus ? "failure" : devBotStatus.state, desc: devBotStatus.desc || devBotStatus.state, url: devBotStatus.url || "" }
     : null;
+  // Surface the DevOps Agent's full release-readiness report link (target_url) so
+  // reviewers can open the assessment, plus a count of its inline comments.
   const devopsRow = devResolved
-    ? `- ${icon(devResolved.state)} **DevOps review (AWS DevOps Agent):** ${devResolved.desc}${devInline ? ` _(+${devInline} inline comment(s))_` : ""}`
+    ? `- ${icon(devResolved.state)} **DevOps review (AWS DevOps Agent):** ${devResolved.desc}` +
+      (devResolved.url ? ` — [view report ↗](${devResolved.url})` : "") +
+      (devInline ? ` _(+${devInline} inline comment(s))_` : "")
     : `- ⬜ **DevOps review (AWS DevOps Agent):** _not run_`;
 
   // Overall = worst across build/holdout + the RESOLVED agent verdicts (bot-first).

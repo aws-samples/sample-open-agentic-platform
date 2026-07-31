@@ -115,12 +115,15 @@ spec:
               parameters:
                 - name: pr-number
                   value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
-          # Security Agent (narrow/strict) runs SECOND — only after DevOps cleared
-          # (label present). Headless: create-code-review → job → list-findings.
+          # Security Agent — WAITS FOR the real aws-security-agent[bot]'s own review
+          # and mirrors its verdict into dark-factory/security. The App bot reviews
+          # autonomously + IN PARALLEL with the DevOps bot, so this runs alongside
+          # devops-gate (depends on drive-coder, NOT gated behind DevOps clearing —
+          # otherwise a slow DevOps review would skip the security signal entirely).
           - name: security-agent
             template: security-agent
-            dependencies: [devops-gate]
-            when: "{{`{{tasks.devops-gate.outputs.parameters.cleared}}`}} == true"
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
 {{- end }}
 {{- if .Values.deployTest.enabled }}
           # P4 — detect whether the PR touches deployable artifacts (cheap grep of
@@ -522,12 +525,14 @@ spec:
     # ---- 2d. security-agent (P3, step 2) — REAL AWS Security Agent, headless ----
     # Runs SECOND, only after DevOps cleared (label present). A trusted hub-side
     # step that clones df/issue-N read-only, stages {source archive, unified diff}
-    # in S3, and calls the genuine AWS Security Agent API (create-code-review →
-    # start-code-review-job → list-findings) via the workflow's IRSA role — NO
-    # GitHub App, NO OAuth. Narrow/strict: OWASP Top 10, secrets, IAM misuse,
-    # dependency risk. Posts dark-factory/security + a PR comment. Advisory unless
-    # securityAgent.blockLevel is raised and a finding meets it. All logic in
-    # scripts/security-agent.sh (ConfigMap file — avoids YAML block-scalar hazards).
+    # SINGLE SECURITY SIGNAL = THE REAL AWS SECURITY AGENT BOT.
+    # We do NOT run a second headless scan (that redundant path disagreed with the
+    # bot — reported "no findings" while aws-security-agent[bot] flagged real issues
+    # — and produced a false LGTM). Instead this step WAITS for the GitHub App bot's
+    # own review on the PR and MIRRORS its verdict into the dark-factory/security
+    # commit status (findings -> failure -> merge blocked; clean -> success). Because
+    # the consolidated `status` step depends on this step, the pipeline now naturally
+    # waits for the real bot before posting its verdict. Node-only → runs on reviewImage.
     - name: security-agent
       activeDeadlineSeconds: {{ add .Values.securityAgent.pollTimeoutSeconds 300 }}
       volumes:
@@ -535,12 +540,8 @@ spec:
           configMap:
             name: df-review
       script:
-        # Runs on the glibc aws-cli v2 image — the ONLY place with the brand-new
-        # `securityagent` verbs (Alpine/musl aws-cli 2.32 lacks them; verified
-        # in-cluster). security-agent.sh is node-free (python3 + curl + git + aws),
-        # so this minimal image needs only git added at start.
-        image: {{ .Values.securityAgent.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
-        command: [bash]
+        image: {{ .Values.reviewImage }}
+        command: [node]
         env:
           - name: GH_TOKEN
             valueFrom:
@@ -551,44 +552,19 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
-          - name: BASE
-            value: "{{`{{workflow.parameters.base-branch}}`}}"
-          - name: WF_NAME
-            value: "{{`{{workflow.name}}`}}"
-          # Agent-space + service-role + bucket + region come from the Secret the
-          # PreSync bootstrap Job wrote (find-or-create'd the space once).
-          - name: AGENT_SPACE_ID
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: agentSpaceId
-          - name: SERVICE_ROLE_ARN
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: serviceRoleArn
-          - name: DIFF_BUCKET
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: diffBucket
-          - name: AWS_REGION
-            value: {{ .Values.securityAgent.region | quote }}
+          # Findings at/above this severity fail the status (block the merge). The bot
+          # doesn't expose per-severity counts uniformly, so ANY finding fails unless
+          # BLOCK_LEVEL=none (then findings are advisory). Default medium.
           - name: BLOCK_LEVEL
             value: {{ .Values.securityAgent.blockLevel | quote }}
           - name: POLL_TIMEOUT
             value: {{ .Values.securityAgent.pollTimeoutSeconds | quote }}
         volumeMounts:
           - name: review-script
-            mountPath: /scripts/security-agent.sh
-            subPath: security-agent.sh
+            mountPath: /scripts/security-wait.js
+            subPath: security-wait.js
         source: |
-          set -eu
-          # amazon/aws-cli (glibc) has current aws-cli v2 + python3 + curl; add git.
-          command -v git >/dev/null 2>&1 || { echo "[security-agent] installing git..."; (dnf install -y -q git >/dev/null 2>&1 || yum install -y -q git >/dev/null 2>&1 || microdnf install -y git >/dev/null 2>&1); }
-          command -v zip >/dev/null 2>&1 || { dnf install -y -q zip >/dev/null 2>&1 || yum install -y -q zip >/dev/null 2>&1 || microdnf install -y zip >/dev/null 2>&1 || true; }
-          aws securityagent help >/dev/null 2>&1 || { echo "[security-agent] ERROR: aws-cli lacks securityagent (needs v2 >=2.35 glibc)"; exit 1; }
-          bash /scripts/security-agent.sh
+          require("/scripts/security-wait.js");
 {{- end }}
 
 {{- if .Values.deployTest.enabled }}
