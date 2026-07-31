@@ -142,9 +142,17 @@ async function main() {
   // App bots cannot be added via the requested_reviewers API). So — for a
   // CONSISTENT, always-present reviewer signal — the pipeline posts ONE formal PR
   // review summarizing both agents' verdicts (as the workflow's GitHub identity).
-  // Posted only when verification is TERMINAL (not while pending) and only ONCE
-  // (idempotent via a hidden marker), so it doesn't spam on every status refresh.
-  if (POST_VERDICT_REVIEW && overall !== "pending") {
+  //
+  // Gate: post once the steps the WORKFLOW controls are resolved (implementation +
+  // security). We deliberately do NOT wait for `overall` to be non-pending, because
+  // the DevOps Agent App reviews ASYNCHRONOUSLY and its check is often still PENDING
+  // when sticky-status runs (at workflow end) — and sticky-status runs only ONCE, so
+  // gating on it would mean the review never posts. A still-pending DevOps verdict is
+  // shown as "in progress" in the review body. Idempotent via a hidden marker.
+  const implState = (by["dark-factory/implementation"] || {}).state;
+  const secState = SECURITY_CHECK && by[SECURITY_CHECK] ? by[SECURITY_CHECK].state : (by["dark-factory/security"] || {}).state;
+  const readyToReview = implState && implState !== "pending" && (!secState || secState !== "pending");
+  if (POST_VERDICT_REVIEW && readyToReview) {
     const RVMARK = "<!-- dark-factory:verdict-review -->";
     try {
       const existing = await api("GET", `/repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
@@ -167,7 +175,9 @@ async function main() {
           "",
           overall === "success"
             ? "**Overall: ✅ all checks green** — Security + DevOps agents cleared. LGTM."
-            : "**Overall: ❌ one or more checks failed** — see the rows above.",
+            : overall === "failure"
+              ? "**Overall: ❌ one or more checks failed** — see the rows above."
+              : "**Overall: ✅ build + Security cleared; DevOps review in progress** — see the DevOps row / check for the final release-readiness verdict.",
           "",
           "_Autonomously implemented + independently verified by the AWS Security & DevOps agents (their checks are the source of truth). This consolidated review is posted by the Dark Factory pipeline so both verdicts are always visible on the PR._",
         ].filter((x) => x !== null).join("\n");
