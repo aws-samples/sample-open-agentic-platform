@@ -41,39 +41,40 @@ spec:
     apiVersion: v1alpha1
     kind: MicrovmSandbox
     group: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}
+    # SCOPE: this RGD builds ONLY the platform IMAGE + the slow-changing infra it
+    # needs (S3 artifact bucket, build role, execution role). It deliberately does
+    # NOT create a `Microvm` — a MicroVM instance is a per-SESSION, request-time
+    # resource whose create/suspend/resume/terminate are IMPERATIVE SDK ops that the
+    # ACK controller does not reconcile (confirmed in the lambdamicrovms-controller
+    # reference: run/suspend/resume/terminate are SDK calls, not desired state, and
+    # the 06-kro example likewise leaves the running Microvm out of the graph). The
+    # shim (SandboxTemplate bridge + microvm-lifecycle controller, templates 51/52)
+    # owns that lifecycle. So a `MicrovmSandbox` = "an image is built + ready + its
+    # exec identity", and its status is the HANDOFF the shim consumes to RunMicrovm.
     spec:
       # ── PLATFORM-owned: the image / substrate (set once per image) ──────────
-      image:
-        # ARN of the AWS-published base MicroVM image to build from, e.g.
-        # arn:aws:lambda:<region>:aws:microvm-image:al2023-1 (ARM_64 — the only arch
-        # Lambda MicroVM supports).
-        baseImageARN: string
-        # S3 URI of the coder code artifact zip (app + Dockerfile), e.g.
-        # s3://<bucket>/<key>. Lambda MicroVM's codeArtifact.uri is S3-ONLY — it is
-        # NOT an ECR image reference (the Dockerfile inside the zip MAY pull private
-        # ECR base layers, which is why buildRole keeps ecr:Get*/BatchGetImage). The
-        # artifact must be published to the bucket before the first build runs.
-        codeArtifactUri: string
-      # ── APP-owned: the per-claim instance lifecycle ─────────────────────────
-      run:
-        # Idle policy — MicroVM auto-suspend/resume to keep idle cost near zero.
-        # (Declarative suspend/resume via Sandbox.operatingMode is driven by the
-        # microvm-lifecycle controller, not this field — see template 52.)
-        autoResumeEnabled: boolean | default=true
-        maxIdleDurationSeconds: integer | default={{ .Values.microvm.defaults.maxIdleDurationSeconds }}
-        suspendedDurationSeconds: integer | default={{ .Values.microvm.defaults.suspendedDurationSeconds }}
-      # Common: AWS region + a name stem for the created resources.
+      # ARN of the AWS-published base MicroVM image to build from, e.g.
+      # arn:aws:lambda:<region>:aws:microvm-image:al2023-1 (ARM_64 — the only arch
+      # Lambda MicroVM supports).
+      baseImageARN: string
+      # S3 URI of the coder code artifact zip (app + Dockerfile), e.g.
+      # s3://<bucket>/<key>. Lambda MicroVM's codeArtifact.uri is S3-ONLY — it is
+      # NOT an ECR image reference (the Dockerfile inside the zip MAY pull private
+      # ECR base layers, which is why buildRole keeps ecr:Get*/BatchGetImage). The
+      # artifact must be published to the bucket before the first build runs.
+      codeArtifactUri: string
+      # AWS region + a name stem for the created resources.
       region: string | default="{{ .Values.microvm.region }}"
       name: string
     status:
-      # Surfaced from the ACK resources so the bridge pod can mirror lifecycle.
-      # microvmState is the Lambda MicroVM lifecycle state (PENDING/RUNNING/
-      # SUSPENDING/SUSPENDED/TERMINATING/TERMINATED) from Microvm.status.state —
-      # NOT a k8s condition. The bridge maps pod-Ready to RUNNING off this.
-      microvmID: ${microvm.status.microvmID}
-      microvmState: ${microvm.status.state}
-      imageState: ${image.status.state}
+      # The HANDOFF the shim reads to RunMicrovm (imperatively) per session:
+      #   imageARN         → Microvm.imageIdentifier
+      #   executionRoleARN → Microvm.executionRoleARN
+      # Plus imageState so the shim only launches once the build is CREATED/UPDATED.
       imageARN: ${image.status.ackResourceMetadata.arn}
+      imageState: ${image.status.state}
+      imageVersion: ${image.status.latestActiveImageVersion}
+      executionRoleARN: ${execRole.status.ackResourceMetadata.arn}
   resources:
     # 1) S3 bucket that stores the MicroVM code artifact (GA — Managed ACK).
     - id: bucket
@@ -132,10 +133,10 @@ spec:
           name: ${schema.spec.name}-image
         spec:
           name: ${schema.spec.name}-image
-          baseImageARN: ${schema.spec.image.baseImageARN}
+          baseImageARN: ${schema.spec.baseImageARN}
           buildRoleARN: ${buildRole.status.ackResourceMetadata.arn}
           codeArtifact:
-            uri: ${schema.spec.image.codeArtifactUri}
+            uri: ${schema.spec.codeArtifactUri}
           # Lambda MicroVM is ARM_64-ONLY — the sole supported architecture. The
           # code artifact + any bundled binaries must be arm64 (dark-factory-coder
           # is built for arm64 for exactly this substrate).
@@ -147,20 +148,30 @@ spec:
           logging:
             cloudWatch:
               logGroup: /aws/lambda/microvms/${schema.spec.name}-image
-    # 5) Microvm instance (pre-GA — SELF-MANAGED). App-owned lifecycle. Runs the
-    #    same dark-factory-coder entrypoint that Flow A's Kata pod runs.
-    - id: microvm
-      template:
-        apiVersion: lambdamicrovms.services.k8s.aws/v1alpha1
-        kind: Microvm
-        metadata:
-          name: ${schema.spec.name}-vm
-        spec:
-          imageIdentifier: ${image.status.ackResourceMetadata.arn}
-          executionRoleARN: ${execRole.status.ackResourceMetadata.arn}
-          # No network connectors → default public internet egress (see header).
-          idlePolicy:
-            autoResumeEnabled: ${schema.spec.run.autoResumeEnabled}
-            maxIdleDurationSeconds: ${schema.spec.run.maxIdleDurationSeconds}
-            suspendedDurationSeconds: ${schema.spec.run.suspendedDurationSeconds}
+    # NOTE: there is deliberately NO `Microvm` resource here. The running MicroVM is
+    # a per-session, request-time resource — the shim (microvm-lifecycle controller,
+    # template 52) creates it with RunMicrovm and drives suspend/resume/terminate as
+    # imperative SDK ops (the ACK controller does not reconcile those). This RGD stops
+    # at "image built + exec role ready", handed off via status above.
+{{- if .Values.microvm.image.enabled | default true }}
+---
+# The ONE platform MicrovmSandbox INSTANCE — applied by GitOps, reconciled by KRO
+# ONCE to build the coder image + its build/exec roles + artifact bucket. This is
+# slow-changing platform infra (one image per cluster), NOT per-session — so it lives
+# here in the chart, not in the per-claim shim. The shim reads THIS object's status
+# (imageARN + executionRoleARN) to RunMicrovm per session. Rebuild the image by
+# bumping microvm.codeArtifactUri (a new artifact) and re-syncing.
+apiVersion: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}/v1alpha1
+kind: MicrovmSandbox
+metadata:
+  name: {{ .Values.microvm.image.name | default "coder" }}
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  name: {{ .Values.microvm.image.name | default "coder" }}
+  region: {{ .Values.microvm.region | quote }}
+  baseImageARN: {{ .Values.microvm.baseImageARN | quote }}
+  codeArtifactUri: {{ .Values.microvm.codeArtifactUri | quote }}
+{{- end }}
 {{- end }}

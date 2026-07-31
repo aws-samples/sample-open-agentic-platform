@@ -38,24 +38,3 @@ nodepool:
   # Adopt the existing LaunchTemplate in place (external-name).
   launchTemplateId: lt-0e204ea3e305e2e1f
   launchTemplateVersion: "$Latest"
-
-# ── Flow D — Lambda MicroVM substrate (hub) ──────────────────────────────────
-# Alternative to the Kata `nodepool` above: run the coder in an AWS Lambda MicroVM
-# instead of a Kata pod. DORMANT (enabled:false) until the self-managed
-# ack-lambdamicrovms controller is synced (see gitops/addons/bootstrap/default/
-# addons.yaml). Managed KRO + Managed ACK capabilities are ACTIVE on the hub.
-# The ARNs below are public identifiers (not secrets).
-microvm:
-  enabled: false
-  region: us-west-2
-  apiGroup: sandbox.agents.x-k8s.io
-  bridgeImage: alpine/k8s:1.31.0
-  # AWS-published base MicroVM image (ARM_64 — the only arch Lambda MicroVM supports).
-  baseImageARN: "arn:aws:lambda:us-west-2:aws:microvm-image:al2023-1"
-  # The SAME dark-factory-coder, built for arm64 (MicroVM is ARM_64-only) and pushed
-  # to ECR. codeArtifactUri accepts an ECR image URI directly — no S3 repackaging.
-  # NOTE: fill the real arm64 tag once built+pushed (task: arm64 coder image).
-  codeArtifactUri: "940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.3-arm64"
-  defaults:
-    maxIdleDurationSeconds: 900
-    suspendedDurationSeconds: 300

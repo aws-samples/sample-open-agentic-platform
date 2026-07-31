@@ -1,0 +1,255 @@
+{{- if and .Values.microvm .Values.microvm.enabled }}
+{{- /*
+Flow D — `lambda-microvm` SandboxTemplate + bridge RBAC + bridge script.
+
+The RuntimeClass "shim": Lambda MicroVM is a REMOTE AWS service, not a node-local
+containerd handler, so there is no literal `lambda-microvm` RuntimeClass (that would
+need a virtual-kubelet — out of scope). Instead this SandboxTemplate's pod is a thin
+BRIDGE that preserves the Agent-Sandbox UX:
+
+  1. runs on a NORMAL Auto-Mode node (no kata runtimeClass / nodeSelector / taint)
+  2. reads the ONE platform-built image (the committed MicrovmSandbox in template 50,
+     whose status carries imageARN + executionRoleARN — built ONCE by KRO/ACK, NOT
+     per session) and calls RunMicrovm (imperative AWS SDK) to launch a per-session
+     MicroVM running the SAME dark-factory-coder entrypoint
+  3. records the microvmID on the owning Sandbox (annotation) so the microvm-lifecycle
+     controller (template 52) can suspend/resume it, and holds the pod so the pod
+     lifecycle mirrors the MicroVM; on real teardown it calls TerminateMicrovm
+
+ARCHITECTURE SPLIT (why the bridge no longer creates a MicrovmSandbox per claim):
+image build = slow, declarative, ONE per cluster (KRO/ACK, template 50). Running a VM
+= fast, imperative, per SESSION (RunMicrovm/suspend/resume/terminate are SDK ops the
+ACK controller does NOT reconcile). So the bridge drives the RUN side via the SDK and
+only READS the platform image handoff — it does not re-run KRO per claim.
+
+To Flow B and the user this looks identical to a Flow A claim. The bridge needs a
+ServiceAccount + AWS creds (Pod Identity) to call the Lambda MicroVM SDK.
+
+Gated behind microvm.enabled. Rendered as a SEPARATE SandboxTemplate
+(`<templateName>-microvm`) so both substrates can coexist on one cluster; a consumer
+selects the substrate by which template its SandboxClaim references.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+rules:
+  # The bridge only READS the platform MicrovmSandbox (image handoff: imageARN +
+  # executionRoleARN). It does NOT create/delete it — that object is GitOps-owned
+  # platform infra (template 50), built once. Per-session Run/Terminate is done via
+  # the AWS SDK, not by mutating this CR.
+  - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
+    resources: ["microvmsandboxes"]
+    verbs: ["get", "list", "watch"]
+  # Read the owning Sandbox (suspend-vs-teardown in preStop) + patch it to record the
+  # per-session microvmID (annotation) so the microvm-lifecycle controller can
+  # suspend/resume THIS session's VM.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: microvm-bridge
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: microvm-bridge
+subjects:
+  - kind: ServiceAccount
+    name: microvm-bridge
+    namespace: {{ include "agent-sandbox.namespace" . }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: microvm-bridge-script
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+data:
+  bridge.sh: |
+    #!/bin/sh
+    # Flow D bridge — claim -> RunMicrovm (SDK) against the pre-built platform image ->
+    # mirror lifecycle. Idles until a SandboxClaim injects DF_ISSUE_NUMBER (Flow B),
+    # exactly like the Kata coder. Needs AWS creds (Pod Identity) for the SDK calls.
+    set -eu
+    REGION="{{ .Values.microvm.region }}"
+    PLATFORM_IMAGE="{{ .Values.microvm.image.name | default "coder" }}"   # the ONE committed MicrovmSandbox (template 50)
+    NS="{{ include "agent-sandbox.namespace" . }}"
+    echo "[microvm-bridge] idle — waiting for a SandboxClaim to inject DF_ISSUE_NUMBER..."
+    while [ -z "${DF_ISSUE_NUMBER:-}" ]; do sleep 5; done
+    # SANDBOX_NAME (downward API = owning Sandbox CR name) lets the microvm-lifecycle
+    # controller correlate THIS session's MicroVM for suspend/resume.
+    SANDBOX_NAME="${SANDBOX_NAME:-df-${DF_ISSUE_NUMBER}}"
+    echo "[microvm-bridge] claim for issue #${DF_ISSUE_NUMBER} (sandbox=${SANDBOX_NAME})"
+
+    # 1) READ the platform image handoff (built ONCE by KRO/ACK — template 50). Wait
+    #    until its image build is terminal (CREATED/UPDATED) before launching.
+    echo "[microvm-bridge] reading platform image ${PLATFORM_IMAGE} (waiting for build ready)..."
+    i=0; IMAGE_ARN=""; EXEC_ROLE=""
+    while [ "$i" -lt 240 ]; do
+      IST=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.imageState}' 2>/dev/null || echo "")
+      if [ "${IST}" = "CREATED" ] || [ "${IST}" = "UPDATED" ]; then
+        IMAGE_ARN=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.imageARN}' 2>/dev/null || echo "")
+        EXEC_ROLE=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.executionRoleARN}' 2>/dev/null || echo "")
+        [ -n "${IMAGE_ARN}" ] && [ -n "${EXEC_ROLE}" ] && break
+      fi
+      i=$((i+1)); sleep 5
+    done
+    if [ -z "${IMAGE_ARN}" ] || [ -z "${EXEC_ROLE}" ]; then
+      echo "[microvm-bridge] ERROR: platform image not ready (imageState=${IST:-<none>}) — cannot RunMicrovm"; exit 1
+    fi
+    echo "[microvm-bridge] image=${IMAGE_ARN} execRole=${EXEC_ROLE}"
+
+    # 2) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image.
+    #    idlePolicy enables auto-suspend/resume; explicit suspend/resume is driven by
+    #    the microvm-lifecycle controller (template 52) off Sandbox.operatingMode.
+    echo "[microvm-bridge] RunMicrovm..."
+    RUN_JSON=$(aws lambda-microvms run-microvm \
+      --region "${REGION}" \
+      --image-identifier "${IMAGE_ARN}" \
+      --execution-role-arn "${EXEC_ROLE}" \
+      --idle-policy 'autoResumeEnabled=true,maxIdleDurationSeconds={{ .Values.microvm.defaults.maxIdleDurationSeconds }},suspendedDurationSeconds={{ .Values.microvm.defaults.suspendedDurationSeconds }}' \
+      2>&1) || { echo "[microvm-bridge] run-microvm failed: ${RUN_JSON}"; exit 1; }
+    VMID=$(echo "${RUN_JSON}" | sed -n 's/.*"[Mm]icrovmId"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -1)
+    echo "[microvm-bridge] launched MicroVM ${VMID:-<unknown>}"
+
+    # 3) Record microvmID on the owning Sandbox so the lifecycle controller can
+    #    suspend/resume THIS session's VM (it reads this annotation).
+    [ -n "${VMID}" ] && kubectl annotate sandbox "${SANDBOX_NAME}" -n "${NS}" \
+      "microvm-lifecycle.agents.x-k8s.io/microvm-id=${VMID}" --overwrite >/dev/null 2>&1 || true
+
+    # 4) Teardown on real claim end (NOT on suspend): suspend deletes the pod but must
+    #    KEEP the MicroVM so resume works. /tmp/suspending marker (preStop) distinguishes.
+    cleanup() {
+      if [ -f /tmp/suspending ]; then
+        echo "[microvm-bridge] pod stopping for SUSPEND — keeping MicroVM ${VMID}"
+        return
+      fi
+      echo "[microvm-bridge] TerminateMicrovm ${VMID}"
+      [ -n "${VMID}" ] && aws lambda-microvms terminate-microvm --region "${REGION}" --microvm-identifier "${VMID}" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT INT TERM
+
+    # 5) Hold the pod so Sandbox lifecycle == MicroVM lifecycle. Poll the VM state;
+    #    exit when it's gone (terminated). (Log streaming / exec passthrough is a
+    #    virtual-kubelet follow-up — see docs/dark-factory §4.5.)
+    echo "[microvm-bridge] MicroVM ${VMID} running — pod now mirrors its lifecycle."
+    while [ -n "${VMID}" ]; do
+      ST=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" \
+            --query 'state' --output text 2>/dev/null || echo "")
+      case "${ST}" in
+        TERMINATED|TERMINATING|"") echo "[microvm-bridge] MicroVM state=${ST:-gone} — exiting."; break ;;
+      esac
+      sleep 15
+    done
+---
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: {{ .Values.warmPool.templateName }}-microvm
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+    agent-sandbox.io/substrate: lambda-microvm
+spec:
+  # Same env-injection contract as the Kata template so Flow B is unchanged.
+  envVarsInjectionPolicy: {{ .Values.coderTemplate.envVarsInjectionPolicy | default "Allowed" }}
+  podTemplate:
+    metadata:
+      labels:
+        {{- include "agent-sandbox.selectorLabels" . | nindent 8 }}
+        agent-sandbox.io/role: coder
+        agent-sandbox.io/substrate: lambda-microvm
+    spec:
+      # NO kata runtimeClass / nodeSelector / toleration — the bridge is a normal
+      # pod on an Auto-Mode node. The isolation boundary is the remote MicroVM.
+      serviceAccountName: microvm-bridge
+      # The bridge needs a k8s token (read platform image, patch Sandbox) AND AWS creds
+      # (Pod Identity association on this SA) to call the Lambda MicroVM SDK
+      # (RunMicrovm/GetMicrovm/TerminateMicrovm). The Kata coder is credential-less; the
+      # bridge is not, because RUN is imperative.
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bridge
+          image: {{ .Values.microvm.bridgeImage }}
+          command: ["/bin/sh", "/scripts/bridge.sh"]
+          # Preflight suspend marker: if this pod is being deleted because the owning
+          # Sandbox went operatingMode=Suspended, the microvm-lifecycle controller has
+          # (or will) suspend the MicroVM — the bridge must NOT TerminateMicrovm. The
+          # controller writes operatingMode; the bridge checks it to set the marker.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # If the owning Sandbox is Suspended, mark so cleanup() keeps the CR.
+                    M=$(kubectl get sandbox "df-${DF_ISSUE_NUMBER:-}" \
+                        -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "")
+                    [ "$M" = "Suspended" ] && touch /tmp/suspending || true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - name: bridge-script
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: bridge-script
+          configMap:
+            name: microvm-bridge-script
+            defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
+---
+{{- /*
+Lambda-MicroVM SandboxWarmPool. SandboxClaim.spec.warmPoolRef is REQUIRED (a claim
+can't bind a bare template), so Flow D needs its own pool the df-run claim step
+targets when the darkfactory-lambda label fires. Kept small (bridge pods are tiny);
+each idle member is a bridge waiting to RunMicrovm (from the pre-built platform image)
+on claim.
+*/ -}}
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: {{ .Values.microvm.warmPool.name | default "coder-warmpool-microvm" }}
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+    agent-sandbox.io/substrate: lambda-microvm
+spec:
+  replicas: {{ .Values.microvm.warmPool.targetIdle | default 1 }}
+  sandboxTemplateRef:
+    name: {{ .Values.warmPool.templateName }}-microvm
+{{- end }}

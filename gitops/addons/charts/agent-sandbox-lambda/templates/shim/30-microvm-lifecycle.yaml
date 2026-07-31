@@ -37,17 +37,12 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 rules:
-  # Read Sandboxes (watch operatingMode) + the MicrovmSandbox composites (read microvmID).
+  # Read Sandboxes (watch operatingMode + read the bridge-written microvm-id annotation)
+  # and patch them (stamp the last-acted mode to detect transitions). No microvmsandboxes
+  # access needed — the per-session VM id lives on the Sandbox, not a KRO status.
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
-    resources: ["microvmsandboxes"]
-    verbs: ["get", "list", "watch"]
-  # Record the last-applied mode on the Sandbox (annotation) to detect transitions.
-  - apiGroups: ["agents.x-k8s.io"]
-    resources: ["sandboxes"]
-    verbs: ["patch", "update"]
+    verbs: ["get", "list", "watch", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -92,13 +87,13 @@ data:
         MODE=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "Running")
         LAST=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath="{.metadata.annotations.${ANN}}" 2>/dev/null || echo "")
         [ "$MODE" = "$LAST" ] && continue   # no transition
-        # Resolve the MicroVM id from the matching MicrovmSandbox (name = df-<issue>) via its status.
-        VMID=$(kubectl get microvmsandbox -n "$NS" \
-                 -o jsonpath="{range .items[?(@.metadata.labels.agent-sandbox\.io/sandbox=='${sb}')]}{.status.microvmID}{end}" 2>/dev/null || echo "")
-        # Fallback: single-claim naming — try the sandbox name directly.
-        [ -z "$VMID" ] && VMID=$(kubectl get microvmsandbox "$sb" -n "$NS" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+        # Resolve THIS session's MicroVM id from the annotation the BRIDGE writes on the
+        # Sandbox after RunMicrovm (microvm-lifecycle.agents.x-k8s.io/microvm-id). There
+        # is no per-session MicrovmSandbox anymore — the VM is created imperatively by the
+        # bridge (SDK), so the id lives on the Sandbox, not in a KRO status.
+        VMID=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath='{.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id}' 2>/dev/null || echo "")
         if [ -z "$VMID" ]; then
-          echo "[microvm-lifecycle] $sb: mode=$MODE but no microvmID yet — will retry"
+          echo "[microvm-lifecycle] $sb: mode=$MODE but no microvm-id annotation yet — will retry"
           continue
         fi
         case "$MODE" in

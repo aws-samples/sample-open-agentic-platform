@@ -411,6 +411,27 @@ agent-sandbox:
     coderTemplate:
       bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
 
+# agent-sandbox-lambda — Flow D. A SECOND, opt-in Agent-Sandbox substrate: the coder
+# runs in an AWS Lambda MicroVM (Firecracker) instead of a Kata pod. KRO builds the
+# platform image ONCE (MicrovmImage + build/exec IAM + S3 + logs via ACK GA
+# controllers); a shim (bridge pod + lifecycle controller) drives the per-session VM
+# (RunMicrovm/suspend/resume/TerminateMicrovm) imperatively. Same namespace + operator
+# as agent-sandbox; only ADDS the MicroVM path. DORMANT until the per-cluster overlay
+# flips microvm.enabled=true (needs Managed KRO+ACK, the self-managed ack-lambdamicrovms
+# controller, and a published arm64 coder artifact). Hub-only, sync-wave 2.
+agent-sandbox-lambda:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-sandbox-lambda'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+
 # kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
 # kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
 # agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by

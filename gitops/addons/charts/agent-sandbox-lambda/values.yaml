@@ -1,0 +1,66 @@
+# agent-sandbox-lambda — Flow D (Lambda MicroVM substrate) values.
+#
+# Opt-in second substrate for the Agent Sandbox capability. Disabled by default;
+# set microvm.enabled=true (per-cluster overlay) to render it. Runs in the SAME
+# namespace as the Kata agent-sandbox chart and reuses the same operator + CRDs —
+# it only ADDS the Lambda-MicroVM image build (KRO) + the bridge/lifecycle shim.
+
+# Namespace the capability runs in (must match the agent-sandbox chart).
+namespace: agent-sandbox-system
+
+# Warm-pool template name stem (the bridge SandboxTemplate is <templateName>-microvm,
+# matching the Kata chart's convention so df-run's claim step resolves it).
+warmPool:
+  templateName: coder-sandbox
+
+# SandboxTemplate env-injection policy (same contract as the Kata template so Flow B
+# is unchanged).
+coderTemplate:
+  envVarsInjectionPolicy: Allowed
+
+# ── Lambda MicroVM (Flow D) ──────────────────────────────────────────────────
+microvm:
+  # Master gate — Flow D stays dormant until a cluster opts in.
+  enabled: false
+  region: us-west-2
+  # API group the generated MicrovmSandbox CRD is served under (KRO schema.group).
+  apiGroup: sandbox.agents.x-k8s.io
+  # Bridge/lifecycle pod image: needs kubectl (read platform image, patch Sandbox)
+  # AND the AWS CLI (RunMicrovm/suspend/resume/terminate). alpine/k8s bundles both.
+  bridgeImage: alpine/k8s:1.31.0
+
+  # The ONE platform image built by KRO/ACK (10-rgd-microvm-image.yaml). Built ONCE
+  # per cluster; the shim reads its status (imageARN + executionRoleARN) to RunMicrovm
+  # per session. Lambda MicroVM is ARM_64-ONLY. codeArtifactUri is an S3 URI
+  # (s3://bucket/key) of a zip containing the coder app + a Dockerfile — NOT an ECR
+  # image ref (the Dockerfile inside MAY pull private ECR base layers; the build role
+  # keeps ecr:Get*/BatchGetImage). Publish the arm64 coder artifact before enabling.
+  #   baseImageARN:    arn:aws:lambda:<region>:aws:microvm-image:al2023-1
+  #   codeArtifactUri: s3://<bucket>/dark-factory-coder-<tag>-arm64.zip
+  baseImageARN: ""
+  codeArtifactUri: ""
+  image:
+    # Render the single committed MicrovmSandbox instance that triggers the build.
+    enabled: true
+    # Name of that platform image object; the bridge reads its status by this name.
+    name: coder
+
+  # Idle policy for RunMicrovm (auto-suspend/resume). EXPLICIT suspend/resume across
+  # the review→fix loop is driven by the microvm-lifecycle controller off
+  # Sandbox.operatingMode — see lifecycle below and project_flow_d_lifecycle memory:
+  #   coder codes → SUSPEND → agents review → (fix findings) → RESUME same VM →
+  #   … loop until cleared → merge/exit → TERMINATE.
+  defaults:
+    maxIdleDurationSeconds: 900
+    suspendedDurationSeconds: 300
+
+  # microvm-lifecycle controller (30-microvm-lifecycle.yaml) — reconciles
+  # Sandbox.operatingMode Running↔Suspended → suspend/resume-microvm. Loop interval.
+  lifecycle:
+    intervalSeconds: 15
+
+  # Lambda-MicroVM warm pool the df-run claim binds when the darkfactory-lambda label
+  # fires (Flow D). Small — bridge pods are tiny (the real coder runs in the MicroVM).
+  warmPool:
+    name: coder-warmpool-microvm
+    targetIdle: 1

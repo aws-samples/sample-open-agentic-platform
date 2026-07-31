@@ -1,0 +1,31 @@
+# Hub (openclaw-eks / control-plane) overlay for the agent-sandbox-lambda chart
+# (Flow D — Lambda MicroVM substrate).
+#
+# DORMANT (microvm.enabled=false) until the self-managed ack-lambdamicrovms
+# controller is synced (gitops/addons/bootstrap/default/addons.yaml) and the arm64
+# coder artifact is published to S3. Managed KRO + Managed ACK capabilities are
+# ACTIVE on the hub. The ARNs below are public identifiers (not secrets).
+microvm:
+  enabled: false
+  region: us-west-2
+  apiGroup: sandbox.agents.x-k8s.io
+  bridgeImage: alpine/k8s:1.31.0
+  # AWS-published base MicroVM image (ARM_64 — the only arch Lambda MicroVM supports).
+  baseImageARN: "arn:aws:lambda:us-west-2:aws:microvm-image:al2023-1"
+  # Lambda MicroVM codeArtifact.uri is S3-ONLY (a zip with the coder app + a Dockerfile);
+  # it is NOT an ECR image reference. The Dockerfile inside MAY pull the arm64
+  # dark-factory-coder from ECR as a base layer (the build role keeps ecr:Get*). Publish
+  # the artifact zip to this bucket/key before flipping enabled=true.
+  # TODO: create the artifact zip (Dockerfile FROM the v0.2.5-arm64 coder) + upload.
+  codeArtifactUri: "s3://dark-factory-microvm-artifacts-940019131157-us-west-2/coder-v0.2.5-arm64.zip"
+  image:
+    enabled: true
+    name: coder
+  defaults:
+    maxIdleDurationSeconds: 900
+    suspendedDurationSeconds: 300
+  lifecycle:
+    intervalSeconds: 15
+  warmPool:
+    name: coder-warmpool-microvm
+    targetIdle: 1
