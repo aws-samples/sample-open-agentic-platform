@@ -109,7 +109,10 @@ async function main() {
         { name: "issue-title", value: pr.title },
         { name: "issue-body", value: "" },
         { name: "base-branch", value: pr.base.ref },
-        { name: "iterate-note", value: COMMENT_BODY },
+        // base64 the comment (may be multi-line markdown) so it can't break the
+        // claim-sandbox manifest YAML; the coder decodes it. Leave plain empty.
+        { name: "iterate-note", value: "" },
+        { name: "iterate-note-b64", value: Buffer.from(COMMENT_BODY || "", "utf8").toString("base64") },
       ] },
     },
   };

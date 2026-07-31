@@ -143,18 +143,30 @@ async function fetchIssueSpec() {
   // so the coder revises the EXISTING branch to address the feedback, rather than
   // re-implementing from scratch. DF_ITERATE_NOTE is injected by the df-iterate
   // claim; absent on a first (df-run) pass.
-  const note = process.env.DF_ITERATE_NOTE;
+  // Prefer the base64 form: the revision note (esp. auto-fed agent findings) is
+  // arbitrary markdown with newlines/quotes/braces that CANNOT be injected raw into
+  // the SandboxClaim env YAML (it broke the manifest). status.js/df-iterate base64
+  // it into DF_ITERATE_NOTE_B64; decode here. Fall back to plain DF_ITERATE_NOTE.
+  const note = iterateNote();
   if (note && note.trim()) {
     spec += `\n---\n\n## Revision requested (address this feedback on the existing branch)\n\n${note}\n`;
   }
   return spec;
 }
 
+// Resolve the revision note from DF_ITERATE_NOTE_B64 (preferred, safe for arbitrary
+// text) or the legacy plain DF_ITERATE_NOTE.
+function iterateNote() {
+  const b64 = process.env.DF_ITERATE_NOTE_B64;
+  if (b64 && b64.trim()) { try { return Buffer.from(b64.trim(), "base64").toString("utf8"); } catch (_) { /* fall through */ } }
+  return process.env.DF_ITERATE_NOTE || "";
+}
+
 function checkout() {
   const token = readSecret(GH_TOKEN_PATH);
   const url = `https://x-access-token:${token}@github.com/${REPO}.git`;
   const dir = `${WORKSPACE}/repo`;
-  const iterating = !!(process.env.DF_ITERATE_NOTE && process.env.DF_ITERATE_NOTE.trim());
+  const iterating = !!(iterateNote() && iterateNote().trim());
   if (!fs.existsSync(dir)) {
     // On iterate, start from the existing coder branch (build on prior work);
     // otherwise branch fresh from BASE.

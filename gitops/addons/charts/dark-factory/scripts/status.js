@@ -362,7 +362,12 @@ async function maybeAutoFix(pr, ctx) {
           { name: "issue-title", value: pr.title || "" },
           { name: "issue-body", value: "" },
           { name: "base-branch", value: BASE_BRANCH || "main" },
-          { name: "iterate-note", value: note },
+          // Pass the findings as BASE64 (iterate-note-b64), NOT raw iterate-note —
+          // the findings are multi-line markdown with quotes/braces that break the
+          // claim-sandbox manifest YAML when injected raw (observed: df-run-84-fix1
+          // 'manifest must be a valid yaml'). The coder decodes it.
+          { name: "iterate-note", value: "" },
+          { name: "iterate-note-b64", value: Buffer.from(note, "utf8").toString("base64") },
           { name: "trigger-label", value: TRIGGER_LABEL || "dark-factory" },
         ] },
       },

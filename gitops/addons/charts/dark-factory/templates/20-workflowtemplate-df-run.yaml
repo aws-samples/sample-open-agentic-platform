@@ -47,6 +47,11 @@ spec:
       # existing branch to address the feedback.
       - name: iterate-note
         value: ""
+      # Base64 of the revision note — used when the note is arbitrary markdown
+      # (auto-fed agent findings) that can't be injected raw into the claim YAML.
+      # The coder decodes this first, falling back to the plain iterate-note.
+      - name: iterate-note-b64
+        value: ""
       # Which label fired the run selects the coder substrate (Kata default vs
       # Lambda MicroVM for darkfactory-lambda). MUST be declared with a default so
       # every trigger-label reference resolves even when the submitter (sensor /
@@ -214,7 +219,12 @@ spec:
               # Back-compat alias (older coder images read CODER_PROFILE).
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.engine }}" }
               - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
+              # Revision note: prefer the base64 form (safe for arbitrary markdown —
+              # auto-fed agent findings contain newlines/quotes/braces that broke the
+              # raw YAML injection). Both are single-line values here; the coder
+              # decodes B64 first, else uses the plain one.
               - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
+              - { containerName: coder, name: DF_ITERATE_NOTE_B64, value: "{{`{{workflow.parameters.iterate-note-b64}}`}}" }
 {{- if and .Values.devopsAgent.enabled (eq .Values.devopsAgent.gate "label") }}
               # DevOps Agent via the coding-agent plugin, run inside the coder
               # step BEFORE the PR opens — ONLY in label-gate mode. In the default
@@ -252,6 +262,7 @@ spec:
           REPO="{{`{{workflow.parameters.repo}}`}}"
           BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
           ITERATE_NOTE="{{`{{workflow.parameters.iterate-note}}`}}"
+          ITERATE_NOTE_B64="{{`{{workflow.parameters.iterate-note-b64}}`}}"
           API="https://api.github.com/repos/${REPO}"
           # ROUND-AWARENESS: on a FIX ROUND (iterate-note set) the branch already
           # exists and its OLD commit already has dark-factory/implementation=success.
@@ -263,7 +274,7 @@ spec:
           # first commit that reports impl=success.
           START_SHA="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
                         "${API}/branches/${BRANCH}" 2>/dev/null | jq -r '.commit.sha // empty' || echo "")"
-          IS_FIX="false"; [ -n "${ITERATE_NOTE}" ] && IS_FIX="true"
+          IS_FIX="false"; { [ -n "${ITERATE_NOTE}" ] || [ -n "${ITERATE_NOTE_B64}" ]; } && IS_FIX="true"
           echo "[df-run] polling GitHub for PR head=${BRANCH} (fix-round=${IS_FIX}, start-sha=${START_SHA:-none})..."
           while true; do
             pr="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
