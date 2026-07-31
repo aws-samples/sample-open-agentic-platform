@@ -319,7 +319,7 @@ agent-sandbox:
       # examples/dark-factory/README.md "Build & deploy"). Templating the registry
       # does not create the image: if the tag is absent the warm pods report
       # ImagePullBackOff. Bump the tag here when the coder changes.
-      image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.4'
+      image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.5'
 
 # Dark Factory — autonomous agent coding controller. Hub-only (consumes the
 # sandbox warm pool via SandboxClaim). Wave 3: after the capability chart
@@ -373,9 +373,9 @@ dark-factory:
     # `required` guard, so with no overlay and no value here the whole app fails to
     # render. It is a DIFFERENT image from the coder — it needs kubectl + terraform,
     # which the coder image does not carry, so the coder image cannot stand in.
-    reviewImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.3'
+    reviewImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.5'
     holdout:
-      evalImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.3'
+      evalImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.5'
     deployTest:
       image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-deploy-test:v0.1.0'
     # GitHub credentials, cluster-scoped in Secrets Manager (same pattern as
