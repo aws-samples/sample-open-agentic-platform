@@ -244,22 +244,37 @@ spec:
           command -v curl >/dev/null 2>&1 || apk add --no-cache curl jq >/dev/null 2>&1
           REPO="{{`{{workflow.parameters.repo}}`}}"
           BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          ITERATE_NOTE="{{`{{workflow.parameters.iterate-note}}`}}"
           API="https://api.github.com/repos/${REPO}"
-          echo "[df-run] polling GitHub for PR head=${BRANCH} in ${REPO}..."
+          # ROUND-AWARENESS: on a FIX ROUND (iterate-note set) the branch already
+          # exists and its OLD commit already has dark-factory/implementation=success.
+          # If we accept that, the verify fan (holdout/security/devops) runs against
+          # the STALE pre-fix commit before the coder's new push lands (observed 45s
+          # race). So record the branch's starting SHA and require a DIFFERENT head
+          # SHA (a genuinely new commit) before we consider the coder done on a fix
+          # round. First-pass runs (no iterate-note) have no prior commit → accept the
+          # first commit that reports impl=success.
+          START_SHA="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                        "${API}/branches/${BRANCH}" 2>/dev/null | jq -r '.commit.sha // empty' || echo "")"
+          IS_FIX="false"; [ -n "${ITERATE_NOTE}" ] && IS_FIX="true"
+          echo "[df-run] polling GitHub for PR head=${BRANCH} (fix-round=${IS_FIX}, start-sha=${START_SHA:-none})..."
           while true; do
-            # Is there an open PR from the coder's branch?
             pr="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
                    -H "Accept: application/vnd.github+json" \
                    "${API}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null || echo '[]')"
             n="$(echo "${pr}" | jq -r '.[0].number // empty')"
             if [ -n "${n}" ]; then
-              # Read the coder's self-reported implementation status on the head SHA.
               sha="$(echo "${pr}" | jq -r '.[0].head.sha')"
+              # On a fix round, ignore the old commit until the coder pushes a new one.
+              if [ "${IS_FIX}" = "true" ] && [ -n "${START_SHA}" ] && [ "${sha}" = "${START_SHA}" ]; then
+                echo "[df-run] fix-round: head still at start sha ${sha} — waiting for the coder's new commit..."
+                sleep 15; continue
+              fi
               st="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
                      "${API}/commits/${sha}/status" 2>/dev/null | jq -r '.statuses[] | select(.context=="dark-factory/implementation") | .state' | head -1)"
               echo "[df-run] PR #${n} open (sha=${sha}) impl-status=${st:-pending}"
               case "${st}" in
-                success) echo "[df-run] coder finished — PR #${n} ready."; echo "${n}" > /tmp/pr; exit 0 ;;
+                success) echo "[df-run] coder finished — PR #${n} @ ${sha} ready."; echo "${n}" > /tmp/pr; echo "${sha}" > /tmp/sha; exit 0 ;;
                 failure|error) echo "[df-run] coder reported failure."; exit 1 ;;
               esac
             else
@@ -272,6 +287,10 @@ spec:
           - name: pr-number
             valueFrom:
               path: /tmp/pr
+              default: ""
+          - name: head-sha
+            valueFrom:
+              path: /tmp/sha
               default: ""
 
 {{- if .Values.holdout.enabled }}
