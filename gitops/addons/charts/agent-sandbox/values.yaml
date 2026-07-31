@@ -327,11 +327,12 @@ coderTemplate:
       refreshInterval: 1h
   # Sandbox coder image — built from examples/dark-factory/coder (entrypoint.js).
   #
-  # NOTE: ECR account 940019131157 is an EXAMPLE registry. The agent-sandbox
-  # registry entry (gitops/addons/registry/sandbox.yaml) overrides this per cluster,
-  # templating the URI from the aws_account_id + aws_region cluster annotations, so
-  # a deployment does not need to edit this default or add an overlay.
-  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
+  # REQUIRED, intentionally EMPTY: an ECR URI is account-specific and must not ship
+  # as a public chart default (review §1). The agent-sandbox registry entry
+  # (gitops/addons/registry/sandbox.yaml) supplies it, templating the registry from
+  # the cluster's aws_account_id + aws_region annotations — so no per-cluster overlay
+  # is needed. Already wrapped in `required` by 20-sandboxtemplate.yaml.
+  image: ""
   # Warm pods idle until a SandboxClaim injects DF_ISSUE_NUMBER, then exec the
   # baked-in coder entrypoint (node /app/entrypoint.js). If the image has no such
   # entrypoint (placeholder busybox), the poll loop just idles forever — safe.
