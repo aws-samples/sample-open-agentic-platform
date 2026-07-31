@@ -1,5 +1,5 @@
 {
-  "_comment": "Hidden holdout scenarios for elamaran11/dark-factory-sandbox. NEVER mounted into the coder sandbox (it has no k8s API access and only clones the target repo). Each scenario pairs a plain-English BDD statement (for the LLM judge) with a self-contained executable test run via `node -e` against the built code (the hard, un-gameable signal). IMPORTANT: appliesWhen is a regex tested against the PR DIFF, not merely index.js existence — scope each scenario to ITS OWN function name so a PR that adds function X is graded ONLY by X's scenarios (unrelated scenarios SKIP, not fail). This app/index.js is a growing math module (add/subtract/multiply/fibonacci/power/gcd/factorial/isPrime); add a scoped scenario block per new function here as the repo grows.",
+  "_comment": "Hidden holdout scenarios for elamaran11/dark-factory-sandbox. NEVER mounted into the coder sandbox (it has no k8s API access and only clones the target repo). Each scenario pairs a plain-English BDD statement (for the LLM judge) with a self-contained executable test run via `node -e` against the built code (the hard, un-gameable signal). IMPORTANT: appliesWhen is a regex tested against the PR DIFF, not merely index.js existence \u2014 scope each scenario to ITS OWN function name so a PR that adds function X is graded ONLY by X's scenarios (unrelated scenarios SKIP, not fail). This app/index.js is a growing math module (add/subtract/multiply/fibonacci/power/gcd/factorial/isPrime); add a scoped scenario block per new function here as the repo grows.",
   "scenarios": [
     {
       "id": "subtract-basic",
@@ -77,6 +77,13 @@
       "scenario": "Given isOdd, When I call it, Then isOdd(7)=true, isOdd(4)=false, isOdd(0)=false, isOdd(-3)=true. isOdd must be the exact inverse of isEven for the same inputs.",
       "test": "const m=require(process.env.REPO+'/app/index.js'); if(m.isOdd(7)!==true||m.isOdd(4)!==false||m.isOdd(0)!==false||m.isOdd(-3)!==true){console.error('isOdd wrong');process.exit(1)} console.log('ok')",
       "appliesWhen": "/isOdd/.test(diff)"
+    },
+    {
+      "id": "clamp-basic",
+      "feature": "clamp(value, min, max) constrains value to [min, max]",
+      "scenario": "Given clamp, When I call it, Then clamp(5,0,10)=5 (in range), clamp(-3,0,10)=0 (below min), clamp(15,0,10)=10 (above max), clamp(10,0,10)=10 (equal to bound), clamp(0,0,10)=0.",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); if(m.clamp(5,0,10)!==5||m.clamp(-3,0,10)!==0||m.clamp(15,0,10)!==10||m.clamp(10,0,10)!==10||m.clamp(0,0,10)!==0){console.error('clamp wrong');process.exit(1)} console.log('ok')",
+      "appliesWhen": "/clamp/.test(diff)"
     },
     {
       "id": "add-regression",
