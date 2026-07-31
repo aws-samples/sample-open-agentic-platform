@@ -343,7 +343,7 @@ spec:
         {{- end }}
         {{- end }}
       script:
-        image: {{ .Values.holdout.evalImage }}
+        image: {{ .Values.holdout.evalImage | required "holdout.evalImage is required — set it in a per-cluster overlay (see values.yaml)" }}
         command: [bash]
         env:
           - name: GH_TOKEN
@@ -352,7 +352,7 @@ spec:
                 name: {{ .Values.github.tokenSecret }}
                 key: {{ .Values.github.tokenKey }}
           - name: BIFROST_URL
-            value: {{ .Values.holdout.bifrostUrl | quote }}
+            value: {{ .Values.bifrost.url | quote }}
           - name: JUDGE_MODEL
             value: {{ .Values.holdout.judgeModel | quote }}
           - name: JUDGE_RUNS
@@ -400,7 +400,14 @@ spec:
           [ -s /tmp/diff.patch ] || { git fetch --quiet --depth 1 origin "${BASE}" 2>/dev/null || true; git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch; }
           echo "[holdout] diff.patch $(wc -l < /tmp/diff.patch) lines (via compare API)"
           # Build/install so executable tests can require the module.
-          if [ -f package.json ]; then npm install --no-audit --no-fund >/dev/null 2>&1 || true; fi
+          #
+          # --ignore-scripts is REQUIRED, not hygiene: this step runs on the trusted
+          # hub, NOT in the Kata VM, and the tree being installed is coder-authored.
+          # Without it, a preinstall/postinstall hook in the coder's package.json
+          # executes here — arbitrary code in a pod that holds GH_TOKEN and a
+          # mounted ServiceAccount token, walking straight around the VM boundary
+          # the sandbox exists to enforce.
+          if [ -f package.json ]; then npm install --ignore-scripts --no-audit --no-fund >/dev/null 2>&1 || true; fi
           SHA="$(git rev-parse HEAD)"
 
           SCEN="/holdout/${SLUG}/scenarios.json"
@@ -687,7 +694,7 @@ spec:
           configMap:
             name: df-review
       script:
-        image: {{ .Values.deployTest.image }}
+        image: {{ .Values.deployTest.image | required "deployTest.image is required — set it in a per-cluster overlay (see values.yaml)" }}
         command: [bash]
         volumeMounts:
           - name: review-script
