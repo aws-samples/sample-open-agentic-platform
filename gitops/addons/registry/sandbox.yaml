@@ -310,6 +310,16 @@ agent-sandbox:
       secretsMount:
         externalSecret:
           secretManagerKey: '{{.metadata.annotations.aws_cluster_name}}/dark-factory/github/coder'
+      # Coder image, built from examples/dark-factory/coder. The ACCOUNT and REGION
+      # come from the cluster's own annotations, so no per-cluster overlay is needed
+      # and no account ID is committed — the chart default points at the upstream
+      # EXAMPLE registry, which is not pullable from a consumer's account.
+      #
+      # ⚠️ Each deployment must build this image+tag into its OWN ECR (see
+      # examples/dark-factory/README.md "Build & deploy"). Templating the registry
+      # does not create the image: if the tag is absent the warm pods report
+      # ImagePullBackOff. Bump the tag here when the coder changes.
+      image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.4'
 
 # Dark Factory — autonomous agent coding controller. Hub-only (consumes the
 # sandbox warm pool via SandboxClaim). Wave 3: after the capability chart
@@ -348,6 +358,26 @@ dark-factory:
     #   agent-sandbox  coderTemplate.bifrostUrl         warm-pool default
     bifrost:
       url: '{{default "http://172.20.0.100:8080" (index .metadata.annotations "bifrost_url")}}'
+    # ── Container images: registry resolved from the CLUSTER's own annotations ──
+    # ACCOUNT + REGION come from aws_account_id / aws_region, so no per-cluster
+    # overlay is needed and no account ID is committed to this repo. The chart
+    # defaults still name the upstream EXAMPLE registry, which is NOT pullable
+    # from a consumer's account — these templated values override it.
+    #
+    # ⚠️ Templating the registry does NOT build the images. Each deployment must
+    # build both into its OWN ECR at the tags below (see
+    # examples/dark-factory/README.md "Build & deploy"); a missing tag surfaces as
+    # ImagePullBackOff on the step that uses it, not at render time.
+    #
+    # deployTest.image MUST be set here: the chart default is empty behind a Helm
+    # `required` guard, so with no overlay and no value here the whole app fails to
+    # render. It is a DIFFERENT image from the coder — it needs kubectl + terraform,
+    # which the coder image does not carry, so the coder image cannot stand in.
+    reviewImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.3'
+    holdout:
+      evalImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.3'
+    deployTest:
+      image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-deploy-test:v0.1.0'
     # GitHub credentials, cluster-scoped in Secrets Manager (same pattern as
     # langfuse/keycloak in observability.yaml). Three DISTINCT credentials so the
     # untrusted coder VM never holds the orchestrator's merge-capable token

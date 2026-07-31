@@ -119,9 +119,11 @@ enabledAddons:
   #
   # enable_agent_sandbox gates BOTH the upstream operator (which installs the
   # sandbox CRDs) and the capability chart (RuntimeClasses, SandboxTemplate, warm
-  # pool). coderTemplate.image is supplied by
-  # gitops/overlays/clusters/hub/agent-sandbox/values.yaml — the chart default is
-  # empty behind a Helm `required`, so that overlay is mandatory, not optional.
+  # pool). coderTemplate.image is supplied by the agent-sandbox registry entry
+  # (gitops/addons/registry/sandbox.yaml), which templates the ECR registry from
+  # this cluster's aws_account_id + aws_region annotations — so NO per-cluster
+  # overlay is needed. The image itself still has to be built into that account's
+  # ECR at the pinned tag, or the warm pods report ImagePullBackOff.
   agent_sandbox: true
   # kata-deploy installs the clh/qemu runtime onto the kata nodes (separate app).
   # Required, or the warm pool's runtimeClassName has no handler on the node.

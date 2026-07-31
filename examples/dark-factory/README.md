@@ -92,22 +92,29 @@ call can't mark a good run failed.
 
 ## Build & deploy
 
-The image is built + pushed to ECR and pinned on the Flow A `SandboxTemplate` via GitOps. The chart
-default is **empty** behind a Helm `required` guard (image URIs are account-specific and must not ship
-in a public chart), so the real value lives in the **per-cluster overlay**:
-`gitops/overlays/clusters/hub/agent-sandbox/values.yaml` → `coderTemplate.image`. ArgoCD syncs the
-template; the pool-manager recycles warm pods onto the new tag.
+The image is built + pushed to ECR and pinned on the Flow A `SandboxTemplate` via GitOps. **No
+per-cluster overlay is needed:** the addon registry
+([`gitops/addons/registry/sandbox.yaml`](../../gitops/addons/registry/sandbox.yaml)) builds each image
+URI from the target cluster's own `aws_account_id` + `aws_region` annotations, so the same commit
+resolves to whatever account it is deployed into and no account ID is committed to this repo.
 
 ```bash
 # amd64 (hub nodes are amd64); podman/docker both work.
-podman build --platform linux/amd64 -t <ecr>/dark-factory-coder:<tag> examples/dark-factory/coder
-podman push <ecr>/dark-factory-coder:<tag>
-# → bump coderTemplate.image in the HUB OVERLAY, commit, let ArgoCD sync.
+aws ecr create-repository --repository-name dark-factory-coder --region <region>   # first time only
+podman build --platform linux/amd64 -t <acct>.dkr.ecr.<region>.amazonaws.com/dark-factory-coder:<tag> \
+  examples/dark-factory/coder
+podman push <acct>.dkr.ecr.<region>.amazonaws.com/dark-factory-coder:<tag>
+# → bump the tag in the registry entry (valuesObject), commit, let ArgoCD sync.
 ```
 
-The ECR repo uses **immutable tags**, so bump the tag rather than re-pushing one. Two hub-side values
-in `gitops/overlays/clusters/hub/dark-factory/values.yaml` (`holdout.evalImage`, `review.reviewImage`)
-reuse this same image — repoint them together.
+Templating the registry **does not build the image** — each deployment must build it into its own ECR
+at the pinned tag, or the warm pods report `ImagePullBackOff`. If your ECR repo uses **immutable
+tags**, bump the tag rather than re-pushing one.
+
+Three values in the registry reuse this same coder image (`coderTemplate.image` on `agent-sandbox`;
+`reviewImage` and `holdout.evalImage` on `dark-factory`) — repoint them together. `deployTest.image`
+is a **separate** build (`deploy-test/`): it needs kubectl + terraform, which the coder image does not
+carry, and it is wrapped in a Helm `required` guard, so the app fails to render if it is unset.
 
 ## Credentials
 

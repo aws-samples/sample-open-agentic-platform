@@ -329,8 +329,15 @@ deployTest:
   terraformPath: "infra"      # terraform working dir (repo uses infra/ + app/ layout)
   # Purpose-built image with kubectl + terraform + node + git + curl (content-aware
   # deploy-test needs both toolchains). Built from examples/dark-factory/deploy-test.
-  # REQUIRED, empty by design — set per cluster in
-  # overlays/clusters/<cluster>/dark-factory/values.yaml.
+  # A DIFFERENT image from the coder — the coder carries neither kubectl nor
+  # terraform, so it cannot stand in here.
+  #
+  # REQUIRED, empty by design (an account-specific URI must not ship as a public
+  # chart default). Supplied by the dark-factory registry entry
+  # (gitops/addons/registry/sandbox.yaml), which templates the registry from the
+  # cluster's aws_account_id + aws_region annotations — so no per-cluster overlay
+  # is needed. Leaving it unset anywhere fails the whole app at RENDER time via the
+  # `required` guard, which is the intended loud failure.
   image: ""
   # Overall step deadline and the per-workload readiness wait (k8s only).
   timeoutSeconds: 600
