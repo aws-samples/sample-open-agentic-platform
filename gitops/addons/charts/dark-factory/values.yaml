@@ -227,6 +227,15 @@ iterate:
   enabled: true
   maxIterations: 3
 
+# ── Flow D — MicroVM suspend/resume demo ─────────────────────────────────────
+# When the darkfactory-lambda label runs, suspend the MicroVM after the coder
+# pushes (freeing compute while gates run) and resume it on a df-iterate comment.
+# Drives Sandbox.spec.operatingMode; the agent-sandbox microvm-lifecycle controller
+# translates that to suspend-microvm / resume-microvm. No-op for the Kata substrate.
+microvmSuspend:
+  enabled: true
+  image: alpine/k8s:1.31.0   # needs kubectl
+
 # ── Language / stack support ─────────────────────────────────────────────────
 # There is NO per-language profile config here — deliberately. Language support is
 # decoupled two ways:

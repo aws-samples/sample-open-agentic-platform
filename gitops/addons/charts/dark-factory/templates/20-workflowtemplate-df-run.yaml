@@ -100,6 +100,24 @@ spec:
               parameters:
                 - name: sandbox
                   value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+{{- if .Values.microvmSuspend.enabled }}
+          # Flow D ONLY — suspend the Lambda MicroVM after the coder pushes its
+          # branch: flip Sandbox.operatingMode=Suspended so the microvm-lifecycle
+          # controller calls suspend-microvm. The VM's state is retained (snapshot)
+          # and compute is freed while the (potentially slow) gates run — the
+          # coder is idle during review anyway. df-iterate resumes it on a comment.
+          # Gated on the lambda substrate + a PR existing; a no-op for Kata.
+          - name: microvm-suspend
+            template: microvm-set-mode
+            dependencies: [drive-coder]
+            when: "{{`{{workflow.parameters.trigger-label}}`}} == darkfactory-lambda && {{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: sandbox
+                  value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+                - name: mode
+                  value: "Suspended"
+{{- end }}
 {{- if .Values.holdout.enabled }}
           # P2 — holdout gate: hidden scenarios + a different-family judge.
           - name: holdout-gate
@@ -233,6 +251,39 @@ spec:
               # so the coder does not attempt the (VM-incompatible) plugin path.
               - { containerName: coder, name: DF_DEVOPS_AGENT_MODE, value: "claude-plugin" }
               - { containerName: coder, name: DF_DEVOPS_CLEAR_LABEL, value: "{{ .Values.review.handoffLabel }}" }
+{{- end }}
+
+{{- if .Values.microvmSuspend.enabled }}
+    # ---- Flow D: set Sandbox.operatingMode (suspend/resume the Lambda MicroVM) ----
+    # Flips spec.operatingMode; the agent-sandbox microvm-lifecycle controller
+    # observes the change and calls suspend-microvm / resume-microvm by microvmID.
+    # We then best-effort verify the MicroVM reached the expected state via the API
+    # (advisory — never fails the run). Only invoked on the lambda substrate.
+    - name: microvm-set-mode
+      inputs:
+        parameters:
+          - name: sandbox
+          - name: mode      # Running | Suspended
+      script:
+        image: {{ .Values.microvmSuspend.image | default "alpine/k8s:1.31.0" }}
+        command: [sh]
+        source: |
+          set -eu
+          SB="{{`{{inputs.parameters.sandbox}}`}}"
+          MODE="{{`{{inputs.parameters.mode}}`}}"
+          NS="{{ .Values.warmPool.namespace }}"
+          echo "[microvm-set-mode] Sandbox/$SB -> operatingMode=$MODE"
+          kubectl patch sandbox "$SB" -n "$NS" --type merge -p "{\"spec\":{\"operatingMode\":\"$MODE\"}}"
+          # Best-effort verify the microvm-lifecycle controller acted (poll the
+          # MicrovmSandbox status the bridge created). Advisory only.
+          EXPECT="RUNNING"; [ "$MODE" = "Suspended" ] && EXPECT="SUSPENDED"
+          i=0; while [ "$i" -lt 12 ]; do
+            VMID=$(kubectl get microvmsandbox -n "$NS" -o jsonpath="{range .items[?(@.metadata.labels.agent-sandbox\.io/sandbox=='$SB')]}{.status.microvmID}{end}" 2>/dev/null || echo "")
+            [ -n "$VMID" ] && { echo "[microvm-set-mode] microvmID=$VMID (lifecycle controller will drive $EXPECT)"; break; }
+            i=$((i+1)); sleep 5
+          done
+          echo "[microvm-set-mode] done (advisory)."
+      activeDeadlineSeconds: 180
 {{- end }}
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----

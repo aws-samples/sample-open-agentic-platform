@@ -76,7 +76,8 @@ rules:
     verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
-    verbs: ["get", "list", "watch"]
+    # patch: Flow D suspend/resume flips Sandbox.spec.operatingMode from the workflow.
+    verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
