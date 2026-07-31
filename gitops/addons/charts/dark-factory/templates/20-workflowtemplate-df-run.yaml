@@ -47,6 +47,13 @@ spec:
       # existing branch to address the feedback.
       - name: iterate-note
         value: ""
+      # Which label fired the run selects the coder substrate (Kata default vs
+      # Lambda MicroVM for darkfactory-lambda). MUST be declared with a default so
+      # every trigger-label reference resolves even when the submitter (sensor /
+      # manual) does not pass it. Defaulting to dark-factory keeps the Kata path for
+      # sensor submits that do not map a label.
+      - name: trigger-label
+        value: "dark-factory"
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
