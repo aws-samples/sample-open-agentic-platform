@@ -158,12 +158,17 @@ spec:
 {{- end }}
           - name: status
             template: sticky-status
+            # Depend on BOTH agents (devops-gate + security-agent) plus holdout +
+            # deploy-test so the consolidated verdict is only computed once EVERY
+            # signal is terminal — required so a ❌ (and the auto-fix decision) is made
+            # on complete input, and so a clear verdict truly means both agents cleared.
             dependencies:
               {{- if or .Values.holdout.enabled .Values.review.enabled .Values.deployTest.enabled }}
               {{- if .Values.holdout.enabled }}
               - holdout-gate
               {{- end }}
               {{- if .Values.review.enabled }}
+              - devops-gate
               - security-agent
               {{- end }}
               {{- if .Values.deployTest.enabled }}
