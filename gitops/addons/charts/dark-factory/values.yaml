@@ -115,14 +115,13 @@ review:
   # The label the DevOps clear-gate applies; the Security Agent step only runs
   # once it's present (so DevOps reviews first, Security second).
   handoffLabel: needs-security-review
-  # AUTO-FIX loop: when the real Security/DevOps agents flag findings (verdict ❌),
-  # the pipeline automatically collects the findings and submits a bounded df-run
-  # revision (iterate-note = the findings) so the coder revises WITHOUT a human
-  # having to paraphrase them. The human only approves at the end. Bounded by
-  # iterate.maxIterations; a human comment can still drive iteration too. On the
-  # Kata substrate the fix round claims a NEW coder (resuming the df/issue-N branch);
-  # on the Lambda substrate (Flow D) it resumes the suspended MicroVM (keeps context).
-  autoFixFindings: true
+  # AUTO-FIX loop: DISABLED. When on, status.js auto-submitted a df-run fix round on a
+  # ❌ verdict — but that COLLIDED with the comment-driven df-iterate loop (the pipeline's
+  # own verdict/finding comments re-triggered df-iterate), spawning overlapping fix rounds
+  # and runaway commits. The stable model is: agents post findings → ❌ verdict → a HUMAN
+  # comments the fix request → ONE df-iterate round → re-review. Keep this false unless
+  # auto-fix is given hard mutual-exclusion with df-iterate.
+  autoFixFindings: false
 
 # Post ONE consolidated verdict review (Security + DevOps results, LGTM when green)
 # on every PR, so both agents' verdicts are ALWAYS visible in the Reviews section.

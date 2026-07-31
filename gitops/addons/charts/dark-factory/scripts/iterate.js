@@ -62,17 +62,30 @@ async function main() {
     console.log("[df-iterate] comment carries a Dark Factory marker — skipping (no self-trigger)");
     return;
   }
-  // Second, IDENTITY-based guard (airtight): the factory posts comments as the
-  // token owner. If the comment author IS that identity, it's the factory talking
-  // to itself → skip. Catches any factory comment even if it lacks a marker. A real
-  // human reviewer is necessarily a different login.
+  // BOT guard (the leak that caused the runaway): the AWS Security/DevOps AGENT BOTS
+  // post findings comments that have NO dark-factory marker and are NOT the factory
+  // identity — so without this they fired df-iterate → coder pushes → the bots re-review
+  // and comment again → df-iterate again → runaway (observed: ~12 df-iterate runs +
+  // overlapping commits on one PR). A real human reviewer never has a "[bot]" login (or
+  // user.type=="Bot"). Skip any bot-authored comment; iteration is HUMAN-driven only.
+  if (COMMENT_AUTHOR && /\[bot\]$/i.test(COMMENT_AUTHOR)) {
+    console.log(`[df-iterate] comment author (${COMMENT_AUTHOR}) is a bot — skipping (iteration is human-driven only)`);
+    return;
+  }
+  if ((process.env.COMMENT_AUTHOR_TYPE || "").toLowerCase() === "bot") {
+    console.log(`[df-iterate] comment author type is Bot — skipping (no self-trigger)`);
+    return;
+  }
+  // IDENTITY-based guard: the factory posts comments (verdict review, auto-fix notices,
+  // relayed findings) as the token owner. If the comment author IS that identity, it's
+  // the factory talking to itself → skip. Catches any factory comment even if unmarkered.
   try {
     const me = await gh("GET", "/user");
     if (COMMENT_AUTHOR && me.login && COMMENT_AUTHOR === me.login) {
       console.log(`[df-iterate] comment author (${COMMENT_AUTHOR}) is the factory identity — skipping (no self-trigger)`);
       return;
     }
-  } catch { /* if /user fails, fall back to the marker guard above */ }
+  } catch { /* if /user fails, fall back to the marker + bot guards above */ }
   const pr = await gh("GET", `/repos/${REPO}/pulls/${PR}`);
   if (pr.state !== "open") { console.log(`[df-iterate] PR #${PR} is ${pr.state} — skipping`); return; }
   const ref = pr.head.ref;                       // df/issue-<n>
