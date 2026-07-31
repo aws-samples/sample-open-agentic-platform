@@ -715,6 +715,21 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          # For the AUTO-FIX loop (status.js): on a ❌ verdict from the real agents,
+          # collect their findings and submit a bounded df-run revision (iterate-note
+          # = the findings) so the coder auto-revises — no human paraphrasing needed.
+          - name: ISSUE_NUMBER
+            value: "{{`{{workflow.parameters.issue-number}}`}}"
+          - name: BASE_BRANCH
+            value: "{{`{{workflow.parameters.base-branch}}`}}"
+          - name: TRIGGER_LABEL
+            value: "{{`{{workflow.parameters.trigger-label}}`}}"
+          - name: ARGO_NAMESPACE
+            value: {{ .Values.argo.namespace | quote }}
+          - name: AUTO_FIX_FINDINGS
+            value: {{ .Values.review.autoFixFindings | default false | quote }}
+          - name: MAX_ITERATIONS
+            value: {{ .Values.iterate.maxIterations | default 3 | quote }}
 {{- if .Values.devopsAgent.enabled }}
           # Real AWS DevOps Agent posts a check-run (not a commit status) named this;
           # status.js renders the DevOps row from the check-run when present.

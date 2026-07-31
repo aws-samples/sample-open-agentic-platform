@@ -115,6 +115,14 @@ review:
   # The label the DevOps clear-gate applies; the Security Agent step only runs
   # once it's present (so DevOps reviews first, Security second).
   handoffLabel: needs-security-review
+  # AUTO-FIX loop: when the real Security/DevOps agents flag findings (verdict ❌),
+  # the pipeline automatically collects the findings and submits a bounded df-run
+  # revision (iterate-note = the findings) so the coder revises WITHOUT a human
+  # having to paraphrase them. The human only approves at the end. Bounded by
+  # iterate.maxIterations; a human comment can still drive iteration too. On the
+  # Kata substrate the fix round claims a NEW coder (resuming the df/issue-N branch);
+  # on the Lambda substrate (Flow D) it resumes the suspended MicroVM (keeps context).
+  autoFixFindings: true
 
 # Post ONE consolidated verdict review (Security + DevOps results, LGTM when green)
 # on every PR, so both agents' verdicts are ALWAYS visible in the Reviews section.

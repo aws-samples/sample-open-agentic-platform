@@ -64,19 +64,33 @@ async function main() {
   const prs = await api("GET", `/repos/${REPO}/pulls?head=${REPO.split("/")[0]}:${BRANCH}&state=open`);
   if (!prs.length) { console.log("[security-wait] no open PR — nothing to wait for"); return; }
   const pr = prs[0].number;
-  console.log(`[security-wait] waiting up to ${POLL_TIMEOUT}s for aws-security-agent[bot] on PR #${pr} (block at ${BLOCK_LEVEL})`);
+  // ROUND-AWARENESS: on a fix round the coder force-pushes a NEW head commit; the
+  // bot must RE-REVIEW that commit. A prior round's review still exists on the PR,
+  // so we must only trust a bot review/comment tied to the CURRENT head SHA — else
+  // a stale "1 finding" (or stale "clean") from the previous commit would be mirrored.
+  const headSha = prs[0].head.sha;
+  const commits = (await api("GET", `/repos/${REPO}/pulls/${pr}/commits?per_page=100`).catch(() => [])) || [];
+  const headWhen = (() => { const c = commits.find((x) => x.sha === headSha); return c && (new Date((c.commit.committer || c.commit.author || {}).date)).getTime(); })() || 0;
+  const forHead = (item, tsField) => {
+    // Reviews carry commit_id; inline comments carry commit_id/original_commit_id.
+    if (item.commit_id) return item.commit_id === headSha;
+    // Issue comments have no SHA — accept only if posted at/after the head commit time.
+    const t = tsField && item[tsField] ? Date.parse(item[tsField]) : 0;
+    return headWhen ? t >= headWhen - 5000 : true;
+  };
+  console.log(`[security-wait] waiting up to ${POLL_TIMEOUT}s for aws-security-agent[bot] on PR #${pr} @ ${headSha.slice(0,7)} (block at ${BLOCK_LEVEL})`);
   const deadline = Date.now() + POLL_TIMEOUT * 1000;
   let sawAck = false;
   while (Date.now() < deadline) {
     const reviews = (await api("GET", `/repos/${REPO}/pulls/${pr}/reviews?per_page=100`).catch(() => [])) || [];
     const comments = (await api("GET", `/repos/${REPO}/pulls/${pr}/comments?per_page=100`).catch(() => [])) || [];
     const issueComments = (await api("GET", `/repos/${REPO}/issues/${pr}/comments?per_page=100`).catch(() => [])) || [];
-    const botReview = reviews.filter((r) => isSecBot((r.user || {}).login)).slice(-1)[0];
-    const inline = comments.filter((c) => isSecBot((c.user || {}).login)).length;
-    // "reviewing…" ack lands as an issue comment before the verdict review.
-    if (issueComments.some((c) => isSecBot((c.user || {}).login) && /reviewing|will post/i.test(c.body || ""))) sawAck = true;
-    // A "No issues identified." can also be posted as an issue comment (not a review).
-    const cleanComment = issueComments.some((c) => isSecBot((c.user || {}).login) && /no (issues identified|findings)/i.test(c.body || ""));
+    // Only THIS commit's bot review + inline comments (drop stale prior-round ones).
+    const botReview = reviews.filter((r) => isSecBot((r.user || {}).login) && forHead(r, "submitted_at")).slice(-1)[0];
+    const inline = comments.filter((c) => isSecBot((c.user || {}).login) && forHead(c, "created_at")).length;
+    // "reviewing…" ack (issue comment) for this round.
+    if (issueComments.some((c) => isSecBot((c.user || {}).login) && /reviewing|will post/i.test(c.body || "") && forHead(c, "created_at"))) sawAck = true;
+    const cleanComment = issueComments.some((c) => isSecBot((c.user || {}).login) && /no (issues identified|findings)/i.test(c.body || "") && forHead(c, "created_at"));
 
     const verdict = botReview ? classify(botReview.body, inline, sawAck)
       : (cleanComment ? { done: true, findings: 0, desc: "no findings" }

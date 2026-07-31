@@ -14,6 +14,13 @@
 //                verdict; otherwise it falls back to our headless dark-factory/security.
 const https = require("https");
 const { GH_TOKEN, REPO, BRANCH } = process.env;
+// Auto-fix loop (status.js submits a bounded df-run revision on a ❌ agent verdict).
+const AUTO_FIX = (process.env.AUTO_FIX_FINDINGS || "").toLowerCase() === "true";
+const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || "3", 10);
+const ISSUE_NUMBER = process.env.ISSUE_NUMBER || "";
+const BASE_BRANCH = process.env.BASE_BRANCH || "main";
+const TRIGGER_LABEL = process.env.TRIGGER_LABEL || "dark-factory";
+const ARGO_NAMESPACE = process.env.ARGO_NAMESPACE || "argo";
 const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
 const SECURITY_CHECK = process.env.SECURITY_CHECK || "";
 // When "true", the pipeline posts ONE consolidated verdict REVIEW summarizing both
@@ -106,8 +113,13 @@ async function main() {
   // comments rather than reading a state flag.
   const reviews = (await api("GET", `/repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`).catch(() => [])) || [];
   const prComments = (await api("GET", `/repos/${REPO}/pulls/${pr.number}/comments?per_page=100`).catch(() => [])) || [];
-  const latestBotReview = (pred) => (reviews.filter((r) => pred((r.user || {}).login || "")).slice(-1)[0]) || null;
-  const inlineCountBy = (pred) => prComments.filter((c) => pred((c.user || {}).login || "")).length;
+  // ROUND-AWARENESS: only trust a bot review/comment tied to the CURRENT head SHA.
+  // On a fix round the coder force-pushes a new commit; a prior round's "1 finding"
+  // review still exists on the PR, so reading it would mirror a STALE verdict.
+  const headSha = pr.head.sha;
+  const forHead = (item) => (item.commit_id ? item.commit_id === headSha : true);
+  const latestBotReview = (pred) => (reviews.filter((r) => pred((r.user || {}).login || "") && forHead(r)).slice(-1)[0]) || null;
+  const inlineCountBy = (pred) => prComments.filter((c) => pred((c.user || {}).login || "") && forHead(c)).length;
   const isSecBot = (l) => /^aws-security-agent(\[bot\]|-.*\[bot\])?$/i.test(l) || /security-agent/i.test(l) && /\[bot\]/i.test(l);
   const isDevBot = (l) => /aws-devops-agent/i.test(l) && /\[bot\]/i.test(l);
 
@@ -226,11 +238,16 @@ async function main() {
   const readyToReview = implState && implState !== "pending" && (!secState || secState !== "pending");
   if (POST_VERDICT_REVIEW && readyToReview) {
     const RVMARK = "<!-- dark-factory:verdict-review -->";
+    // ROUND-AWARENESS: tag each verdict with the head SHA it evaluated. On a fix
+    // round the coder force-pushes a NEW commit → new SHA → we post a FRESH verdict
+    // (so the PR visibly moves ❌→✅), rather than skipping because a prior-round
+    // verdict exists. Idempotent WITHIN a SHA (a re-run on the same commit no-ops).
+    const shaTag = `<!-- df-verdict-sha:${pr.head.sha} -->`;
     try {
       const existing = await api("GET", `/repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
-      const already = (existing || []).some((r) => (r.body || "").includes(RVMARK));
+      const already = (existing || []).some((r) => (r.body || "").includes(shaTag));
       if (already) {
-        console.log("[df-run] verdict review already posted — skipping");
+        console.log(`[df-run] verdict review already posted for ${pr.head.sha.slice(0,7)} — skipping`);
       } else {
         const secLine = securityRow.replace(/^- /, "");
         const devLine = devopsRow.replace(/^- /, "");
@@ -254,6 +271,7 @@ async function main() {
                 : "**Overall: ✅ All checks green** — Build, Holdout, Security, and DevOps agents all cleared with no findings. Looks good to merge (human approval still required).";
         const reviewBody = [
           RVMARK,
+          shaTag,
           "### 🏭 Dark Factory — consolidated agent verdict",
           "",
           row("implementation", "Build + unit tests").replace(/^- /, ""),
@@ -276,11 +294,106 @@ async function main() {
           await api("POST", `/repos/${REPO}/pulls/${pr.number}/reviews`, { event: "COMMENT", body: reviewBody });
         }
         console.log(`[df-run] posted consolidated verdict review (event=${event}, overall=${overall})`);
+
+        // ── AUTO-FIX loop ──────────────────────────────────────────────────────
+        // On a ❌ verdict from the real agents, feed their findings straight back to
+        // the coder (no human paraphrasing): submit a bounded df-run revision with
+        // iterate-note = the collected Security + DevOps findings. The human only
+        // approves at the end. Bounded by MAX_ITERATIONS via a df-iterations/<n> label.
+        if (overall === "failure" && AUTO_FIX && (secResolved && secResolved.state === "failure" || devResolved && devResolved.state === "failure")) {
+          await maybeAutoFix(pr, { secBotReview, secBotInline, devResolved, comments: prComments, reviews });
+        }
       }
     } catch (e) {
       console.log(`[df-run] verdict review skipped: ${e.message.slice(0, 140)}`);
     }
   }
+}
+
+// Collect the agents' findings into a plain-text fix instruction, enforce the
+// iteration cap, and submit a df-run revision via the in-cluster k8s API.
+async function maybeAutoFix(pr, ctx) {
+  try {
+    const ITER = "df-iterations/";
+    const issue = await api("GET", `/repos/${REPO}/issues/${pr.number}`).catch(() => ({}));
+    const labels = ((issue && issue.labels) || []).map((l) => (typeof l === "string" ? l : l.name));
+    const cur = labels.filter((l) => l.startsWith(ITER)).map((l) => parseInt(l.slice(ITER.length), 10)).filter((n) => !isNaN(n));
+    const count = cur.length ? Math.max(...cur) : 0;
+    if (count >= MAX_ITERATIONS) {
+      console.log(`[df-run] auto-fix cap reached (${count}/${MAX_ITERATIONS}) — leaving for a human`);
+      await api("POST", `/repos/${REPO}/issues/${pr.number}/comments`, { body: `<!-- dark-factory:autofix -->\n🏭 Dark Factory: auto-fix cap reached (${count}/${MAX_ITERATIONS}). The agents still report findings — a human should resolve or push a fix.` }).catch(() => {});
+      return;
+    }
+    const next = count + 1;
+
+    // Gather the findings text: the Security bot's review summary + both agents'
+    // inline review comments (path:line — what is the issue), truncated for the note.
+    const findingLines = [];
+    const secRv = ctx.secBotReview;
+    if (secRv && secRv.body) findingLines.push(`SECURITY AGENT:\n${secRv.body.trim().slice(0, 1500)}`);
+    const inlineFor = (pred, label) => {
+      const items = (ctx.comments || []).filter((c) => pred((c.user || {}).login));
+      if (!items.length) return;
+      findingLines.push(`${label} inline findings:`);
+      for (const c of items.slice(0, 8)) findingLines.push(`- ${c.path}${c.line ? `:${c.line}` : ""} — ${(c.body || "").replace(/\s+/g, " ").trim().slice(0, 240)}`);
+    };
+    inlineFor((l) => /aws-security-agent/i.test(l) && /\[bot\]/i.test(l), "Security");
+    inlineFor((l) => /aws-devops-agent/i.test(l) && /\[bot\]/i.test(l), "DevOps");
+    if (ctx.devResolved && ctx.devResolved.state === "failure") findingLines.push(`DEVOPS AGENT: ${ctx.devResolved.desc}${ctx.devResolved.url ? ` (report: ${ctx.devResolved.url})` : ""}`);
+    const note = [
+      "The AWS Security/DevOps agents requested changes on your PR. Address ALL of the findings below, then rebuild + re-run tests. Do not introduce new issues.",
+      "",
+      ...findingLines,
+    ].join("\n").slice(0, 8000);
+
+    // Bump the counter label.
+    for (const l of cur) await api("DELETE", `/repos/${REPO}/issues/${pr.number}/labels/${encodeURIComponent(ITER + l)}`).catch(() => {});
+    await api("POST", `/repos/${REPO}/issues/${pr.number}/labels`, { labels: [`${ITER}${next}`] }).catch(() => {});
+
+    const wf = {
+      apiVersion: "argoproj.io/v1alpha1", kind: "Workflow",
+      metadata: { name: `df-run-${ISSUE_NUMBER}-fix${next}`, namespace: ARGO_NAMESPACE },
+      spec: {
+        workflowTemplateRef: { name: "df-run" },
+        arguments: { parameters: [
+          { name: "issue-id", value: `${ISSUE_NUMBER}` },
+          { name: "issue-number", value: `${ISSUE_NUMBER}` },
+          { name: "repo", value: REPO },
+          { name: "issue-title", value: pr.title || "" },
+          { name: "issue-body", value: "" },
+          { name: "base-branch", value: BASE_BRANCH || "main" },
+          { name: "iterate-note", value: note },
+          { name: "trigger-label", value: TRIGGER_LABEL || "dark-factory" },
+        ] },
+      },
+    };
+    await submitWorkflow(wf);
+    console.log(`[df-run] AUTO-FIX submitted df-run-${ISSUE_NUMBER}-fix${next} (round ${next}/${MAX_ITERATIONS})`);
+    await api("POST", `/repos/${REPO}/issues/${pr.number}/comments`, { body: `<!-- dark-factory:autofix -->\n🏭 Dark Factory — **auto-fix round ${next}/${MAX_ITERATIONS}**: the coder is revising \`${BRANCH}\` to address the agents' findings above. A new verdict will be posted when the reviews re-run.` }).catch(() => {});
+  } catch (e) {
+    if (e && e.statusCode === 409) { console.log("[df-run] auto-fix already in flight (dedup) — no-op"); return; }
+    console.log(`[df-run] auto-fix skipped (non-fatal): ${(e && e.message || e).toString().slice(0, 160)}`);
+  }
+}
+
+// Submit a Workflow to the in-cluster k8s API using the pod SA token (same as iterate.js).
+function submitWorkflow(wf) {
+  const fs = require("fs");
+  const token = fs.readFileSync("/var/run/secrets/kubernetes.io/serviceaccount/token", "utf8");
+  const ca = fs.readFileSync("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt");
+  const body = JSON.stringify(wf);
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      host: "kubernetes.default.svc", method: "POST",
+      path: `/apis/argoproj.io/v1alpha1/namespaces/${ARGO_NAMESPACE}/workflows`,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+      ca,
+    }, (r) => { let b = ""; r.on("data", (c) => (b += c)); r.on("end", () => {
+      if (r.statusCode >= 200 && r.statusCode < 300) resolve(JSON.parse(b));
+      else reject(Object.assign(new Error(`k8s submit -> ${r.statusCode}: ${b.slice(0, 200)}`), { statusCode: r.statusCode }));
+    }); });
+    req.on("error", reject); req.write(body); req.end();
+  });
 }
 
 main().catch((e) => { console.error(`[df-run] status update failed (non-fatal): ${e.message}`); process.exit(0); });
