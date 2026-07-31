@@ -116,6 +116,16 @@ review:
   # once it's present (so DevOps reviews first, Security second).
   handoffLabel: needs-security-review
 
+# GitHub App reviewer slugs the pipeline requests on EVERY PR (sticky-status step),
+# so both AWS agents consistently appear as reviewers regardless of their own
+# auto-review timing. MUST include the [bot] suffix (that's the App slug the
+# requested_reviewers API accepts; the bare name is rejected as "not a collaborator").
+# The agents then post their COMMENTED review (LGTM / findings) on the current SHA.
+# Empty list = skip (no reviewer request).
+reviewerBots:
+  - aws-security-agent[bot]
+  - aws-devops-agent-us-east-1[bot]
+
 # ── AWS Security Agent (headless, GitOps-native) ─────────────────────────────
 # The agent SPACE + APPLICATION are reconciled once by the PreSync bootstrap Job
 # (templates/06-securityagent-bootstrap.yaml → scripts/bootstrap-agentspace.sh),
