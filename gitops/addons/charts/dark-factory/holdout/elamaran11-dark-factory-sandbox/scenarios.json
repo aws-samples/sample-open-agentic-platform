@@ -93,6 +93,13 @@
       "appliesWhen": "/\\bsum\\b/.test(diff)"
     },
     {
+      "id": "average-basic",
+      "feature": "average(numbers) returns the arithmetic mean, guarding empty",
+      "scenario": "Given average, When I call it, Then average([2,4,6])=4, average([10])=10, average([])=0 (no divide-by-zero), average([1,2,3,4])=2.5.",
+      "test": "const m=require(process.env.REPO+'/app/index.js'); if(m.average([2,4,6])!==4||m.average([10])!==10||m.average([])!==0||m.average([1,2,3,4])!==2.5){console.error('average wrong');process.exit(1)} console.log('ok')",
+      "appliesWhen": "/average/.test(diff)"
+    },
+    {
       "id": "add-regression",
       "feature": "the pre-existing add function is not broken (regression)",
       "scenario": "Given the module still exports add, When I call add(2, 3), Then it returns 5. Any change to index.js must not regress this baseline behaviour.",
