@@ -32,13 +32,22 @@ coder:
 bifrost:
   # LLM gateway URL used by BOTH the in-VM coder and the hub-side holdout/review
   # steps. Injected per-cluster from the `bifrost_url` cluster-secret annotation
-  # by the dark-factory registry entry (registry/sandbox.yaml), mirroring
-  # agent-sandbox's coderTemplate.bifrostUrl — so no hardcoded ClusterIP.
-  # Default = in-cluster svc DNS (works for the hub-side steps out of the box).
-  # CAVEAT (P2): the coder runs INSIDE a Kata VM whose guest DNS cannot resolve
-  # svc names, so on a cluster where the VM dnsConfig fix isn't in yet, set the
-  # `bifrost_url` annotation to a reachable ClusterIP (e.g. http://<clusterip>:8080)
-  # so the coder can reach Bifrost. The hub-side steps are fine with svc DNS.
+  # by the dark-factory registry entry (registry/sandbox.yaml).
+  #
+  # ⚠️ THIS is the value the CODER ends up using: df-run's claim step injects
+  # BIFROST_URL into the sandbox container (20-workflowtemplate-df-run.yaml), and
+  # that OVERRIDES the SandboxTemplate's own coderTemplate.bifrostUrl. Repointing
+  # the agent-sandbox chart alone therefore does NOT fix the coder — verified the
+  # hard way: warm pods carried the right URL while the claimed pod still failed
+  # with `API Error: 502 getaddrinfo ENOTFOUND bifrost.bifrost.svc.cluster.local`.
+  #
+  # Default is svc DNS, which is correct for a generic cluster and for the
+  # hub-side steps. But a Kata sandbox CANNOT resolve it: the agent-sandbox
+  # operator gives every Sandbox pod `dnsPolicy: None` + public resolvers, and on
+  # EKS Auto Mode there is no kube-dns Service for the self-managed kata nodes
+  # (CoreDNS runs as a node-local system service instead). So on any cluster whose
+  # warm pool is Kata-based, the registry entry must point this at a ClusterIP —
+  # which it does by default (172.20.0.100 = bifrost staticService.clusterIP).
   url: http://bifrost.bifrost.svc.cluster.local:8080
 
 # ── Observability: LLM tracing → Langfuse (provided by Bifrost) ──────────────

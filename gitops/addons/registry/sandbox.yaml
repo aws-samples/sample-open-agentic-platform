@@ -325,14 +325,29 @@ dark-factory:
   selectorMatchLabels:
     environment: control-plane
   valuesObject:
-    # Bifrost gateway URL — injected from the bifrost_url cluster-secret annotation
-    # (same default+index pattern as agent-sandbox's coderTemplate.bifrostUrl), so
-    # the in-VM coder + hub-side holdout/review steps share one per-cluster value
-    # instead of a hardcoded ClusterIP. Defaults to svc DNS when the annotation is
-    # absent. On a cluster where the Kata VM guest can't resolve svc DNS, set the
-    # annotation to a reachable ClusterIP so the coder reaches Bifrost.
+    # Bifrost gateway URL, shared by the in-VM coder AND the hub-side
+    # holdout/review steps. Defaults to the PINNED ClusterIP (bifrost chart
+    # staticService.clusterIP) rather than svc DNS.
+    #
+    # THIS IS THE VALUE THE CODER ACTUALLY USES. df-run's claim step injects
+    # BIFROST_URL into the sandbox container (20-workflowtemplate-df-run.yaml
+    # ~line 203), which OVERRIDES the SandboxTemplate's own bifrostUrl — so
+    # fixing agent-sandbox alone is not enough, and a run fails inside the VM
+    # with `API Error: 502 getaddrinfo ENOTFOUND bifrost.bifrost.svc.cluster.local`
+    # (observed live) even when the warm pods carry the right URL.
+    #
+    # A ClusterIP is required because the Kata sandbox cannot resolve cluster DNS
+    # (operator-injected `dnsPolicy: None`; and this Auto Mode cluster has no
+    # kube-dns Service for the self-managed kata nodes). The hub-side steps run on
+    # Auto Mode nodes with working DNS, but a ClusterIP works for them too, so one
+    # value serves both rather than splitting into two knobs.
+    #
+    # Keep in sync — grep 172.20.0.100:
+    #   bifrost        staticService.clusterIP          defines the address
+    #   agent-sandbox  networkPolicy.bifrostClusterIp   admits it on :8080
+    #   agent-sandbox  coderTemplate.bifrostUrl         warm-pool default
     bifrost:
-      url: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+      url: '{{default "http://172.20.0.100:8080" (index .metadata.annotations "bifrost_url")}}'
     # GitHub credentials, cluster-scoped in Secrets Manager (same pattern as
     # langfuse/keycloak in observability.yaml). Three DISTINCT credentials so the
     # untrusted coder VM never holds the orchestrator's merge-capable token
