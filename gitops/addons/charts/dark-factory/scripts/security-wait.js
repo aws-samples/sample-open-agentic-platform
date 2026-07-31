@@ -80,21 +80,37 @@ async function main() {
   };
   console.log(`[security-wait] waiting up to ${POLL_TIMEOUT}s for aws-security-agent[bot] on PR #${pr} @ ${headSha.slice(0,7)} (block at ${BLOCK_LEVEL})`);
   const deadline = Date.now() + POLL_TIMEOUT * 1000;
-  let sawAck = false;
+  // The bot's TERMINAL verdict for a commit is a formal REVIEW (summary body) OR an
+  // explicit "No issues identified" issue-comment — NOT bare inline comments. Inline
+  // comments arrive incrementally while the bot is still analysing and GitHub can
+  // re-attribute a prior round's inline comment to the new head SHA, so counting them
+  // alone resolved TOO EARLY (observed: reported "1 finding" while a "reviewing…" ack
+  // for the same commit was still posting). So we resolve ONLY on a terminal signal,
+  // and only AFTER seeing this round's "reviewing…" ack (proves the bot started on THIS
+  // commit). Findings count = the terminal review's declared number, else its inline count.
+  let sawAck = false, ackAt = 0;
   while (Date.now() < deadline) {
     const reviews = (await api("GET", `/repos/${REPO}/pulls/${pr}/reviews?per_page=100`).catch(() => [])) || [];
     const comments = (await api("GET", `/repos/${REPO}/pulls/${pr}/comments?per_page=100`).catch(() => [])) || [];
     const issueComments = (await api("GET", `/repos/${REPO}/issues/${pr}/comments?per_page=100`).catch(() => [])) || [];
-    // Only THIS commit's bot review + inline comments (drop stale prior-round ones).
-    const botReview = reviews.filter((r) => isSecBot((r.user || {}).login) && forHead(r, "submitted_at")).slice(-1)[0];
-    const inline = comments.filter((c) => isSecBot((c.user || {}).login) && forHead(c, "created_at")).length;
-    // "reviewing…" ack (issue comment) for this round.
-    if (issueComments.some((c) => isSecBot((c.user || {}).login) && /reviewing|will post/i.test(c.body || "") && forHead(c, "created_at"))) sawAck = true;
-    const cleanComment = issueComments.some((c) => isSecBot((c.user || {}).login) && /no (issues identified|findings)/i.test(c.body || "") && forHead(c, "created_at"));
 
-    const verdict = botReview ? classify(botReview.body, inline, sawAck)
-      : (cleanComment ? { done: true, findings: 0, desc: "no findings" }
-      : (inline > 0 ? { done: true, findings: inline, desc: `${inline} finding(s)` } : { done: false }));
+    // This round's "reviewing…" ack (issue comment tied to head by time).
+    const ack = issueComments.filter((c) => isSecBot((c.user || {}).login) && /reviewing|will post/i.test(c.body || "") && forHead(c, "created_at")).slice(-1)[0];
+    if (ack) { sawAck = true; ackAt = Date.parse(ack.created_at) || 0; }
+
+    // TERMINAL signals for THIS commit, posted AFTER this round's ack:
+    //  (a) a formal review with a summary body (commit_id == head), or
+    //  (b) an explicit clean issue-comment ("no issues identified").
+    const afterAck = (ts) => !ackAt || (Date.parse(ts || 0) >= ackAt - 2000);
+    const botReview = reviews.filter((r) => isSecBot((r.user || {}).login) && forHead(r, "submitted_at") && (r.body || "").trim() && afterAck(r.submitted_at)).slice(-1)[0];
+    const cleanComment = issueComments.some((c) => isSecBot((c.user || {}).login) && /no (issues identified|findings)/i.test(c.body || "") && forHead(c, "created_at") && afterAck(c.created_at));
+    // inline comments on THIS commit posted after the ack (only used to COUNT once terminal).
+    const inline = comments.filter((c) => isSecBot((c.user || {}).login) && forHead(c, "created_at") && afterAck(c.created_at)).length;
+
+    let verdict = { done: false };
+    if (botReview) verdict = classify(botReview.body, inline, sawAck);
+    else if (cleanComment) verdict = { done: true, findings: 0, desc: "no findings" };
+    // NOTE: we deliberately do NOT resolve on inline comments alone — wait for (a) or (b).
 
     if (verdict.done) {
       const blocked = BLOCK_LEVEL !== "none" && verdict.findings > 0;

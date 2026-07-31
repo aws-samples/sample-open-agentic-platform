@@ -142,15 +142,21 @@ async function main() {
     return null; // no usable bot signal
   };
 
-  // Security: prefer the App bot's review; else its configured check; else headless status.
+  // Security: the dark-factory/security STATUS is authoritative — it's posted by the
+  // security-agent step (security-wait.js), which waits for the bot's TERMINAL verdict
+  // on THIS commit and encodes findings/clean there. Prefer it, so status.js and the
+  // waiter never disagree (both parse the same bot, but the waiter is round/commit-aware
+  // and won't resolve on stale/partial inline comments). Fall back to re-parsing the bot
+  // review only if the status is somehow absent.
   const secBotReview = latestBotReview(isSecBot);
   const secBotInline = inlineCountBy(isSecBot);
   const secBot = secBotReview ? parseAgentVerdict(secBotReview.body, secBotInline) : null;
-  const secResolved = secBot
-    || (SECURITY_CHECK && by[SECURITY_CHECK] ? { state: by[SECURITY_CHECK].state, desc: by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state } : null)
-    || (by["dark-factory/security"] ? { state: by["dark-factory/security"].state, desc: by["dark-factory/security"].desc || by["dark-factory/security"].state } : null);
+  const secResolved =
+    (by["dark-factory/security"] ? { state: by["dark-factory/security"].state, desc: by["dark-factory/security"].desc || by["dark-factory/security"].state } : null)
+    || secBot
+    || (SECURITY_CHECK && by[SECURITY_CHECK] ? { state: by[SECURITY_CHECK].state, desc: by[SECURITY_CHECK].desc || by[SECURITY_CHECK].state } : null);
   const securityRow = secResolved
-    ? `- ${icon(secResolved.state)} **Security review (AWS Security Agent):** ${secResolved.desc}${secBot ? " _(agent review)_" : ""}`
+    ? `- ${icon(secResolved.state)} **Security review (AWS Security Agent):** ${secResolved.desc}`
     : `- ⬜ **Security review (AWS Security Agent):** _not run_`;
 
   // DevOps: the App bot's release-readiness verdict lives in its commit STATUS/check
