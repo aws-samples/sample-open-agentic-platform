@@ -274,11 +274,12 @@ spec:
           NS="{{ .Values.warmPool.namespace }}"
           echo "[microvm-set-mode] Sandbox/$SB -> operatingMode=$MODE"
           kubectl patch sandbox "$SB" -n "$NS" --type merge -p "{\"spec\":{\"operatingMode\":\"$MODE\"}}"
-          # Best-effort verify the microvm-lifecycle controller acted (poll the
-          # MicrovmSandbox status the bridge created). Advisory only.
+          # Best-effort verify the microvm-lifecycle controller acted. Post-refactor the
+          # per-session VM id lives on the Sandbox annotation (the bridge writes it after
+          # RunMicrovm) — there is no per-session MicrovmSandbox anymore. Advisory only.
           EXPECT="RUNNING"; [ "$MODE" = "Suspended" ] && EXPECT="SUSPENDED"
           i=0; while [ "$i" -lt 12 ]; do
-            VMID=$(kubectl get microvmsandbox -n "$NS" -o jsonpath="{range .items[?(@.metadata.labels.agent-sandbox\.io/sandbox=='$SB')]}{.status.microvmID}{end}" 2>/dev/null || echo "")
+            VMID=$(kubectl get sandbox "$SB" -n "$NS" -o jsonpath='{.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id}' 2>/dev/null || echo "")
             [ -n "$VMID" ] && { echo "[microvm-set-mode] microvmID=$VMID (lifecycle controller will drive $EXPECT)"; break; }
             i=$((i+1)); sleep 5
           done
@@ -838,13 +839,24 @@ spec:
           node /scripts/status.js
 
     # ---- onExit: release the claim (operator refills the pool) ----
+    # SUBSTRATE-AWARE teardown (onExit). Kata: delete the claim now — df-run is done,
+    # the pod's work is over, free the warm pool. LAMBDA (Flow D): do NOT delete — the
+    # coder VM was SUSPENDED (microvm-suspend step) and must PERSIST across the whole
+    # review→fix→re-review loop so df-iterate can RESUME the SAME VM (keeps context).
+    # The claim + suspended VM are terminated only at the END (df-merge-teardown on
+    # merge). So on the lambda substrate this onExit is a deliberate no-op.
     - name: teardown
-      resource:
-        action: delete
-        flags: ["--ignore-not-found"]
-        manifest: |
-          apiVersion: extensions.agents.x-k8s.io/v1beta1
-          kind: SandboxClaim
-          metadata:
-            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
-            namespace: {{ .Values.warmPool.namespace }}
+      script:
+        image: {{ .Values.stepImage }}
+        command: [sh]
+        source: |
+          set -eu
+          LABEL="{{`{{workflow.parameters.trigger-label}}`}}"
+          NS="{{ .Values.warmPool.namespace }}"
+          CLAIM="df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+          if [ "$LABEL" = "darkfactory-lambda" ]; then
+            echo "[teardown] lambda substrate — KEEPING claim/${CLAIM} (VM stays SUSPENDED until merge; df-iterate resumes it)."
+            exit 0
+          fi
+          echo "[teardown] kata substrate — deleting SandboxClaim/${CLAIM} (frees the warm pool)."
+          kubectl delete sandboxclaim "${CLAIM}" -n "${NS}" --ignore-not-found --wait=false || true
