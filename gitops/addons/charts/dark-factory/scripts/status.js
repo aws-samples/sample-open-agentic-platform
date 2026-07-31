@@ -159,12 +159,17 @@ async function main() {
       (devInline ? ` _(+${devInline} inline comment(s))_` : "")
     : `- ⬜ **DevOps review (AWS DevOps Agent):** _not run_`;
 
-  // Overall = worst across build/holdout + the RESOLVED agent verdicts (bot-first).
+  // Overall (= merge readiness) = worst across the BLOCKING signals only: build +
+  // the two real agent bots. Holdout is ADVISORY (holdout.blocking=false) — it's a
+  // train/test quality signal, NOT a merge gate — so a red holdout is SHOWN in its
+  // row but does NOT flip the verdict to "changes requested" (only a real Security/
+  // DevOps agent finding or a build break does). Set HOLDOUT_BLOCKING=true to include
+  // it in the gate.
+  const HOLDOUT_BLOCKING = (process.env.HOLDOUT_BLOCKING || "").toLowerCase() === "true";
   const overall = (() => {
     const vals = [
       (by["dark-factory/implementation"] || {}).state,
-      // holdout only counts when it actually evaluated (not n/a)
-      (by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || "")) ? by["dark-factory/holdout"].state : undefined,
+      (HOLDOUT_BLOCKING && by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || "")) ? by["dark-factory/holdout"].state : undefined,
       secResolved ? secResolved.state : undefined,
       devResolved ? devResolved.state : undefined,
     ].filter((v) => v !== undefined);

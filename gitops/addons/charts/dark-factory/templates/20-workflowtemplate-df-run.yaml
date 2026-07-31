@@ -342,9 +342,28 @@ spec:
           git clone --quiet --branch "${BRANCH}" \
             "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${WORK}/repo"
           cd "${WORK}/repo"
-          # Diff vs base for the judge (fetch base if the shallow clone lacks it).
-          git fetch --quiet --depth 1 origin "${BASE}" || true
-          git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || git diff HEAD~1 > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch
+          # Diff vs base — use the GitHub COMPARE API (authoritative changed-file
+          # patch), NOT a local git diff. A branch clone shares no reliable merge-base
+          # with a shallow base fetch, so `origin/BASE...HEAD` yields the WHOLE file as
+          # "added" (observed: a sum-only PR's diff contained every pre-existing
+          # function → every scenario's appliesWhen matched → wrong scenarios graded →
+          # false holdout failure). The compare API returns only the real per-file
+          # patch hunks, so appliesWhen keys on the ACTUAL change. (Same fix as
+          # detect-deployable.) Concatenate every file's patch into /tmp/diff.patch.
+          PR_NUM="{{`{{inputs.parameters.pr-number}}`}}"
+          curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${API}/pulls/${PR_NUM}/files?per_page=100" 2>/dev/null \
+            | python3 -c 'import json,sys
+try: files=json.load(sys.stdin)
+except Exception: files=[]
+out=[]
+for f in files:
+    out.append("diff --git a/%s b/%s" % (f.get("filename",""), f.get("filename","")))
+    if f.get("patch"): out.append(f["patch"])
+open("/tmp/diff.patch","w").write("\n".join(out))' 2>/dev/null || echo "" > /tmp/diff.patch
+          # Fallback: if the API path produced nothing, fall back to a local diff.
+          [ -s /tmp/diff.patch ] || { git fetch --quiet --depth 1 origin "${BASE}" 2>/dev/null || true; git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch; }
+          echo "[holdout] diff.patch $(wc -l < /tmp/diff.patch) lines (via compare API)"
           # Build/install so executable tests can require the module.
           if [ -f package.json ]; then npm install --no-audit --no-fund >/dev/null 2>&1 || true; fi
           SHA="$(git rev-parse HEAD)"
@@ -725,6 +744,11 @@ spec:
           - name: POST_VERDICT_REVIEW
             value: "true"
 {{- end }}
+          # Holdout is a train/test QUALITY signal, advisory by default — it does NOT
+          # gate the merge verdict unless holdout.blocking=true. status.js reads this
+          # to decide whether a red holdout flips the consolidated verdict.
+          - name: HOLDOUT_BLOCKING
+            value: {{ .Values.holdout.blocking | quote }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/status.js
