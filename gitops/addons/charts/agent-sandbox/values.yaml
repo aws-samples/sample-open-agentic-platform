@@ -156,6 +156,41 @@ networkPolicy:
     - 192.168.0.0/16      # RFC-1918
     - 169.254.0.0/16      # link-local (blocks IMDS 169.254.169.254)
 
+  # PUBLIC DNS resolvers the coder is allowed to reach on :53 (30-networkpolicy).
+  #
+  # REQUIRED on this platform, not optional hardening. The agent-sandbox OPERATOR
+  # materializes every Sandbox pod with `dnsPolicy: None` + these nameservers —
+  # our chart does not set that and cannot unset it. An external resolver matches
+  # no namespaceSelector, so without these ipBlocks every lookup is dropped and
+  # the coder dies with `getaddrinfo EAI_AGAIN api.github.com` (observed live).
+  #
+  # Why public resolvers at all: this is an EKS AUTO MODE cluster, where CoreDNS
+  # runs as a node-level system service instead of a Deployment — there is no
+  # kube-dns Service to point at (nothing owns 172.20.0.10), and the kata pool
+  # runs on SELF-MANAGED Karpenter nodes that Auto Mode's node-local DNS does not
+  # serve. So cluster DNS is unavailable to these pods by construction.
+  #
+  # Keep these as /32s. Widening to 0.0.0.0/0 on :53 would let the coder use DNS
+  # to any host, which is an exfiltration channel (DNS tunnelling) that the :443
+  # private-CIDR rule cannot see. MUST match the resolvers the operator injects.
+  dnsResolvers:
+    - 8.8.8.8/32
+    - 1.1.1.1/32
+
+  # Bifrost's PINNED ClusterIP, allowed on :8080 as an explicit ipBlock.
+  #
+  # Needed IN ADDITION to the namespaceSelector rule because EKS VPC-CNI matches
+  # egress on the ORIGINAL destination (the ClusterIP) BEFORE kube-proxy DNAT,
+  # while a namespaceSelector matches pod IPs. The sandbox addresses Bifrost by
+  # ClusterIP precisely because it cannot resolve DNS, so this is the rule that
+  # actually admits its traffic. (Same VPC-CNI limitation documented for
+  # clusteripFirewall below.)
+  #
+  # ⚠️ MUST equal staticService.clusterIP in the bifrost chart AND the host in
+  # coderTemplate.bifrostUrl. Three places, one address — grep 172.20.0.100.
+  # Set empty to drop this rule (correct only where the sandbox has real DNS).
+  bifrostClusterIp: 172.20.0.100
+
   # Admin-tier ClusterNetworkPolicy (31-clusternetworkpolicy.yaml) — control-plane
   # isolation that applies regardless of pod ownership (the standard NetworkPolicy
   # above only applies to Deployment-owned pods; coder pods are Sandbox-CR-owned).

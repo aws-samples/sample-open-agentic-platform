@@ -18,6 +18,8 @@ and [`docs/dark-factory/README.md`](../../docs/dark-factory/README.md) §4).
 |---|---|---|
 | `coder/entrypoint.js` | The in-VM coder. Auto-runs on VM start; reads the `DF_*` env the `SandboxClaim` injects, fetches the issue as `SPEC.md`, checks out `df/issue-<n>`, runs Claude Code headless via Bifrost, builds + tests, pushes the branch, opens the PR, and sets the `dark-factory/implementation` commit status. | **untrusted** (Kata VM, no cloud creds, no k8s API) |
 | `coder/Dockerfile` | Lean `node:20-alpine` + git/bash/python3/go + the Claude Code CLI. Carries **no** credentials. | — |
+| `deploy-test/Dockerfile` | kubectl + terraform + node/git/curl for the hub-side `deploy-test` step. The **only** step holding K8s access. | trusted (hub) |
+| `setup-secrets.sh` | Writes the three GitHub credentials to Secrets Manager. Run once before the first factory run — see [Credentials](#credentials) below. | trusted (hub) |
 
 ## How the coder is driven (single-cluster on the hub)
 
@@ -90,16 +92,42 @@ call can't mark a good run failed.
 
 ## Build & deploy
 
-The image is built + pushed to ECR and pinned on the Flow A `SandboxTemplate` via GitOps
-(`gitops/addons/charts/agent-sandbox/values.yaml` → `coderTemplate.image`). ArgoCD syncs the template;
-the pool-manager recycles warm pods onto the new tag.
+The image is built + pushed to ECR and pinned on the Flow A `SandboxTemplate` via GitOps. The chart
+default is **empty** behind a Helm `required` guard (image URIs are account-specific and must not ship
+in a public chart), so the real value lives in the **per-cluster overlay**:
+`gitops/overlays/clusters/hub/agent-sandbox/values.yaml` → `coderTemplate.image`. ArgoCD syncs the
+template; the pool-manager recycles warm pods onto the new tag.
 
 ```bash
 # amd64 (hub nodes are amd64); podman/docker both work.
 podman build --platform linux/amd64 -t <ecr>/dark-factory-coder:<tag> examples/dark-factory/coder
 podman push <ecr>/dark-factory-coder:<tag>
-# → bump coderTemplate.image in the agent-sandbox chart values, commit, let ArgoCD sync.
+# → bump coderTemplate.image in the HUB OVERLAY, commit, let ArgoCD sync.
 ```
+
+The ECR repo uses **immutable tags**, so bump the tag rather than re-pushing one. Two hub-side values
+in `gitops/overlays/clusters/hub/dark-factory/values.yaml` (`holdout.evalImage`, `review.reviewImage`)
+reuse this same image — repoint them together.
+
+## Credentials
+
+The factory needs **three separate GitHub credentials** so the untrusted coder VM never holds a
+token that can administer webhooks. They come from AWS Secrets Manager via external-secrets; nothing
+is created by hand in-cluster.
+
+```bash
+export EVENTS_TOKEN='github_pat_...' ORCHESTRATOR_TOKEN='github_pat_...' CODER_TOKEN='github_pat_...'
+bash examples/dark-factory/setup-secrets.sh
+```
+
+Minting the PATs is **manual** — GitHub ships no PAT-creation API, so this cannot be scripted. The
+exact per-token permission sets are in the script's header comment, and the rationale (plus which
+API call each permission is needed for) is in
+[`docs/dark-factory/README.md` §10a](../../docs/dark-factory/README.md#10a-github-credentials-secrets-manager-setup).
+
+Symptom when they are missing: the warm pods sit in `ContainerCreating` indefinitely with
+`MountVolume.SetUp failed … secret "dark-factory-github-coder" not found`. Nothing crashes and
+nothing retries visibly — the mount just never satisfies.
 
 ## Roadmap
 

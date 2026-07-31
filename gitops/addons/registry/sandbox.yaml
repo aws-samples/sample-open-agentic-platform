@@ -288,7 +288,22 @@ agent-sandbox:
         values: ['true']
   valuesObject:
     coderTemplate:
-      bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+      # Bifrost gateway the IN-VM coder reaches. Defaults to the PINNED ClusterIP
+      # (bifrost chart staticService.clusterIP), NOT the svc DNS name, because a
+      # Kata sandbox pod cannot resolve cluster DNS: the agent-sandbox operator
+      # materializes it with `dnsPolicy: None` + public resolvers, and this Auto
+      # Mode cluster has no kube-dns Service for the self-managed kata nodes to
+      # use anyway. With the DNS name here a run dies inside the VM with
+      # getaddrinfo failures and never reaches the LLM (observed live: zero
+      # requests arrived at Bifrost).
+      #
+      # This value MUST stay in sync with two others — grep 172.20.0.100:
+      #   bifrost chart      staticService.clusterIP   (defines the address)
+      #   agent-sandbox      networkPolicy.bifrostClusterIp (admits it on :8080)
+      #
+      # The bifrost_url annotation still overrides, for a cluster where the
+      # sandbox has working DNS or Bifrost sits elsewhere.
+      bifrostUrl: '{{default "http://172.20.0.100:8080" (index .metadata.annotations "bifrost_url")}}'
       # CODER GitHub credential, cluster-scoped in Secrets Manager so THIS
       # cluster's ESO IRSA can be limited to <cluster>/* — the spoke then cannot
       # read the hub's orchestrator/events tokens (review C1 boundary).
