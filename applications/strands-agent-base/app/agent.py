@@ -2,8 +2,8 @@
 
 import logging
 import os
+import time
 import uuid
-from contextlib import ExitStack
 from typing import Optional
 
 logging.basicConfig(
@@ -33,7 +33,24 @@ logger = logging.getLogger(__name__)
 
 _model: Optional[OpenAIModel] = None
 _mcp_tools: list = []
-_mcp_exit_stack: Optional[ExitStack] = None
+_mcp_clients: list = []
+_mcp_connected_at: Optional[float] = None
+
+# The gateway-identity token (audience "agentgateway") mounted at
+# WORKLOAD_TOKEN_PATH has a fixed TTL (expirationSeconds on the projected
+# ServiceAccount token, currently 1h). _get_mcp_tools() opens a persistent
+# MCP connection per server and reuses it, so a long-lived agent session
+# eventually calls a tool with the credentials the connection authenticated
+# with at connect time — which expire even though the token *file* on disk
+# gets rotated by the kubelet, because the open connection doesn't re-read
+# it. Recycle each MCPClient in place (stop() + start() on the same
+# instance, which re-invokes the transport callable and therefore
+# _gateway_headers()) after this many seconds, well under the token's 1h
+# lifetime. Reconnecting the same instances (rather than creating new ones)
+# keeps any already-built Agent's cached tool objects valid, since those
+# tools are bound to the MCPClient object identity, not a point-in-time
+# session.
+_MCP_CONNECTION_MAX_AGE_SECONDS = 45 * 60
 
 
 def _is_access_denied(exc: BaseException) -> bool:
@@ -81,29 +98,47 @@ def _gateway_headers() -> dict:
 
 
 def _get_mcp_tools() -> list:
-    global _mcp_tools, _mcp_exit_stack
-    if _mcp_exit_stack is not None:
+    global _mcp_tools, _mcp_clients, _mcp_connected_at
+
+    if _mcp_clients:
+        age = time.monotonic() - _mcp_connected_at
+        if age < _MCP_CONNECTION_MAX_AGE_SECONDS:
+            return _mcp_tools
+        logger.info(
+            "Recycling %d MCP connection(s) after %.0fs (max age %ds) so the "
+            "gateway auth token is re-read fresh",
+            len(_mcp_clients), age, _MCP_CONNECTION_MAX_AGE_SECONDS,
+        )
+        for client in _mcp_clients:
+            try:
+                client.stop(None, None, None)
+                client.start()
+            except Exception as exc:
+                logger.warning(f"  Failed to recycle MCP connection: {exc}")
+        _mcp_connected_at = time.monotonic()
         return _mcp_tools
 
     urls = config.MCP_SERVER_URLS
     if not urls:
         return []
 
-    stack = ExitStack()
+    clients: list = []
     tools: list = []
     for url in urls:
         logger.info(f"Connecting to MCP server: {url}")
         try:
             client = MCPClient(lambda u=url: streamablehttp_client(u, headers=_gateway_headers()))
-            stack.enter_context(client)
+            client.start()
             server_tools = client.list_tools_sync()
             logger.info(f"  Loaded {len(server_tools)} tools from {url}")
+            clients.append(client)
             tools.extend(server_tools)
         except Exception as exc:
             logger.warning(f"  Failed to connect to MCP server {url}: {exc}")
 
     _mcp_tools = tools
-    _mcp_exit_stack = stack
+    _mcp_clients = clients
+    _mcp_connected_at = time.monotonic()
     return _mcp_tools
 
 
@@ -208,8 +243,12 @@ def get_or_create_agent(session_id: Optional[str] = None, actor_id: str = "user"
 # ── cleanup ──────────────────────────────────────────────────────────────
 
 def shutdown_mcp() -> None:
-    global _mcp_exit_stack
-    if _mcp_exit_stack is not None:
+    global _mcp_clients
+    if _mcp_clients:
         logger.info("Closing MCP client connections")
-        _mcp_exit_stack.close()
-        _mcp_exit_stack = None
+        for client in _mcp_clients:
+            try:
+                client.stop(None, None, None)
+            except Exception as exc:
+                logger.warning(f"  Failed to close MCP connection: {exc}")
+        _mcp_clients = []
