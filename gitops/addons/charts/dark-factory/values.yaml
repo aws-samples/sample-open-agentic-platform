@@ -53,10 +53,25 @@ github:
   # Workflow pods resolve secretKeyRef in their own namespace, and the
   # WorkflowTemplates are created in argo.namespace.
   #
-  # Scope: Pull requests:write + Commit statuses:write.
+  # Scope (fine-grained PAT / App installation, target repo only) — verified
+  # against review/merge.js + review/comment.js + the df-run templates:
+  #   Metadata        read    (implied)
+  #   Contents        write   PUT /pulls/{n}/merge AND DELETE /git/refs/heads/…
+  #                           (the merge endpoint is gated on Contents, and the
+  #                            post-merge branch delete needs it too)
+  #   Pull requests   write   the merge itself
+  #   Commit statuses write   holdout / security / devops / deploy-test verdicts
+  #   Issues          write   comment.js sticky status comment (PR comments ARE
+  #                           issue comments)
+  #
+  # ⚠️ Contents:write + Issues:write were MISSING from the docs table; without
+  # them the merge step fails at the very end of an otherwise-successful run.
+  #
   # This is deliberately NOT the credential the coder VM receives (review C1) —
-  # the coder gets its own lower-privilege token, see the agent-sandbox chart's
-  # coderTemplate.secretsMount.
+  # the coder gets its own token, see the agent-sandbox chart's
+  # coderTemplate.secretsMount. Note the split is narrower than it looks: the
+  # coder also needs PRs:write + statuses:write, so the real distinction is that
+  # the coder has NO Issues:write and never runs the merge step.
   tokenSecret: dark-factory-github-orchestrator
   tokenKey: token
   # Provision tokenSecret from AWS Secrets Manager via external-secrets. The SM
@@ -355,9 +370,15 @@ trigger:
     # jetstream.versions list (verified live: 'latest' → nats:2.10.10).
     jetstreamVersion: latest
     # GitHub repos whose issues fire the factory.
-    # EXAMPLE VALUE — this is the openclaw author's demo repo. Override with YOUR
-    # own owner/repo(s); the holdout/<owner>-<repo>/ fixtures under this chart are
-    # likewise example scenarios tied to dark-factory-sandbox.
+    # EXAMPLE VALUE — the openclaw author's demo repo, which is also the repo the
+    # shipped holdout fixture targets. Override with YOUR own owner/repo(s).
+    #
+    # This value is load-bearing beyond the webhook: 50-holdout-configmap.yaml
+    # derives the fixture path from it (holdout/<owner>-<name>/), so a repo listed
+    # here with no matching fixture directory renders a ConfigMap with EMPTY
+    # scenarios.json + rubric.md rather than failing at render — and the holdout
+    # gate then grades every run against nothing. Add a holdout/<owner>-<name>/
+    # directory whenever you add a repo here.
     repositories:
       - owner: elamaran11
         names:

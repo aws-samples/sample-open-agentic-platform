@@ -7,25 +7,41 @@
 # fails at render with a named error rather than silently emitting `image:` empty
 # and failing later at pod creation.
 #
-# ⚠️ These URIs point at ECR account 940019131157, which is NOT this deployment's
-# account (259732043995). They are the values the chart previously defaulted to,
-# preserved here so behaviour is unchanged — but they are almost certainly NOT
-# pullable from this account. Nothing has exercised them: the images are only
-# pulled when a df-run workflow actually executes, and the WorkflowTemplates report
-# Synced/Healthy merely by existing.
+# STATUS (2026-07-31): the two coder-image values below were rebuilt into THIS
+# account's ECR (259732043995) and are pullable. deployTest.image still points at
+# foreign account 940019131157 — see the note on that value for why it is not yet
+# blocking and when it will be.
 #
-# To make the factory runnable: build the images from examples/dark-factory/{coder,
-# deploy-test} into THIS account's ECR and repoint the three values below.
+# Nothing has exercised any of these end-to-end: the images are only pulled when a
+# df-run workflow actually executes, and the WorkflowTemplates report Synced/Healthy
+# merely by existing.
 
 holdout:
-  # git + node + the languages the hidden executable tests run in.
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+  # git + node + the languages the hidden executable tests run in. Reuses the coder
+  # image (node 20 + git + python3 + go) — same image as before, now in-account.
+  evalImage: 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12
 
 review:
   # node + npm audit + git. Also used by df-iterate and df-merge-teardown.
-  reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+  reviewImage: 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12
 
 deployTest:
   # kubectl + terraform + node + git + curl (content-aware deploy-test needs both
-  # toolchains).
+  # toolchains) — a DIFFERENT image from the coder one, built from
+  # examples/dark-factory/deploy-test.
+  #
+  # ⚠️ STILL POINTS AT FOREIGN ACCOUNT 940019131157 and is therefore NOT pullable
+  # here. Not yet built into this account, because the coder image cannot stand in:
+  # it has neither kubectl nor terraform.
+  #
+  # Not currently blocking: the deploy-test DAG task is gated on
+  # `when: kind != none`, and kind comes from matching the diff against
+  # deployTest.{k8sPatterns,terraformPatterns}. The dark-factory-sandbox test repo
+  # is plain JS, so kind=none and this step never runs — the image is never pulled.
+  #
+  # It WILL block the first PR that touches a Chart.yaml / templates/ / *.tf path.
+  # Build it the same way as the coder image before then. Note the separate bug:
+  # even when skipped, dark-factory/deploy-test stays in REQUIRED_CHECKS, so
+  # merge.js refuses the merge for a missing status (see _helpers.tpl
+  # "dark-factory.requiredChecks").
   image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-deploy-test:v0.1.0

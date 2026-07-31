@@ -249,10 +249,27 @@ coderTemplate:
   # the coder runs model-written code whose prompt is attacker-controllable
   # issue text.
   #
-  # Scope: Contents:write on the target repo and NOTHING else — it must not be
-  # able to merge (Pull requests:write) or administer webhooks (Webhooks:write).
-  # Contents:write still permits a direct branch push, so branch protection on
-  # the default branch is REQUIRED for this boundary to mean anything.
+  # Scope (fine-grained PAT / App installation, target repo only) — this is the
+  # MINIMUM the coder code actually exercises, verified against
+  # examples/dark-factory/coder/entrypoint.js:
+  #   Metadata        read    (implied by all of the below)
+  #   Issues          read    GET /issues/{n} — builds /workspace/SPEC.md
+  #   Contents        write   git push of df/issue-<n>
+  #   Pull requests   write   POST /pulls — the coder OPENS ITS OWN PR
+  #   Commit statuses write   POST /statuses/{sha} — dark-factory/implementation,
+  #                           which is the completion signal df-run polls for
+  # It must NOT have Webhooks:write (that is the events credential's job).
+  #
+  # ⚠️ This is NOT "Contents:write and nothing else" — the docs said that, and the
+  # code disagreed; under-scoping fails MID-RUN, after a sandbox is claimed and
+  # model tokens are spent.
+  #
+  # ⚠️ Fine-grained PATs gate PUT /pulls/{n}/merge on CONTENTS, so this token can
+  # technically merge its own PR. BRANCH PROTECTION (or a ruleset) requiring the
+  # dark-factory/* checks on the default branch is the only thing that actually
+  # prevents self-merge — and it is UNAVAILABLE on private repos on the GitHub
+  # free plan (both APIs 403). On a free-plan private repo this boundary does not
+  # hold; make the repo public, upgrade, or accept the risk knowingly.
   secretsMount:
     enabled: true
     secretName: dark-factory-github-coder

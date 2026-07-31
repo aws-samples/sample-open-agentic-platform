@@ -11,12 +11,24 @@
 # SandboxClaim with no cross-cluster mechanism, so the warm pool must sit on the
 # same cluster as the Dark Factory orchestrator (argo + argo-events).
 #
-# ⚠️ This URI points at ECR account 940019131157, which is NOT this deployment's
-# account (259732043995) — it is the value the chart previously defaulted to,
-# preserved so behaviour is unchanged. If it is not pullable from this account the
-# warm pods will report ImagePullBackOff rather than idling.
+# Built from examples/dark-factory/coder into THIS account's ECR (259732043995) on
+# 2026-07-31, replacing a v0.1.11 URI that pointed at foreign account 940019131157
+# and was therefore never pullable here. Contents verified in the built image:
+# node 20.20.2, git 2.52.0, bash 5.3.3, python 3.12.13, go 1.25.10, Claude Code
+# CLI 2.1.197, /app/entrypoint.js (syntax-checked), USER 1000, linux/amd64 —
+# matching the kata node (c8i.2xlarge, amd64) and the SandboxTemplate's
+# runAsUser: 1000.
 #
-# To make the coder real: build examples/dark-factory/coder (entrypoint.js) into
-# THIS account's ECR and repoint the value below.
+# The kata nodes can pull it: KarpenterNodeRole-hub carries
+# AmazonEC2ContainerRegistryPullOnly, and the repo is in-account (no cross-account
+# repository policy needed).
+#
+# To rebuild:
+#   cd examples/dark-factory/coder
+#   aws ecr get-login-password --region us-west-2 \
+#     | docker login --username AWS --password-stdin 259732043995.dkr.ecr.us-west-2.amazonaws.com
+#   docker build --platform linux/amd64 -t 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:<next> .
+#   docker push 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:<next>
+# The ECR repo has IMMUTABLE tags, so bump the tag — pushing over v0.1.12 is refused.
 coderTemplate:
-  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+  image: 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12

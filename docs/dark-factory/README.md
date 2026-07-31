@@ -199,10 +199,15 @@ End to end:
 3. **Code** — the issue is written into the sandbox as `/workspace/SPEC.md`. The **pluggable
    coder** (Claude Code headless by default; Kiro headless as a profile) implements on branch
    `df/issue-<n>` and **builds + runs unit tests until green** inside the Kata VM, then pushes the
-   branch. The coder holds only `contents:write` — it does *not* open the PR.
-4. **PR opens (after green)** — the workflow reads the coder's result locally (completed pod +
-   `/workspace/artifacts/result.json`) and **the workflow opens the PR** once tests are green. Before
-   this point, status lives on the **issue**; from here on the canonical status board is the **PR**.
+   branch.
+4. **PR opens (after green)** — **the coder opens the PR itself**, from inside the VM, once its
+   tests are green (`entrypoint.js` → `POST /repos/{repo}/pulls`), then self-reports
+   `dark-factory/implementation` on the head SHA. The workflow's `await-coder` step **polls GitHub**
+   for that PR + status — GitHub is the completion bus, since the VM has no cluster API access.
+   Before this point, status lives on the **issue**; from here on the canonical status board is the
+   **PR**. *(The coder therefore needs `Pull requests: write` and `Commit statuses: write` on top of
+   `Contents: write` — see [§10a](#10a-github-credentials-secrets-manager-setup). It still cannot
+   merge: that is a human approval plus the `df-merge-teardown` green-check gate.)*
 5. **Independent verification** — *parallel* DAG steps, driven by the workflow, **never by the coder**
    (see [§6](#6-independent-verification-the-heart-of-the-pattern) and
    [diagram B.4](diagrams/flow-b-dark-factory.md#b4--the-df-run-dag-as-built--how-step-gating-works)).
@@ -539,9 +544,17 @@ Untrusted, LLM-generated code + issue text from anyone = treat the whole sandbox
   container. The isolation boundary is the VM — it travels with the workload regardless of host
   cluster.
 - **No cloud credentials in the sandbox:** the coder holds only a **Bifrost API key** and a
-  **short-TTL GitHub token (`contents:write` only)** via **projected tmpfs (mode 0400)** — read then
-  unset, never in env. All AWS IAM lives with the **Argo workflow orchestrator, outside the VM**. The
-  coder pushes a branch; the *workflow* opens the PR and does the merge.
+  **scoped GitHub token** via **projected tmpfs (mode 0400)** — read then unset, never in env. All
+  AWS IAM lives with the **Argo workflow orchestrator, outside the VM**. The coder pushes its branch
+  and opens the PR; the *workflow* does the **merge**, and only on human approval.
+  > ⚠️ The coder token is **not** `contents:write`-only — it also needs `pull requests: write` and
+  > `commit statuses: write` (it opens its own PR and self-reports). Fine-grained PATs gate
+  > `PUT /pulls/{n}/merge` on **Contents**, so a coder token with `contents: write` *can* call the
+  > merge endpoint. **Branch protection (or a ruleset) requiring the `dark-factory/*` checks on the
+  > default branch is what actually prevents self-merge** — without it this boundary is advisory.
+  > Note branch protection and rulesets are **unavailable on private repos on the GitHub free plan**
+  > (both APIs return `403 Upgrade to GitHub Pro or make this repository public`), so a free-plan
+  > private test repo cannot enforce the merge gate at all.
 - **Egress lockdown:** a **NetworkPolicy** default-denies egress and allows only **DNS + Bifrost:8080
   + GitHub/HTTPS**. `automountServiceAccountToken: false`, runAsNonRoot, seccomp `RuntimeDefault`,
   drop `ALL` caps.
@@ -609,8 +622,20 @@ created by hand in-cluster.
 | Credential | Cluster / namespace | SM key | k8s keys | GitHub permission |
 |---|---|---|---|---|
 | `dark-factory-github-events` | hub / `argo-events` | `<cluster>/dark-factory/github/events` | `token`, `webhook-secret` | Metadata **read**, Contents **read**, Webhooks **write** |
-| `dark-factory-github-orchestrator` | hub / `argo` | `<cluster>/dark-factory/github/orchestrator` | `token` | Pull requests **write**, Commit statuses **write** |
-| `dark-factory-github-coder` | *sandbox cluster* / `agent-sandbox-system` | `<cluster>/dark-factory/github/coder` | `gh-token` | Contents **write** — and nothing else |
+| `dark-factory-github-orchestrator` | hub / `argo` | `<cluster>/dark-factory/github/orchestrator` | `token` | Metadata **read**, Contents **write**, Pull requests **write**, Commit statuses **write**, Issues **write** |
+| `dark-factory-github-coder` | *sandbox cluster* / `agent-sandbox-system` | `<cluster>/dark-factory/github/coder` | `gh-token` | Metadata **read**, Contents **write**, Pull requests **write**, Commit statuses **write**, Issues **read** |
+
+Each permission above is load-bearing — these are the minimum sets the code actually
+exercises, not aspirational ones. Under-scoping fails **mid-run**, after a sandbox has
+been claimed and the model has already burned tokens:
+
+| Permission | Who | Why it is required |
+|---|---|---|
+| Issues **read** | coder | `GET /repos/{repo}/issues/{n}` — the coder fetches the issue to build `SPEC.md` |
+| Pull requests **write** | coder | `POST /repos/{repo}/pulls` — **the coder opens its own PR**, from inside the VM |
+| Commit statuses **write** | coder | `POST /repos/{repo}/statuses/{sha}` — self-reports `dark-factory/implementation`, which is what `df-run` polls |
+| Contents **write** | orchestrator | `PUT /pulls/{n}/merge` and `DELETE /git/refs/heads/…` — the merge endpoint and the post-merge branch delete both need it |
+| Issues **write** | orchestrator | `review/comment.js` creates/updates the sticky status comment (PR comments are issue comments) |
 
 Notes that matter:
 
@@ -623,12 +648,20 @@ Notes that matter:
   read-only instead, set `active: false` and register the webhook yourself.
 - **`webhook-secret` is not a GitHub credential** — it is an arbitrary strong random string used to
   validate GitHub's `X-Hub-Signature-256`. It only has to be consistent.
-- **The coder's SM key is on whichever cluster runs the warm pool** (today the spoke). The
-  `<cluster>/` prefix resolves from that cluster's `aws_cluster_name` annotation, so it follows the
-  pool automatically.
-- **Contents:write still allows a direct push.** The coder cannot *merge* (that needs Pull
-  requests:write), but branch protection on the default branch is **required** for this boundary to
-  mean anything. That is the same protection [§9](#9-lifecycle-teardown--cost)'s merge gate depends on.
+- **The coder's SM key is on whichever cluster runs the warm pool** — **today the hub**, since
+  `df-run` claims a sandbox with no cross-cluster mechanism. The `<cluster>/` prefix resolves from
+  that cluster's `aws_cluster_name` annotation, so it follows the pool automatically.
+- **The coder token *can* merge — branch protection is the only thing stopping it.** GitHub
+  documents `PUT /pulls/{n}/merge` as requiring **Contents** (write) for fine-grained tokens, and the
+  coder holds `Contents: write` (to push) plus `Pull requests: write` (to open its PR). So the C1
+  split does **not** by itself prevent self-merge; a protected default branch requiring the
+  `dark-factory/*` checks is **required** for this boundary to mean anything. That is the same
+  protection [§9](#9-lifecycle-teardown--cost)'s merge gate depends on.
+  > **Not available on private repos on the GitHub free plan** — both
+  > `PUT /repos/{o}/{r}/branches/{b}/protection` and `POST /repos/{o}/{r}/rulesets` return
+  > `403 Upgrade to GitHub Pro or make this repository public`. On such a repo the merge gate is
+  > unenforceable: make the test repo **public**, upgrade the account, or run knowing the agent
+  > could merge its own work.
 
 ### Why the keys are cluster-scoped
 
@@ -646,7 +679,7 @@ follow-up below), then:
 ```bash
 REGION=us-west-2
 HUB=hub                 # cluster running argo + argo-events
-SANDBOX=spoke-dev       # cluster running the warm pool
+SANDBOX=hub             # cluster running the warm pool — see note below
 WEBHOOK_SECRET="$(openssl rand -hex 20)"
 
 # 1. events (hub) — read + webhook admin, plus the HMAC
@@ -655,16 +688,23 @@ aws secretsmanager create-secret --region "$REGION" \
   --secret-string "$(jq -n --arg t "$EVENTS_TOKEN" --arg w "$WEBHOOK_SECRET" \
       '{token:$t, "webhook-secret":$w}')"
 
-# 2. orchestrator (hub) — PRs + commit statuses + merge
+# 2. orchestrator (hub) — merge + PRs + commit statuses + sticky comment
 aws secretsmanager create-secret --region "$REGION" \
   --name "${HUB}/dark-factory/github/orchestrator" \
   --secret-string "$(jq -n --arg t "$ORCHESTRATOR_TOKEN" '{token:$t}')"
 
-# 3. coder (sandbox cluster) — Contents:write ONLY
+# 3. coder (cluster running the warm pool) — push + open PR + self-report status
 aws secretsmanager create-secret --region "$REGION" \
   --name "${SANDBOX}/dark-factory/github/coder" \
   --secret-string "$(jq -n --arg t "$CODER_TOKEN" '{token:$t}')"
 ```
+
+> **`SANDBOX` is the cluster running the warm pool, which is now the hub.** `df-run`'s claim step
+> creates a `SandboxClaim` with no cross-cluster mechanism, so the pool must sit on the same cluster
+> as Argo — `agent_sandbox: true` lives in `overlays/environments/control-plane/enabled-addons.yaml`
+> and is `false` for `dev`. All three secrets therefore land under `hub/` today. The `<cluster>/`
+> prefix resolves from each cluster's own `aws_cluster_name` annotation, so if you move the pool back
+> to a spoke, only this variable changes.
 
 Pass tokens via environment variables as above rather than inline, so they do not land in shell
 history. To rotate, use `put-secret-value` with the same `--name`; ESO picks the change up within

@@ -7,12 +7,15 @@
 # fails at render with a named error rather than silently emitting `image:` empty
 # and failing later at pod creation.
 #
-# ⚠️ This URI points at ECR account 940019131157, which is NOT this deployment's
-# account (259732043995) — it is the value the chart previously defaulted to,
-# preserved here so behaviour is unchanged. If it is not pullable from this
-# account the warm pods will report ImagePullBackOff rather than idling.
+# DORMANT: agent_sandbox is false in overlays/environments/dev/enabled-addons.yaml,
+# so this overlay is not rendered into any Application today. The warm pool moved to
+# the hub (df-run's SandboxClaim has no cross-cluster mechanism). Kept so re-enabling
+# dev does not fail at render on the `required` guard.
 #
-# To make the coder real: build examples/dark-factory/coder (entrypoint.js) into
-# THIS account's ECR and repoint the value below.
+# Repointed 2026-07-31 to the in-account image built from examples/dark-factory/coder
+# — the old v0.1.11 URI pointed at foreign account 940019131157 and was never
+# pullable here. spoke-dev is in the SAME account (259732043995), so the registry is
+# reachable; its node role's ECR pull permission is UNVERIFIED (the pool is dormant,
+# nothing has exercised it). Check that before relying on a dev warm pool.
 coderTemplate:
-  image: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.11
+  image: 259732043995.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.1.12
