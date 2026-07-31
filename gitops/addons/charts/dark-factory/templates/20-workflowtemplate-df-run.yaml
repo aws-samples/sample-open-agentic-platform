@@ -756,13 +756,14 @@ spec:
           - name: SECURITY_CHECK
             value: {{ .Values.securityAgent.app.checkRunName | quote }}
 {{- end }}
-{{- if .Values.reviewerBots }}
-          # Request BOTH AWS agents as reviewers on every PR (deterministic — their
-          # own auto-review is inconsistent, and a re-run force-push orphans a
-          # SHA-bound review). App slugs incl. the [bot] suffix. status.js requests
-          # each idempotently.
-          - name: REVIEWER_BOTS
-            value: {{ join "," .Values.reviewerBots | quote }}
+{{- if .Values.postVerdictReview }}
+          # Post ONE consolidated verdict review (Security + DevOps results) on the
+          # PR so both agents' verdicts are ALWAYS visible in the Reviews section —
+          # the agent Apps review autonomously + inconsistently and cannot be added
+          # via the requested_reviewers API (verified no-op). status.js posts it once,
+          # when verification is terminal (idempotent via a hidden marker).
+          - name: POST_VERDICT_REVIEW
+            value: "true"
 {{- end }}
         volumeMounts:
           - name: review-script

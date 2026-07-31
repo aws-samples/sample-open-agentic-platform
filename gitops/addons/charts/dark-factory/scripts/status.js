@@ -16,11 +16,11 @@ const https = require("https");
 const { GH_TOKEN, REPO, BRANCH } = process.env;
 const DEVOPS_CHECK = process.env.DEVOPS_CHECK || "";
 const SECURITY_CHECK = process.env.SECURITY_CHECK || "";
-// Comma-separated GitHub App reviewer slugs (must include the [bot] suffix, e.g.
-// "aws-security-agent[bot],aws-devops-agent-us-east-1[bot]"). Requested on EVERY
-// PR so both agents consistently appear as reviewers (their auto-review is
-// inconsistent, and a re-run/force-push orphans a SHA-bound review). Empty = skip.
-const REVIEWER_BOTS = (process.env.REVIEWER_BOTS || "").split(",").map((s) => s.trim()).filter(Boolean);
+// When "true", the pipeline posts ONE consolidated verdict REVIEW summarizing both
+// agents' results once verification is terminal (see the block near the end). This
+// gives a consistent reviewer signal because the AWS agent Apps review autonomously
+// + inconsistently and (confirmed) CANNOT be added via the requested_reviewers API.
+const POST_VERDICT_REVIEW = (process.env.POST_VERDICT_REVIEW || "").toLowerCase() === "true";
 const H = { "User-Agent": "dark-factory-status", Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" };
 
 function api(method, path, body) {
@@ -46,19 +46,6 @@ async function main() {
   const prs = await api("GET", `/repos/${REPO}/pulls?head=${owner}:${BRANCH}&state=open`);
   if (!prs.length) { console.log("[df-run] no open PR — nothing to update"); return; }
   const pr = prs[0];
-
-  // Ensure both AWS agents are requested reviewers on this PR (idempotent). This
-  // makes the reviewer set deterministic regardless of the agents' own auto-review
-  // timing. Each is requested independently; an already-requested / already-reviewed
-  // / not-installable case is a harmless no-op (logged, never fatal).
-  for (const bot of REVIEWER_BOTS) {
-    try {
-      await api("POST", `/repos/${REPO}/pulls/${pr.number}/requested_reviewers`, { reviewers: [bot] });
-      console.log(`[df-run] requested review from ${bot}`);
-    } catch (e) {
-      console.log(`[df-run] request-review ${bot} skipped: ${e.message.slice(0, 120)}`);
-    }
-  }
   const concToState = (c) => ({ success: "success", neutral: "success", skipped: "success",
     failure: "failure", timed_out: "failure", cancelled: "failure", action_required: "failure" }[c] || "pending");
   // MULTI-SHA ROBUSTNESS: the hub verify steps (holdout/security/deploy-test) post
@@ -148,6 +135,51 @@ async function main() {
   }
   await api("PATCH", `/repos/${REPO}/pulls/${pr.number}`, { body });
   console.log(`[df-run] PR #${pr.number} body updated — overall=${overall}`);
+
+  // ── Consolidated verdict REVIEW ──────────────────────────────────────────
+  // The AWS agent Apps review autonomously and inconsistently (sometimes a formal
+  // review that lands in the sidebar, sometimes only an issue comment; and GitHub
+  // App bots cannot be added via the requested_reviewers API). So — for a
+  // CONSISTENT, always-present reviewer signal — the pipeline posts ONE formal PR
+  // review summarizing both agents' verdicts (as the workflow's GitHub identity).
+  // Posted only when verification is TERMINAL (not while pending) and only ONCE
+  // (idempotent via a hidden marker), so it doesn't spam on every status refresh.
+  if (POST_VERDICT_REVIEW && overall !== "pending") {
+    const RVMARK = "<!-- dark-factory:verdict-review -->";
+    try {
+      const existing = await api("GET", `/repos/${REPO}/pulls/${pr.number}/reviews?per_page=100`);
+      const already = (existing || []).some((r) => (r.body || "").includes(RVMARK));
+      if (already) {
+        console.log("[df-run] verdict review already posted — skipping");
+      } else {
+        const secLine = securityRow.replace(/^- /, "");
+        const devLine = devopsRow.replace(/^- /, "");
+        const holdoutLine = (by["dark-factory/holdout"] && !/not applicable|n\/a/i.test(by["dark-factory/holdout"].desc || ""))
+          ? "\n" + row("holdout", "Holdout gate").replace(/^- /, "") : "";
+        const reviewBody = [
+          RVMARK,
+          "### 🏭 Dark Factory — consolidated agent verdict",
+          "",
+          row("implementation", "Build + unit tests").replace(/^- /, ""),
+          holdoutLine ? holdoutLine.trim() : null,
+          secLine,
+          devLine,
+          "",
+          overall === "success"
+            ? "**Overall: ✅ all checks green** — Security + DevOps agents cleared. LGTM."
+            : "**Overall: ❌ one or more checks failed** — see the rows above.",
+          "",
+          "_Autonomously implemented + independently verified by the AWS Security & DevOps agents (their checks are the source of truth). This consolidated review is posted by the Dark Factory pipeline so both verdicts are always visible on the PR._",
+        ].filter((x) => x !== null).join("\n");
+        // COMMENT (not APPROVE): the human still owns the merge approval; this review
+        // surfaces the agent verdicts without standing in for human sign-off.
+        await api("POST", `/repos/${REPO}/pulls/${pr.number}/reviews`, { event: "COMMENT", body: reviewBody });
+        console.log(`[df-run] posted consolidated verdict review (overall=${overall})`);
+      }
+    } catch (e) {
+      console.log(`[df-run] verdict review skipped: ${e.message.slice(0, 140)}`);
+    }
+  }
 }
 
 main().catch((e) => { console.error(`[df-run] status update failed (non-fatal): ${e.message}`); process.exit(0); });
