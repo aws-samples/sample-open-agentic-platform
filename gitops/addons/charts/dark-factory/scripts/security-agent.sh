@@ -190,31 +190,15 @@ STATE="success"; [ "${BLOCKED}" = "1" ] && STATE="failure"
 if [ "${TOTAL}" = "0" ]; then DESC="security: no findings"; else DESC="security: ${TOTAL} finding(s), top=${TOPSEV}"; fi
 post_status "$STATE" "$DESC"
 
-# ── 6. PR comment (marker-based, edited in place) — python3 + curl ───────────
-PR="$(curl -fsS "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null \
-  | python3 -c 'import json,sys
-try:
-    d=json.load(sys.stdin); print(d[0]["number"] if d else "")
-except Exception: print("")' 2>/dev/null || echo "")"
-if [ -n "$PR" ] && [ -f "$WORK/report.md" ]; then
-  MARKER="<!-- dark-factory:security-agent -->"
-  BODY="$(printf '%s\n%s' "$MARKER" "$(cat "$WORK/report.md")")"
-  PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"body":sys.stdin.read()}))' <<<"$BODY")"
-  # Find an existing marker comment to edit; else create one (idempotent sticky).
-  CID="$(curl -fsS "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/${PR}/comments?per_page=100" 2>/dev/null \
-    | python3 -c 'import json,sys,os
-m=os.environ["MARKER"]
-try:
-    cs=json.load(sys.stdin)
-    print(next((str(c["id"]) for c in cs if m in (c.get("body") or "")), ""))
-except Exception: print("")' 2>/dev/null || echo "")"
-  export MARKER
-  if [ -n "$CID" ]; then
-    curl -fsS -X PATCH "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/comments/${CID}" -d "$PAYLOAD" >/dev/null 2>&1 && log "updated PR comment"
-  else
-    curl -fsS -X POST "${GH_HDR[@]}" "${GH_API}/repos/${REPO}/issues/${PR}/comments" -d "$PAYLOAD" >/dev/null 2>&1 && log "posted PR comment"
-  fi
-fi
+# ── 6. PR comment — REMOVED (single-signal design) ───────────────────────────
+# The Security verdict is NO LONGER relayed as its own sticky PR comment. To
+# avoid the mixed/duplicate signals (a "findings" comment sitting next to a
+# "cleared/LGTM" verdict), findings are surfaced ONLY in the pipeline's ONE
+# consolidated review (status.js → dark-factory:verdict-review), which reads the
+# dark-factory/security commit STATUS posted above — its description carries the
+# finding count + top severity, and its state (success/failure) now honestly
+# reflects the blockLevel gate. The real AWS Security Agent App bot still posts
+# its own inline review. So: one pipeline review, plus the agents' own signals.
 
 if [ "${BLOCKED}" = "1" ]; then
   log "BLOCKING — finding at/above ${BLOCK_LEVEL}."

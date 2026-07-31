@@ -156,9 +156,13 @@ securityAgent:
   # NOTE: verified in-cluster that Alpine/musl aws-cli 2.32 does NOT have
   # securityagent — do NOT point this at the coder image.
   stepImage: public.ecr.aws/aws-cli/aws-cli:latest
-  # Advisory by default. Raise to low|medium|high|critical to fail the run when a
-  # finding at/above that riskLevel is returned (per-severity blocking).
-  blockLevel: none
+  # Findings BLOCK the merge (per-severity gate). A finding at/above this
+  # riskLevel fails the dark-factory/security check, which fails the run and gates
+  # the merge — so the consolidated verdict can never say "cleared/LGTM" while real
+  # findings exist (that mixed signal was the bug). medium = block medium/high/
+  # critical; informational/low pass as advisory. Set to none to make purely
+  # advisory again, or low/high/critical to tune the gate.
+  blockLevel: medium
   # Seconds to wait for a review job (validated: ~2.5 min on a small diff).
   pollTimeoutSeconds: 900
 
@@ -167,9 +171,11 @@ securityAgent:
   # GitHub App (AWSHobbesSecureCode) which — once installed on the repo (one-time
   # console OAuth, see docs/dark-factory/AGENT-INSTALL.md) — auto-reviews every PR
   # and posts INLINE findings as `aws-security-agent [Bot]`, exactly like the
-  # DevOps Agent App. Both run (redundant by design): inline bot review + our
-  # relayed dark-factory:security-agent comment. merge.js/status.js read the App's
-  # real check so a Security BLOCK gates the merge.
+  # DevOps Agent App. The App bot's inline review + the headless dark-factory/
+  # security commit status both run; the pipeline no longer posts its own relay
+  # comment (single-signal design — findings surface in the ONE consolidated
+  # verdict review). merge.js/status.js read the real check so a Security BLOCK
+  # gates the merge.
   app:
     enabled: true
     # The aws-security-agent[bot] posts INLINE PR COMMENTS ("AWS Security Agent is

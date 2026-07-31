@@ -506,28 +506,12 @@ spec:
           echo "$CLEARED" > /tmp/cleared
           echo "[devops-gate] cleared=${CLEARED}"
 
-          # Post a sticky PR comment mirroring the DevOps Agent verdict, so EVERY
-          # step reports on the PR as a comment (not just a status). On a clean
-          # change the DevOps Agent posts only a status + a link to its console
-          # report; this surfaces it inline. Read the real verdict/desc/url from the
-          # commit status (context matches CHECK_CONTEXT).
-          SHA="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BRANCH="$BRANCH" node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].head.sha)}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
-          if [ -n "$SHA" ]; then
-            GH_TOKEN="$GH_TOKEN" REPO="$REPO" SHA="$SHA" CHECK_CONTEXT="$CHECK_CONTEXT" CLEARED="$CLEARED" node -e '
-              const https=require("https");const {GH_TOKEN,REPO,SHA,CHECK_CONTEXT,CLEARED}=process.env;
-              const re=new RegExp(CHECK_CONTEXT,"i");
-              const g=(p)=>new Promise(res=>{https.get({host:"api.github.com",path:p,headers:{"User-Agent":"df","Authorization":"Bearer "+GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{res(JSON.parse(b))}catch(e){res(null)}})}).on("error",()=>res(null))});
-              (async()=>{
-                const st=await g("/repos/"+REPO+"/commits/"+SHA+"/status");
-                const s=((st&&st.statuses)||[]).find(x=>re.test(x.context));
-                const icon=CLEARED==="true"?"✅":"⛔";
-                let md;
-                if(s){md="### "+icon+" 🛠️ AWS DevOps Agent — Release Readiness review\n\n**"+(s.description||s.state)+"**"+(s.target_url?"\n\n[View full release-readiness report ↗]("+s.target_url+")":"")+"\n\n_Cross-repo dependency risks, standards compliance, access-control, verification testing._";}
-                else{md="### ⏳ 🛠️ AWS DevOps Agent — Release Readiness review\n\n_No DevOps Agent verdict was posted within the window._";}
-                require("fs").writeFileSync("/tmp/devops-comment.md",md);
-              })();' 2>/dev/null || true
-            [ -f /tmp/devops-comment.md ] && GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /scripts/comment.js "dark-factory:devops-agent" < /tmp/devops-comment.md || true
-          fi
+          # NOTE: the DevOps verdict is NO LONGER relayed as its own PR comment.
+          # To avoid mixed/duplicate signals, the pipeline posts a SINGLE
+          # consolidated review (status.js → dark-factory:verdict-review) that
+          # mirrors the source-of-truth checks (Build/Holdout/Security/DevOps).
+          # The DevOps Agent's own commit status + the App bot's review remain
+          # the authoritative DevOps signal; `cleared` still gates the flow below.
       outputs:
         parameters:
           - name: cleared
