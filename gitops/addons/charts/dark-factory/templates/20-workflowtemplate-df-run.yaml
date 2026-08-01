@@ -93,6 +93,11 @@ spec:
         tasks:
           - name: claim
             template: claim-sandbox
+            arguments:
+              parameters:
+                # Flow D: darkfactory-lambda → the Lambda-MicroVM warm pool; else Kata.
+                - name: warm-pool
+                  value: "{{`{{=workflow.parameters['trigger-label'] == 'darkfactory-lambda' ? '`}}{{ .Values.warmPool.lambdaName | default "coder-warmpool-microvm" }}{{`' : '`}}{{ .Values.warmPool.name }}{{`'}}`}}"
           - name: drive-coder
             template: await-coder
             dependencies: [claim]
@@ -100,6 +105,22 @@ spec:
               parameters:
                 - name: sandbox
                   value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+{{- if .Values.microvmSuspend.enabled }}
+          # Flow D ONLY — after the coder pushes, SUSPEND the Lambda MicroVM
+          # (operatingMode=Suspended → microvm-lifecycle calls suspend-microvm). The VM
+          # persists suspended across the review→fix loop; df-iterate resumes the SAME
+          # VM; terminated only at merge. Gated on the lambda substrate + a PR; no-op for Kata.
+          - name: microvm-suspend
+            template: microvm-set-mode
+            dependencies: [drive-coder]
+            when: "{{`{{workflow.parameters.trigger-label}}`}} == darkfactory-lambda && {{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: sandbox
+                  value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+                - name: mode
+                  value: "Suspended"
+{{- end }}
 {{- if .Values.holdout.enabled }}
           # P2 — holdout gate: hidden scenarios + a different-family judge.
           - name: holdout-gate
@@ -184,6 +205,11 @@ spec:
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
+      inputs:
+        parameters:
+          # Which warm pool to claim from — Kata (default) or Lambda-MicroVM (Flow D).
+          - name: warm-pool
+            value: "{{ .Values.warmPool.name }}"
       outputs:
         parameters:
           - name: sandbox
@@ -209,7 +235,7 @@ spec:
               dark-factory.io/managed-by: df-run
           spec:
             warmPoolRef:
-              name: {{ .Values.warmPool.name }}
+              name: "{{`{{inputs.parameters.warm-pool}}`}}"
             lifecycle:
               ttlSecondsAfterFinished: {{ .Values.claimTtlSeconds }}
             env:
@@ -809,13 +835,51 @@ spec:
           node /scripts/status.js
 
     # ---- onExit: release the claim (operator refills the pool) ----
+{{- if .Values.microvmSuspend.enabled }}
+    # ---- Flow D: set Sandbox.operatingMode (suspend/resume the Lambda MicroVM) ----
+    # Flips spec.operatingMode; the agent-sandbox-lambda microvm-lifecycle controller
+    # observes it and calls suspend-microvm / resume-microvm by the microvm-id
+    # annotation the bridge wrote. Advisory verify (never fails the run). Lambda only.
+    - name: microvm-set-mode
+      inputs:
+        parameters:
+          - name: sandbox
+          - name: mode      # Running | Suspended
+      script:
+        image: {{ .Values.microvmSuspend.image | default "alpine/k8s:1.31.0" }}
+        command: [sh]
+        source: |
+          set -eu
+          SB="{{`{{inputs.parameters.sandbox}}`}}"
+          MODE="{{`{{inputs.parameters.mode}}`}}"
+          NS="{{ .Values.warmPool.namespace }}"
+          echo "[microvm-set-mode] Sandbox/$SB -> operatingMode=$MODE"
+          kubectl patch sandbox "$SB" -n "$NS" --type merge -p "{\"spec\":{\"operatingMode\":\"$MODE\"}}"
+          i=0; while [ "$i" -lt 12 ]; do
+            VMID=$(kubectl get sandbox "$SB" -n "$NS" -o jsonpath='{.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id}' 2>/dev/null || echo "")
+            [ -n "$VMID" ] && { echo "[microvm-set-mode] microvmID=$VMID"; break; }
+            i=$((i+1)); sleep 5
+          done
+          echo "[microvm-set-mode] done (advisory)."
+      activeDeadlineSeconds: 180
+{{- end }}
+
+    # ---- onExit: release the claim (operator refills the pool) ----
+    # SUBSTRATE-AWARE: Kata deletes the claim now (df-run done → free the pool). LAMBDA
+    # (Flow D) KEEPS the claim + SUSPENDED VM so the same VM survives the review→fix loop
+    # (df-iterate resumes it); the VM is terminated only at merge (df-merge-teardown).
     - name: teardown
-      resource:
-        action: delete
-        flags: ["--ignore-not-found"]
-        manifest: |
-          apiVersion: extensions.agents.x-k8s.io/v1beta1
-          kind: SandboxClaim
-          metadata:
-            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
-            namespace: {{ .Values.warmPool.namespace }}
+      script:
+        image: {{ .Values.stepImage }}
+        command: [sh]
+        source: |
+          set -eu
+          LABEL="{{`{{workflow.parameters.trigger-label}}`}}"
+          NS="{{ .Values.warmPool.namespace }}"
+          CLAIM="df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+          if [ "$LABEL" = "darkfactory-lambda" ]; then
+            echo "[teardown] lambda substrate — KEEPING ${CLAIM} (VM stays SUSPENDED until merge)."
+            exit 0
+          fi
+          echo "[teardown] kata substrate — deleting SandboxClaim/${CLAIM}."
+          kubectl delete sandboxclaim "${CLAIM}" -n "${NS}" --ignore-not-found --wait=false || true
