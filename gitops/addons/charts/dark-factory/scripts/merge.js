@@ -80,6 +80,39 @@ async function main() {
   if (notGreen.length) { console.error(`[df-merge] refusing to merge — not green: ${notGreen.map((c) => `${c}=${by[c]}`).join(", ")}`); process.exit(1); }
   if (missing.length) console.log(`[df-merge] note: checks not present (treated as skipped): ${missing.join(", ")}`);
 
+  // SOURCE-OF-TRUTH GATE: the REAL AWS agent bots review the PR directly and can
+  // catch findings the headless dark-factory/* scan misses (observed: a wildcard-ARN
+  // IAM policy flagged by aws-security-agent[bot] while the headless status said
+  // "no findings"). So — regardless of the commit statuses above — refuse to merge
+  // if the Security or DevOps agent BOT posted findings (a review body reporting
+  // "N finding(s)" or change-requesting inline review comments).
+  try {
+    const reviews = (await api("GET", `/repos/${REPO}/pulls/${PR}/reviews?per_page=100`)) || [];
+    const comments = (await api("GET", `/repos/${REPO}/pulls/${PR}/comments?per_page=100`)) || [];
+    const isSecBot = (l) => /aws-security-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
+    const isDevBot = (l) => /aws-devops-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
+    const botFindings = (pred) => {
+      const rv = reviews.filter((r) => pred((r.user || {}).login)).slice(-1)[0];
+      const inline = comments.filter((c) => pred((c.user || {}).login)).length;
+      const body = rv ? (rv.body || "") : "";
+      const m = body.toLowerCase().match(/(\d+)\s+(?:medium|high|low|critical|informational)?[- ]?severity?\s*finding/) ||
+                body.toLowerCase().match(/\b(\d+)\s+finding/);
+      const declared = m ? parseInt(m[1], 10) : null;
+      const saysClean = /no (issues identified|findings|security issues)|looks good|lgtm/i.test(body);
+      if (declared !== null) return declared;
+      if (saysClean) return 0;
+      return inline; // unclassified review + inline comments = treat as findings
+    };
+    const secN = botFindings(isSecBot), devN = botFindings(isDevBot);
+    if (secN > 0 || devN > 0) {
+      const parts = [];
+      if (secN > 0) parts.push(`Security agent: ${secN} finding(s)`);
+      if (devN > 0) parts.push(`DevOps agent: ${devN} finding(s)`);
+      console.error(`[df-merge] refusing to merge — AWS agent bot flagged findings (${parts.join("; ")}). Address them and re-approve.`);
+      process.exit(1);
+    }
+  } catch (e) { console.log(`[df-merge] agent-bot findings check skipped (non-fatal): ${e.message.slice(0, 120)}`); }
+
   console.log(`[df-merge] PR #${PR} green + human-approved — merging (squash)`);
   await api("PUT", `/repos/${REPO}/pulls/${PR}/merge`, {
     merge_method: "squash",

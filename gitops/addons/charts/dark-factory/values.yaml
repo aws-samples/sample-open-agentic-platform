@@ -94,7 +94,7 @@ holdout:
   blocking: false
   # Node image for the eval step: needs git + node + the languages the executable
   # tests run in. Reuse the coder image (has git/node/python/go + is already in ECR).
-  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.3
+  evalImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
 
 # ── P3: Reviews via the REAL AWS Frontier Agents ─────────────────────────────
 # Two independent reviewers, run OUTSIDE the coder VM (the coder never grades
@@ -119,6 +119,23 @@ review:
   # The label the DevOps clear-gate applies; the Security Agent step only runs
   # once it's present (so DevOps reviews first, Security second).
   handoffLabel: needs-security-review
+  # AUTO-FIX loop: DISABLED. When on, status.js auto-submitted a df-run fix round on a
+  # ❌ verdict — but that COLLIDED with the comment-driven df-iterate loop (the pipeline's
+  # own verdict/finding comments re-triggered df-iterate), spawning overlapping fix rounds
+  # and runaway commits. The stable model is: agents post findings → ❌ verdict → a HUMAN
+  # comments the fix request → ONE df-iterate round → re-review. Keep this false unless
+  # auto-fix is given hard mutual-exclusion with df-iterate.
+  autoFixFindings: false
+
+# Post ONE consolidated verdict review (Security + DevOps results, LGTM when green)
+# on every PR, so both agents' verdicts are ALWAYS visible in the Reviews section.
+# Why not just add the agents as reviewers? Their GitHub App bots CANNOT be added via
+# the requested_reviewers API (verified: it silently no-ops — Apps aren't collaborators),
+# and they review autonomously + inconsistently (sometimes a formal review, sometimes
+# only an issue comment). This pipeline-posted review is the consistent signal; the
+# agents' own checks (dark-factory/security, aws-devops-agent/...) remain the source of
+# truth. Posted as the workflow's GitHub identity, as a COMMENT (human still owns merge).
+postVerdictReview: true
 
 # ── AWS Security Agent (headless, GitOps-native) ─────────────────────────────
 # The agent SPACE + APPLICATION are reconciled once by the PreSync bootstrap Job
@@ -150,9 +167,13 @@ securityAgent:
   # NOTE: verified in-cluster that Alpine/musl aws-cli 2.32 does NOT have
   # securityagent — do NOT point this at the coder image.
   stepImage: public.ecr.aws/aws-cli/aws-cli:latest
-  # Advisory by default. Raise to low|medium|high|critical to fail the run when a
-  # finding at/above that riskLevel is returned (per-severity blocking).
-  blockLevel: none
+  # Findings BLOCK the merge (per-severity gate). A finding at/above this
+  # riskLevel fails the dark-factory/security check, which fails the run and gates
+  # the merge — so the consolidated verdict can never say "cleared/LGTM" while real
+  # findings exist (that mixed signal was the bug). medium = block medium/high/
+  # critical; informational/low pass as advisory. Set to none to make purely
+  # advisory again, or low/high/critical to tune the gate.
+  blockLevel: medium
   # Seconds to wait for a review job (validated: ~2.5 min on a small diff).
   pollTimeoutSeconds: 900
 
@@ -161,9 +182,11 @@ securityAgent:
   # GitHub App (AWSHobbesSecureCode) which — once installed on the repo (one-time
   # console OAuth, see docs/dark-factory/AGENT-INSTALL.md) — auto-reviews every PR
   # and posts INLINE findings as `aws-security-agent [Bot]`, exactly like the
-  # DevOps Agent App. Both run (redundant by design): inline bot review + our
-  # relayed dark-factory:security-agent comment. merge.js/status.js read the App's
-  # real check so a Security BLOCK gates the merge.
+  # DevOps Agent App. The App bot's inline review + the headless dark-factory/
+  # security commit status both run; the pipeline no longer posts its own relay
+  # comment (single-signal design — findings surface in the ONE consolidated
+  # verdict review). merge.js/status.js read the real check so a Security BLOCK
+  # gates the merge.
   app:
     enabled: true
     # The aws-security-agent[bot] posts INLINE PR COMMENTS ("AWS Security Agent is
@@ -215,7 +238,7 @@ devopsAgent:
 
 # Image for hub-side agent steps: needs aws-cli + kubectl + node + git + zip.
 # Reuse the coder image (has node/git/zip); the bootstrap Job adds aws-cli.
-reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.3
+reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.2.5
 
 # ── P3b: Iterate on PR comment ───────────────────────────────────────────────
 # A human comment on a Dark Factory PR routes back to the coder as a revision

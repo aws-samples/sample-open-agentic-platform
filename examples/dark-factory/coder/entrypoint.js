@@ -143,18 +143,30 @@ async function fetchIssueSpec() {
   // so the coder revises the EXISTING branch to address the feedback, rather than
   // re-implementing from scratch. DF_ITERATE_NOTE is injected by the df-iterate
   // claim; absent on a first (df-run) pass.
-  const note = process.env.DF_ITERATE_NOTE;
+  // Prefer the base64 form: the revision note (esp. auto-fed agent findings) is
+  // arbitrary markdown with newlines/quotes/braces that CANNOT be injected raw into
+  // the SandboxClaim env YAML (it broke the manifest). status.js/df-iterate base64
+  // it into DF_ITERATE_NOTE_B64; decode here. Fall back to plain DF_ITERATE_NOTE.
+  const note = iterateNote();
   if (note && note.trim()) {
     spec += `\n---\n\n## Revision requested (address this feedback on the existing branch)\n\n${note}\n`;
   }
   return spec;
 }
 
+// Resolve the revision note from DF_ITERATE_NOTE_B64 (preferred, safe for arbitrary
+// text) or the legacy plain DF_ITERATE_NOTE.
+function iterateNote() {
+  const b64 = process.env.DF_ITERATE_NOTE_B64;
+  if (b64 && b64.trim()) { try { return Buffer.from(b64.trim(), "base64").toString("utf8"); } catch (_) { /* fall through */ } }
+  return process.env.DF_ITERATE_NOTE || "";
+}
+
 function checkout() {
   const token = readSecret(GH_TOKEN_PATH);
   const url = `https://x-access-token:${token}@github.com/${REPO}.git`;
   const dir = `${WORKSPACE}/repo`;
-  const iterating = !!(process.env.DF_ITERATE_NOTE && process.env.DF_ITERATE_NOTE.trim());
+  const iterating = !!(iterateNote() && iterateNote().trim());
   if (!fs.existsSync(dir)) {
     // On iterate, start from the existing coder branch (build on prior work);
     // otherwise branch fresh from BASE.
@@ -256,25 +268,11 @@ function runCoder(repoDir) {
   // Inherit stdio so the coder CLI's own output + errors stream into the pod
   // logs (kubectl logs), instead of being swallowed by execFileSync's exception.
   const opts = { cwd: repoDir, env, stdio: "inherit", maxBuffer: 64 * 1024 * 1024 };
-  // The coder also writes a concise, human-readable summary of WHAT it changed to
-  // artifacts/description.md — this becomes the "Changes" section of the PR body
-  // (in addition to the verification section). Keep it short: what changed + why,
-  // as reviewer-facing markdown bullets.
-  const descPath = `${WORKSPACE}/artifacts/description.md`;
-  const prompt =
-    `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work. ` +
-    `Then write a concise description of the changes you made (what changed and why, as a few markdown bullet points, ` +
-    `reviewer-facing — no preamble) to ${descPath}.`;
+  const prompt = `Implement the change described in ${WORKSPACE}/SPEC.md. Build and run unit tests until green. Commit your work.`;
   if (ENGINE === "kiro") {
     // Kiro CLI headless — the coder image carries the `kiro` binary; it reads the
     // same Bifrost/Bedrock env above. --headless drives it non-interactively.
-    // Append the description instruction so kiro produces the same artifact.
     console.log("[coder] engine=kiro (kiro run --headless)");
-    try {
-      fs.appendFileSync(`${WORKSPACE}/SPEC.md`,
-        `\n\n---\n\n## After implementing\n\nWrite a concise description of the changes you made ` +
-        `(what changed and why, a few reviewer-facing markdown bullets, no preamble) to ${descPath}.\n`);
-    } catch { /* non-fatal */ }
     return execFileSync("kiro", ["run", "--headless", "--spec", `${WORKSPACE}/SPEC.md`], opts);
   }
   console.log("[coder] engine=claude (claude -p)");
@@ -430,38 +428,26 @@ async function main() {
     //     (or "not connected" honestly if the plugin isn't wired).
     // Either way the hub sticky-status step overwrites this block with the live
     // verdict (from the check-run / statuses) once verification completes.
-    let devopsLine, secLine;
-    if (DEVOPS_AGENT_MODE === "off") {
-      devopsLine = "- ⏳ **DevOps review (AWS DevOps Agent):** _pending — AWS DevOps Agent reviews this PR…_";
-      secLine = "- ⏳ **Security review (AWS Security Agent):** _runs after DevOps clears…_";
-    } else {
-      const devopsIcon = devops.cleared ? "✅" : (devops.verdict === "not-connected" ? "⚠️" : (devops.verdict === "BLOCK" ? "⛔" : "⏳"));
-      devopsLine = devops.verdict === "not-connected"
-        ? "- ⚠️ **DevOps review (AWS DevOps Agent):** _not connected — one-time console setup required_"
-        : `- ${devopsIcon} **DevOps review (AWS DevOps Agent):** ${devops.verdict}`;
-      secLine = devops.cleared
-        ? "- ⏳ **Security review (AWS Security Agent):** _queued (DevOps cleared)…_"
-        : "- ⬜ **Security review (AWS Security Agent):** _waiting on DevOps clearance_";
-    }
-    // Coder-authored description of the changes (artifacts/description.md). Shown
-    // as a "Changes" section ahead of the verification block. Falls back to a
-    // neutral line if the coder didn't produce one, so the PR body is never empty.
-    const desc = readSecret(`${WORKSPACE}/artifacts/description.md`);
-    const changesSection = desc
-      ? ["### 📝 Changes", "", desc, ""]
-      : ["### 📝 Changes", "", "_Implemented per the linked issue; see the diff for details._", ""];
+    // NEUTRAL placeholder only. The coder opens the PR BEFORE the hub verify steps
+    // + the AWS agents run, so it must NOT print per-step states (they'd be stale
+    // guesses that confused readers: "Holdout: running…" long after it finished,
+    // "Security: runs after DevOps…" while the bot was already done). The pipeline's
+    // ONE consolidated review (status.js → dark-factory:verdict-review) is the
+    // authoritative live status. We keep the dark-factory:status marker so status.js
+    // can still replace this block with the final verdict summary at the end.
     const prBody = [
       `Closes #${ISSUE}.`,
       "",
-      ...changesSection,
       "<!-- dark-factory:status -->",
       "### 🏭 Dark Factory — verification",
-      `- ✅ **Build + unit tests:** ${test.summary}`,
-      "- ⏳ **Holdout gate:** _running…_",
-      devopsLine,
-      secLine,
+      `- ✅ **Build + unit tests (in-VM):** ${test.summary}`,
       "",
-      "_Autonomously implemented in a hardware-isolated Kata micro-VM; DevOps + Security reviews are the real AWS Frontier Agents (see the checks below)._",
+      "⏳ **Verification in progress.** Hub gates (holdout, deploy-test) and the real",
+      "AWS DevOps + Security agents are reviewing this PR. Results are posted as a",
+      "single **consolidated verdict review** on this PR when they finish — that",
+      "review (not this body) is the source of truth for merge readiness.",
+      "",
+      "_Autonomously implemented in a hardware-isolated micro-VM. DevOps + Security reviews are the real AWS Frontier Agents._",
     ].join("\n");
     let prNumber = "";
     try {

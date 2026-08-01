@@ -47,11 +47,16 @@ spec:
       # existing branch to address the feedback.
       - name: iterate-note
         value: ""
-      # Which label fired the run → selects the coder substrate:
-      #   dark-factory        → Kata micro-VM (default; Flow B)
-      #   darkfactory-lambda  → Lambda MicroVM (Flow D)
-      # The claim step branches on this. Defaults to dark-factory so manual /
-      # df-iterate submits (which don't pass it) stay on the Kata path.
+      # Base64 of the revision note — used when the note is arbitrary markdown
+      # (auto-fed agent findings) that can't be injected raw into the claim YAML.
+      # The coder decodes this first, falling back to the plain iterate-note.
+      - name: iterate-note-b64
+        value: ""
+      # Which label fired the run selects the coder substrate (Kata default vs
+      # Lambda MicroVM for darkfactory-lambda). MUST be declared with a default so
+      # every trigger-label reference resolves even when the submitter (sensor /
+      # manual) does not pass it. Defaulting to dark-factory keeps the Kata path for
+      # sensor submits that do not map a label.
       - name: trigger-label
         value: "dark-factory"
   # Always release the claimed sandbox, on success OR failure.
@@ -88,11 +93,6 @@ spec:
         tasks:
           - name: claim
             template: claim-sandbox
-            arguments:
-              parameters:
-                # darkfactory-lambda → Lambda-MicroVM pool; else the Kata pool.
-                - name: warm-pool
-                  value: "{{`{{=workflow.parameters['trigger-label'] == 'darkfactory-lambda' ? '`}}{{ .Values.warmPool.lambdaName | default "coder-warmpool-microvm" }}{{`' : '`}}{{ .Values.warmPool.name }}{{`'}}`}}"
           - name: drive-coder
             template: await-coder
             dependencies: [claim]
@@ -100,24 +100,6 @@ spec:
               parameters:
                 - name: sandbox
                   value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
-{{- if .Values.microvmSuspend.enabled }}
-          # Flow D ONLY — suspend the Lambda MicroVM after the coder pushes its
-          # branch: flip Sandbox.operatingMode=Suspended so the microvm-lifecycle
-          # controller calls suspend-microvm. The VM's state is retained (snapshot)
-          # and compute is freed while the (potentially slow) gates run — the
-          # coder is idle during review anyway. df-iterate resumes it on a comment.
-          # Gated on the lambda substrate + a PR existing; a no-op for Kata.
-          - name: microvm-suspend
-            template: microvm-set-mode
-            dependencies: [drive-coder]
-            when: "{{`{{workflow.parameters.trigger-label}}`}} == darkfactory-lambda && {{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
-            arguments:
-              parameters:
-                - name: sandbox
-                  value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
-                - name: mode
-                  value: "Suspended"
-{{- end }}
 {{- if .Values.holdout.enabled }}
           # P2 — holdout gate: hidden scenarios + a different-family judge.
           - name: holdout-gate
@@ -145,12 +127,15 @@ spec:
               parameters:
                 - name: pr-number
                   value: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}"
-          # Security Agent (narrow/strict) runs SECOND — only after DevOps cleared
-          # (label present). Headless: create-code-review → job → list-findings.
+          # Security Agent — WAITS FOR the real aws-security-agent[bot]'s own review
+          # and mirrors its verdict into dark-factory/security. The App bot reviews
+          # autonomously + IN PARALLEL with the DevOps bot, so this runs alongside
+          # devops-gate (depends on drive-coder, NOT gated behind DevOps clearing —
+          # otherwise a slow DevOps review would skip the security signal entirely).
           - name: security-agent
             template: security-agent
-            dependencies: [devops-gate]
-            when: "{{`{{tasks.devops-gate.outputs.parameters.cleared}}`}} == true"
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
 {{- end }}
 {{- if .Values.deployTest.enabled }}
           # P4 — detect whether the PR touches deployable artifacts (cheap grep of
@@ -173,12 +158,17 @@ spec:
 {{- end }}
           - name: status
             template: sticky-status
+            # Depend on BOTH agents (devops-gate + security-agent) plus holdout +
+            # deploy-test so the consolidated verdict is only computed once EVERY
+            # signal is terminal — required so a ❌ (and the auto-fix decision) is made
+            # on complete input, and so a clear verdict truly means both agents cleared.
             dependencies:
               {{- if or .Values.holdout.enabled .Values.review.enabled .Values.deployTest.enabled }}
               {{- if .Values.holdout.enabled }}
               - holdout-gate
               {{- end }}
               {{- if .Values.review.enabled }}
+              - devops-gate
               - security-agent
               {{- end }}
               {{- if .Values.deployTest.enabled }}
@@ -194,12 +184,6 @@ spec:
 
     # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
     - name: claim-sandbox
-      inputs:
-        parameters:
-          # Which SandboxWarmPool to claim from (Kata vs Lambda-MicroVM). The DAG
-          # computes this from the trigger-label; defaults to the Kata pool.
-          - name: warm-pool
-            value: {{ .Values.warmPool.name }}
       outputs:
         parameters:
           - name: sandbox
@@ -224,11 +208,8 @@ spec:
               dark-factory.io/issue-number: "{{`{{workflow.parameters.issue-number}}`}}"
               dark-factory.io/managed-by: df-run
           spec:
-            # Substrate branch: the claim binds whichever warm pool the DAG passes
-            # in (Kata coder-warmpool by default; the Lambda-MicroVM pool when the
-            # darkfactory-lambda label fired). Everything else is identical.
             warmPoolRef:
-              name: "{{`{{inputs.parameters.warm-pool}}`}}"
+              name: {{ .Values.warmPool.name }}
             lifecycle:
               ttlSecondsAfterFinished: {{ .Values.claimTtlSeconds }}
             env:
@@ -243,7 +224,12 @@ spec:
               # Back-compat alias (older coder images read CODER_PROFILE).
               - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.engine }}" }
               - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
+              # Revision note: prefer the base64 form (safe for arbitrary markdown —
+              # auto-fed agent findings contain newlines/quotes/braces that broke the
+              # raw YAML injection). Both are single-line values here; the coder
+              # decodes B64 first, else uses the plain one.
               - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
+              - { containerName: coder, name: DF_ITERATE_NOTE_B64, value: "{{`{{workflow.parameters.iterate-note-b64}}`}}" }
 {{- if and .Values.devopsAgent.enabled (eq .Values.devopsAgent.gate "label") }}
               # DevOps Agent via the coding-agent plugin, run inside the coder
               # step BEFORE the PR opens — ONLY in label-gate mode. In the default
@@ -251,40 +237,6 @@ spec:
               # so the coder does not attempt the (VM-incompatible) plugin path.
               - { containerName: coder, name: DF_DEVOPS_AGENT_MODE, value: "claude-plugin" }
               - { containerName: coder, name: DF_DEVOPS_CLEAR_LABEL, value: "{{ .Values.review.handoffLabel }}" }
-{{- end }}
-
-{{- if .Values.microvmSuspend.enabled }}
-    # ---- Flow D: set Sandbox.operatingMode (suspend/resume the Lambda MicroVM) ----
-    # Flips spec.operatingMode; the agent-sandbox microvm-lifecycle controller
-    # observes the change and calls suspend-microvm / resume-microvm by microvmID.
-    # We then best-effort verify the MicroVM reached the expected state via the API
-    # (advisory — never fails the run). Only invoked on the lambda substrate.
-    - name: microvm-set-mode
-      inputs:
-        parameters:
-          - name: sandbox
-          - name: mode      # Running | Suspended
-      script:
-        image: {{ .Values.microvmSuspend.image | default "alpine/k8s:1.31.0" }}
-        command: [sh]
-        source: |
-          set -eu
-          SB="{{`{{inputs.parameters.sandbox}}`}}"
-          MODE="{{`{{inputs.parameters.mode}}`}}"
-          NS="{{ .Values.warmPool.namespace }}"
-          echo "[microvm-set-mode] Sandbox/$SB -> operatingMode=$MODE"
-          kubectl patch sandbox "$SB" -n "$NS" --type merge -p "{\"spec\":{\"operatingMode\":\"$MODE\"}}"
-          # Best-effort verify the microvm-lifecycle controller acted. Post-refactor the
-          # per-session VM id lives on the Sandbox annotation (the bridge writes it after
-          # RunMicrovm) — there is no per-session MicrovmSandbox anymore. Advisory only.
-          EXPECT="RUNNING"; [ "$MODE" = "Suspended" ] && EXPECT="SUSPENDED"
-          i=0; while [ "$i" -lt 12 ]; do
-            VMID=$(kubectl get sandbox "$SB" -n "$NS" -o jsonpath='{.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id}' 2>/dev/null || echo "")
-            [ -n "$VMID" ] && { echo "[microvm-set-mode] microvmID=$VMID (lifecycle controller will drive $EXPECT)"; break; }
-            i=$((i+1)); sleep 5
-          done
-          echo "[microvm-set-mode] done (advisory)."
-      activeDeadlineSeconds: 180
 {{- end }}
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
@@ -314,22 +266,38 @@ spec:
           command -v curl >/dev/null 2>&1 || apk add --no-cache curl jq >/dev/null 2>&1
           REPO="{{`{{workflow.parameters.repo}}`}}"
           BRANCH="df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          ITERATE_NOTE="{{`{{workflow.parameters.iterate-note}}`}}"
+          ITERATE_NOTE_B64="{{`{{workflow.parameters.iterate-note-b64}}`}}"
           API="https://api.github.com/repos/${REPO}"
-          echo "[df-run] polling GitHub for PR head=${BRANCH} in ${REPO}..."
+          # ROUND-AWARENESS: on a FIX ROUND (iterate-note set) the branch already
+          # exists and its OLD commit already has dark-factory/implementation=success.
+          # If we accept that, the verify fan (holdout/security/devops) runs against
+          # the STALE pre-fix commit before the coder's new push lands (observed 45s
+          # race). So record the branch's starting SHA and require a DIFFERENT head
+          # SHA (a genuinely new commit) before we consider the coder done on a fix
+          # round. First-pass runs (no iterate-note) have no prior commit → accept the
+          # first commit that reports impl=success.
+          START_SHA="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+                        "${API}/branches/${BRANCH}" 2>/dev/null | jq -r '.commit.sha // empty' || echo "")"
+          IS_FIX="false"; { [ -n "${ITERATE_NOTE}" ] || [ -n "${ITERATE_NOTE_B64}" ]; } && IS_FIX="true"
+          echo "[df-run] polling GitHub for PR head=${BRANCH} (fix-round=${IS_FIX}, start-sha=${START_SHA:-none})..."
           while true; do
-            # Is there an open PR from the coder's branch?
             pr="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" \
                    -H "Accept: application/vnd.github+json" \
                    "${API}/pulls?head=${REPO%%/*}:${BRANCH}&state=open" 2>/dev/null || echo '[]')"
             n="$(echo "${pr}" | jq -r '.[0].number // empty')"
             if [ -n "${n}" ]; then
-              # Read the coder's self-reported implementation status on the head SHA.
               sha="$(echo "${pr}" | jq -r '.[0].head.sha')"
+              # On a fix round, ignore the old commit until the coder pushes a new one.
+              if [ "${IS_FIX}" = "true" ] && [ -n "${START_SHA}" ] && [ "${sha}" = "${START_SHA}" ]; then
+                echo "[df-run] fix-round: head still at start sha ${sha} — waiting for the coder's new commit..."
+                sleep 15; continue
+              fi
               st="$(curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
                      "${API}/commits/${sha}/status" 2>/dev/null | jq -r '.statuses[] | select(.context=="dark-factory/implementation") | .state' | head -1)"
               echo "[df-run] PR #${n} open (sha=${sha}) impl-status=${st:-pending}"
               case "${st}" in
-                success) echo "[df-run] coder finished — PR #${n} ready."; echo "${n}" > /tmp/pr; exit 0 ;;
+                success) echo "[df-run] coder finished — PR #${n} @ ${sha} ready."; echo "${n}" > /tmp/pr; echo "${sha}" > /tmp/sha; exit 0 ;;
                 failure|error) echo "[df-run] coder reported failure."; exit 1 ;;
               esac
             else
@@ -342,6 +310,10 @@ spec:
           - name: pr-number
             valueFrom:
               path: /tmp/pr
+              default: ""
+          - name: head-sha
+            valueFrom:
+              path: /tmp/sha
               default: ""
 
 {{- if .Values.holdout.enabled }}
@@ -412,9 +384,21 @@ spec:
           git clone --quiet --branch "${BRANCH}" \
             "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "${WORK}/repo"
           cd "${WORK}/repo"
-          # Diff vs base for the judge (fetch base if the shallow clone lacks it).
-          git fetch --quiet --depth 1 origin "${BASE}" || true
-          git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || git diff HEAD~1 > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch
+          # Diff vs base — use the GitHub COMPARE API (authoritative changed-file
+          # patch), NOT a local git diff. A branch clone shares no reliable merge-base
+          # with a shallow base fetch, so `origin/BASE...HEAD` yields the WHOLE file as
+          # "added" (observed: a sum-only PR's diff contained every pre-existing
+          # function → every scenario's appliesWhen matched → wrong scenarios graded →
+          # false holdout failure). The compare API returns only the real per-file
+          # patch hunks, so appliesWhen keys on the ACTUAL change. (Same fix as
+          # detect-deployable.) Concatenate every file's patch into /tmp/diff.patch.
+          PR_NUM="{{`{{inputs.parameters.pr-number}}`}}"
+          curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${API}/pulls/${PR_NUM}/files?per_page=100" 2>/dev/null \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); files=d if isinstance(d,list) else []; open("/tmp/diff.patch","w").write("\n".join("diff --git a/%s b/%s\n%s"%(f.get("filename",""),f.get("filename",""),f.get("patch","")) for f in files))' 2>/dev/null || echo "" > /tmp/diff.patch
+          # Fallback: if the API path produced nothing, fall back to a local diff.
+          [ -s /tmp/diff.patch ] || { git fetch --quiet --depth 1 origin "${BASE}" 2>/dev/null || true; git diff "origin/${BASE}...HEAD" > /tmp/diff.patch 2>/dev/null || echo "" > /tmp/diff.patch; }
+          echo "[holdout] diff.patch $(wc -l < /tmp/diff.patch) lines (via compare API)"
           # Build/install so executable tests can require the module.
           if [ -f package.json ]; then npm install --no-audit --no-fund >/dev/null 2>&1 || true; fi
           SHA="$(git rev-parse HEAD)"
@@ -579,28 +563,12 @@ spec:
           echo "$CLEARED" > /tmp/cleared
           echo "[devops-gate] cleared=${CLEARED}"
 
-          # Post a sticky PR comment mirroring the DevOps Agent verdict, so EVERY
-          # step reports on the PR as a comment (not just a status). On a clean
-          # change the DevOps Agent posts only a status + a link to its console
-          # report; this surfaces it inline. Read the real verdict/desc/url from the
-          # commit status (context matches CHECK_CONTEXT).
-          SHA="$(GH_TOKEN="$GH_TOKEN" REPO="$REPO" BRANCH="$BRANCH" node -e 'const https=require("https");https.get({host:"api.github.com",path:"/repos/"+process.env.REPO+"/pulls?head="+process.env.REPO.split("/")[0]+":"+process.env.BRANCH+"&state=open",headers:{"User-Agent":"df","Authorization":"Bearer "+process.env.GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{console.log(JSON.parse(b)[0].head.sha)}catch(e){}})}).on("error",()=>{})' 2>/dev/null || echo "")"
-          if [ -n "$SHA" ]; then
-            GH_TOKEN="$GH_TOKEN" REPO="$REPO" SHA="$SHA" CHECK_CONTEXT="$CHECK_CONTEXT" CLEARED="$CLEARED" node -e '
-              const https=require("https");const {GH_TOKEN,REPO,SHA,CHECK_CONTEXT,CLEARED}=process.env;
-              const re=new RegExp(CHECK_CONTEXT,"i");
-              const g=(p)=>new Promise(res=>{https.get({host:"api.github.com",path:p,headers:{"User-Agent":"df","Authorization":"Bearer "+GH_TOKEN,"Accept":"application/vnd.github+json"}},r=>{let b="";r.on("data",c=>b+=c);r.on("end",()=>{try{res(JSON.parse(b))}catch(e){res(null)}})}).on("error",()=>res(null))});
-              (async()=>{
-                const st=await g("/repos/"+REPO+"/commits/"+SHA+"/status");
-                const s=((st&&st.statuses)||[]).find(x=>re.test(x.context));
-                const icon=CLEARED==="true"?"✅":"⛔";
-                let md;
-                if(s){md="### "+icon+" 🛠️ AWS DevOps Agent — Release Readiness review\n\n**"+(s.description||s.state)+"**"+(s.target_url?"\n\n[View full release-readiness report ↗]("+s.target_url+")":"")+"\n\n_Cross-repo dependency risks, standards compliance, access-control, verification testing._";}
-                else{md="### ⏳ 🛠️ AWS DevOps Agent — Release Readiness review\n\n_No DevOps Agent verdict was posted within the window._";}
-                require("fs").writeFileSync("/tmp/devops-comment.md",md);
-              })();' 2>/dev/null || true
-            [ -f /tmp/devops-comment.md ] && GH_TOKEN="$GH_TOKEN" REPO="$REPO" PR="$PR" node /scripts/comment.js "dark-factory:devops-agent" < /tmp/devops-comment.md || true
-          fi
+          # NOTE: the DevOps verdict is NO LONGER relayed as its own PR comment.
+          # To avoid mixed/duplicate signals, the pipeline posts a SINGLE
+          # consolidated review (status.js → dark-factory:verdict-review) that
+          # mirrors the source-of-truth checks (Build/Holdout/Security/DevOps).
+          # The DevOps Agent's own commit status + the App bot's review remain
+          # the authoritative DevOps signal; `cleared` still gates the flow below.
       outputs:
         parameters:
           - name: cleared
@@ -611,12 +579,14 @@ spec:
     # ---- 2d. security-agent (P3, step 2) — REAL AWS Security Agent, headless ----
     # Runs SECOND, only after DevOps cleared (label present). A trusted hub-side
     # step that clones df/issue-N read-only, stages {source archive, unified diff}
-    # in S3, and calls the genuine AWS Security Agent API (create-code-review →
-    # start-code-review-job → list-findings) via the workflow's IRSA role — NO
-    # GitHub App, NO OAuth. Narrow/strict: OWASP Top 10, secrets, IAM misuse,
-    # dependency risk. Posts dark-factory/security + a PR comment. Advisory unless
-    # securityAgent.blockLevel is raised and a finding meets it. All logic in
-    # scripts/security-agent.sh (ConfigMap file — avoids YAML block-scalar hazards).
+    # SINGLE SECURITY SIGNAL = THE REAL AWS SECURITY AGENT BOT.
+    # We do NOT run a second headless scan (that redundant path disagreed with the
+    # bot — reported "no findings" while aws-security-agent[bot] flagged real issues
+    # — and produced a false LGTM). Instead this step WAITS for the GitHub App bot's
+    # own review on the PR and MIRRORS its verdict into the dark-factory/security
+    # commit status (findings -> failure -> merge blocked; clean -> success). Because
+    # the consolidated `status` step depends on this step, the pipeline now naturally
+    # waits for the real bot before posting its verdict. Node-only → runs on reviewImage.
     - name: security-agent
       activeDeadlineSeconds: {{ add .Values.securityAgent.pollTimeoutSeconds 300 }}
       volumes:
@@ -624,12 +594,8 @@ spec:
           configMap:
             name: df-review
       script:
-        # Runs on the glibc aws-cli v2 image — the ONLY place with the brand-new
-        # `securityagent` verbs (Alpine/musl aws-cli 2.32 lacks them; verified
-        # in-cluster). security-agent.sh is node-free (python3 + curl + git + aws),
-        # so this minimal image needs only git added at start.
-        image: {{ .Values.securityAgent.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
-        command: [bash]
+        image: {{ .Values.reviewImage }}
+        command: [node]
         env:
           - name: GH_TOKEN
             valueFrom:
@@ -640,44 +606,19 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
-          - name: BASE
-            value: "{{`{{workflow.parameters.base-branch}}`}}"
-          - name: WF_NAME
-            value: "{{`{{workflow.name}}`}}"
-          # Agent-space + service-role + bucket + region come from the Secret the
-          # PreSync bootstrap Job wrote (find-or-create'd the space once).
-          - name: AGENT_SPACE_ID
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: agentSpaceId
-          - name: SERVICE_ROLE_ARN
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: serviceRoleArn
-          - name: DIFF_BUCKET
-            valueFrom:
-              secretKeyRef:
-                name: {{ .Values.securityAgent.secretName }}
-                key: diffBucket
-          - name: AWS_REGION
-            value: {{ .Values.securityAgent.region | quote }}
+          # Findings at/above this severity fail the status (block the merge). The bot
+          # doesn't expose per-severity counts uniformly, so ANY finding fails unless
+          # BLOCK_LEVEL=none (then findings are advisory). Default medium.
           - name: BLOCK_LEVEL
             value: {{ .Values.securityAgent.blockLevel | quote }}
           - name: POLL_TIMEOUT
             value: {{ .Values.securityAgent.pollTimeoutSeconds | quote }}
         volumeMounts:
           - name: review-script
-            mountPath: /scripts/security-agent.sh
-            subPath: security-agent.sh
+            mountPath: /scripts/security-wait.js
+            subPath: security-wait.js
         source: |
-          set -eu
-          # amazon/aws-cli (glibc) has current aws-cli v2 + python3 + curl; add git.
-          command -v git >/dev/null 2>&1 || { echo "[security-agent] installing git..."; (dnf install -y -q git >/dev/null 2>&1 || yum install -y -q git >/dev/null 2>&1 || microdnf install -y git >/dev/null 2>&1); }
-          command -v zip >/dev/null 2>&1 || { dnf install -y -q zip >/dev/null 2>&1 || yum install -y -q zip >/dev/null 2>&1 || microdnf install -y zip >/dev/null 2>&1 || true; }
-          aws securityagent help >/dev/null 2>&1 || { echo "[security-agent] ERROR: aws-cli lacks securityagent (needs v2 >=2.35 glibc)"; exit 1; }
-          bash /scripts/security-agent.sh
+          require("/scripts/security-wait.js");
 {{- end }}
 
 {{- if .Values.deployTest.enabled }}
@@ -816,6 +757,21 @@ spec:
             value: "{{`{{workflow.parameters.repo}}`}}"
           - name: BRANCH
             value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}"
+          # For the AUTO-FIX loop (status.js): on a ❌ verdict from the real agents,
+          # collect their findings and submit a bounded df-run revision (iterate-note
+          # = the findings) so the coder auto-revises — no human paraphrasing needed.
+          - name: ISSUE_NUMBER
+            value: "{{`{{workflow.parameters.issue-number}}`}}"
+          - name: BASE_BRANCH
+            value: "{{`{{workflow.parameters.base-branch}}`}}"
+          - name: TRIGGER_LABEL
+            value: "{{`{{workflow.parameters.trigger-label}}`}}"
+          - name: ARGO_NAMESPACE
+            value: {{ .Values.argo.namespace | quote }}
+          - name: AUTO_FIX_FINDINGS
+            value: {{ .Values.review.autoFixFindings | default false | quote }}
+          - name: MAX_ITERATIONS
+            value: {{ .Values.iterate.maxIterations | default 3 | quote }}
 {{- if .Values.devopsAgent.enabled }}
           # Real AWS DevOps Agent posts a check-run (not a commit status) named this;
           # status.js renders the DevOps row from the check-run when present.
@@ -829,6 +785,20 @@ spec:
           - name: SECURITY_CHECK
             value: {{ .Values.securityAgent.app.checkRunName | quote }}
 {{- end }}
+{{- if .Values.postVerdictReview }}
+          # Post ONE consolidated verdict review (Security + DevOps results) on the
+          # PR so both agents' verdicts are ALWAYS visible in the Reviews section —
+          # the agent Apps review autonomously + inconsistently and cannot be added
+          # via the requested_reviewers API (verified no-op). status.js posts it once,
+          # when verification is terminal (idempotent via a hidden marker).
+          - name: POST_VERDICT_REVIEW
+            value: "true"
+{{- end }}
+          # Holdout is a train/test QUALITY signal, advisory by default — it does NOT
+          # gate the merge verdict unless holdout.blocking=true. status.js reads this
+          # to decide whether a red holdout flips the consolidated verdict.
+          - name: HOLDOUT_BLOCKING
+            value: {{ .Values.holdout.blocking | quote }}
         volumeMounts:
           - name: review-script
             mountPath: /scripts/status.js
@@ -839,24 +809,13 @@ spec:
           node /scripts/status.js
 
     # ---- onExit: release the claim (operator refills the pool) ----
-    # SUBSTRATE-AWARE teardown (onExit). Kata: delete the claim now — df-run is done,
-    # the pod's work is over, free the warm pool. LAMBDA (Flow D): do NOT delete — the
-    # coder VM was SUSPENDED (microvm-suspend step) and must PERSIST across the whole
-    # review→fix→re-review loop so df-iterate can RESUME the SAME VM (keeps context).
-    # The claim + suspended VM are terminated only at the END (df-merge-teardown on
-    # merge). So on the lambda substrate this onExit is a deliberate no-op.
     - name: teardown
-      script:
-        image: {{ .Values.stepImage }}
-        command: [sh]
-        source: |
-          set -eu
-          LABEL="{{`{{workflow.parameters.trigger-label}}`}}"
-          NS="{{ .Values.warmPool.namespace }}"
-          CLAIM="df-issue-{{`{{workflow.parameters.issue-id}}`}}"
-          if [ "$LABEL" = "darkfactory-lambda" ]; then
-            echo "[teardown] lambda substrate — KEEPING claim/${CLAIM} (VM stays SUSPENDED until merge; df-iterate resumes it)."
-            exit 0
-          fi
-          echo "[teardown] kata substrate — deleting SandboxClaim/${CLAIM} (frees the warm pool)."
-          kubectl delete sandboxclaim "${CLAIM}" -n "${NS}" --ignore-not-found --wait=false || true
+      resource:
+        action: delete
+        flags: ["--ignore-not-found"]
+        manifest: |
+          apiVersion: extensions.agents.x-k8s.io/v1beta1
+          kind: SandboxClaim
+          metadata:
+            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
+            namespace: {{ .Values.warmPool.namespace }}
