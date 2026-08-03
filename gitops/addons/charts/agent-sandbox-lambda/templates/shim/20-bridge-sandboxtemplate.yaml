@@ -37,6 +37,47 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 ---
+{{- /*
+  Bridge API-server egress.
+
+  The bridge pod carries agent-sandbox.io/role=coder (so Flow B's claim contract +
+  the shared coder-sandbox-egress policy apply to it). But that policy denies RFC-1918
+  + the service CIDR on :443 to isolate UNTRUSTED coder code from the control plane —
+  and the K8s API server lives exactly there (kubernetes svc 172.20.0.1 + apiserver
+  endpoints in the VPC 10.0.0.0/8). NetworkPolicies are additive, so this ADDS an
+  egress allow for the API server, selected ONLY on the bridge's distinct
+  agent-sandbox.io/substrate=lambda-microvm label (Kata coders don't have it, so their
+  isolation is untouched). The bridge runs TRUSTED platform code (reads the MicrovmSandbox
+  image handoff + annotates the owning Sandbox with the microvmID) — unlike the Kata coder
+  it MUST reach the API server, or `kubectl get microvmsandbox` hangs and it never
+  RunMicrovm's (verified: in-pod kubectl to 172.20.0.1:443 timed out under coder-egress).
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: microvm-bridge-apiserver-egress
+  namespace: {{ include "agent-sandbox.namespace" . }}
+  labels:
+    {{- include "agent-sandbox.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      agent-sandbox.io/substrate: lambda-microvm
+  policyTypes:
+    - Egress
+  egress:
+    # K8s API server — service ClusterIP + the in-VPC apiserver endpoints, :443 only.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.microvm.apiServerCidr | default "172.20.0.1/32" | quote }}
+        {{- range .Values.microvm.apiServerEndpointCidrs | default (list "10.0.0.0/16") }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

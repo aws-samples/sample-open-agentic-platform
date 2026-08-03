@@ -35,6 +35,16 @@ microvm:
   # AND the AWS CLI (RunMicrovm/suspend/resume/terminate). alpine/k8s bundles both.
   bridgeImage: alpine/k8s:1.31.0
 
+  # K8s API-server egress for the bridge (microvm-bridge-apiserver-egress NetworkPolicy).
+  # The bridge needs :443 to the API server to read the MicrovmSandbox handoff + annotate
+  # the Sandbox, but the shared coder-egress policy denies the service+VPC CIDRs. These
+  # scope the additive allow to the API server only. apiServerCidr = the `kubernetes`
+  # service ClusterIP /32; apiServerEndpointCidrs = the VPC range holding the apiserver
+  # endpoint IPs. Override per cluster (kubectl get svc kubernetes; get endpoints kubernetes).
+  apiServerCidr: "172.20.0.1/32"
+  apiServerEndpointCidrs:
+    - "10.0.0.0/16"
+
   # AWS account id — used to construct the controller role ARN for the ACK
   # PodIdentityAssociation (which takes an ARN, not a role-ref). Overlay per cluster.
   accountId: ""
