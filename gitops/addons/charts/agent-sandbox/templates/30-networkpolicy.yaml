@@ -41,6 +41,24 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    # DNS to the PUBLIC resolvers the Kata guest VM actually uses (pod
+    # dnsConfig.nameservers). The in-cluster :53 rule above can't cover these —
+    # they're external IPs — and Auto Mode has no kube-dns Service, so without
+    # this the coder can't resolve ANY name (crashes EAI_AGAIN api.github.com even
+    # though :443 egress works). Scoped to the resolver /32s (from values), so this
+    # opens :53 to nothing but the DNS servers themselves.
+    {{- if .Values.networkPolicy.dnsResolvers }}
+    - to:
+        {{- range .Values.networkPolicy.dnsResolvers }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
     # Bifrost LLM gateway (in-cluster) — the ONLY control-plane-side service the
     # coder may reach, and only on :8080.
     - to:
