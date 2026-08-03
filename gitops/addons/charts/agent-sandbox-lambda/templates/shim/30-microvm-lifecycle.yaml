@@ -73,6 +73,15 @@ data:
     # Reconcile Sandbox.operatingMode -> Lambda MicroVM suspend/resume.
     # Idempotent: we stamp the last-acted mode on an annotation and only act on change.
     set -eu
+    # bridgeImage is aws-cli v2 (has lambda-microvms; alpine/k8s's aws-cli 1.34 does not)
+    # but has no kubectl — fetch a static one (same as bridge.sh / security-agent).
+    if ! command -v kubectl >/dev/null 2>&1; then
+      echo "[microvm-lifecycle] fetching kubectl..."
+      ARCH="$(uname -m)"; case "$ARCH" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
+      KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+      curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/${A}/kubectl" -o /tmp/kubectl
+      chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+    fi
     NS="{{ include "agent-sandbox.namespace" . }}"
     REGION="{{ .Values.microvm.region }}"
     APIGROUP="{{ .Values.microvm.apiGroup | default "kro.run" }}"

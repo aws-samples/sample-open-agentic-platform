@@ -130,6 +130,18 @@ data:
     # mirror lifecycle. Idles until a SandboxClaim injects DF_ISSUE_NUMBER (Flow B),
     # exactly like the Kata coder. Needs AWS creds (Pod Identity) for the SDK calls.
     set -eu
+    # The bridge image is public.ecr.aws/aws-cli/aws-cli:latest — a glibc, always-current
+    # aws-cli v2 that KNOWS the pre-GA `lambda-microvms` service (the alpine/k8s image's
+    # aws-cli 1.34 does NOT: `aws lambda-microvms` printed the service list = unrecognized,
+    # so RunMicrovm never fired). That image has no kubectl, so fetch a static one here
+    # (same pattern as the security-agent bootstrap). Both are then on PATH.
+    if ! command -v kubectl >/dev/null 2>&1; then
+      echo "[microvm-bridge] fetching kubectl..."
+      ARCH="$(uname -m)"; case "$ARCH" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
+      KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+      curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/${A}/kubectl" -o /tmp/kubectl
+      chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+    fi
     REGION="{{ .Values.microvm.region }}"
     PLATFORM_IMAGE="{{ .Values.microvm.image.name | default "coder" }}"   # the ONE committed MicrovmSandbox (template 50)
     NS="{{ include "agent-sandbox.namespace" . }}"
