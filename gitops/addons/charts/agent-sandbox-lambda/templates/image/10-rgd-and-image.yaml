@@ -36,6 +36,11 @@ metadata:
   name: microvm-sandbox
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
+  annotations:
+    # Apply the RGD FIRST so KRO generates the MicrovmSandbox CRD before the instance
+    # (below) is synced — otherwise the instance fails dry-run ("CRD not found") and
+    # blocks the whole app.
+    argocd.argoproj.io/sync-wave: "-1"
 spec:
   schema:
     apiVersion: v1alpha1
@@ -168,6 +173,12 @@ metadata:
   namespace: {{ include "agent-sandbox.namespace" . }}
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
+  annotations:
+    # Sync AFTER the RGD (wave -1) so its generated CRD exists. SkipDryRunOnMissingResource
+    # lets the first sync proceed even if KRO hasn't registered the CRD in the same pass —
+    # ArgoCD retries + selfHeal converge once the CRD appears (no whole-app block).
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   name: {{ .Values.microvm.image.name | default "coder" }}
   region: {{ .Values.microvm.region | quote }}
