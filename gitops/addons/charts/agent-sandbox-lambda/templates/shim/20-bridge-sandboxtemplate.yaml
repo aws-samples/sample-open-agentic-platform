@@ -192,18 +192,10 @@ data:
     GH_TOKEN="$(cat /etc/df/gh-token 2>/dev/null || echo "")"
     [ -z "${GH_TOKEN}" ] && echo "[microvm-bridge] WARN: no gh-token mounted — coder cannot open a PR"
     # Build the JSON payload with python3 (present in the aws-cli image; node is NOT).
-    # json.dumps handles escaping of the token + any quotes in the title safely.
-    PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c '
-import json, os
-print(json.dumps({
-  "ghToken": os.environ.get("GH",""),
-  "region": os.environ.get("REGION","us-west-2"),
-  "issueNumber": os.environ.get("DF_ISSUE_NUMBER",""),
-  "repo": os.environ.get("DF_REPO",""),
-  "branch": os.environ.get("DF_BRANCH",""),
-  "baseBranch": os.environ.get("DF_BASE_BRANCH","main"),
-  "issueTitle": os.environ.get("DF_ISSUE_TITLE",""),
-}))')
+    # ONE line on purpose: a multi-line python body at column 0 would break out of the
+    # `bridge.sh: |` YAML block scalar (all lines must stay indented). json.dumps escapes
+    # the token + any quotes in the title. Reads DF_*/GH/REGION from the environment.
+    PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE","")}))')
 
     # 3) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image,
     #    handing it the payload. idlePolicy enables auto-suspend/resume; explicit
