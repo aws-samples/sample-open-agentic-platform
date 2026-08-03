@@ -263,15 +263,16 @@ iterate:
 # Drives Sandbox.spec.operatingMode; the agent-sandbox microvm-lifecycle controller
 # translates that to suspend-microvm / resume-microvm.
 #
-# DEFAULT false: this is Flow D (Lambda MicroVM) ONLY. When enabled it adds a
-# microvm-suspend task to the df-run DAG; on a Kata (Flow B) run that task is
-# runtime-skipped, but it STILL renders into the graph — an irrelevant, confusing
-# node in a pipeline that has no MicroVM. Keep it OFF unless a cluster actually runs
-# the Lambda substrate, so the Kata pipeline graph contains only Kata-relevant steps.
-# Flip to true (per-cluster overlay) on a cluster wired for darkfactory-lambda.
+# ENABLE on clusters that run the Lambda substrate (Flow D). It adds a microvm-suspend
+# task to the df-run DAG that, on a darkfactory-lambda run, sets Sandbox.operatingMode=
+# Suspended after the coder pushes (the microvm-lifecycle controller then calls
+# suspend-microvm). On a Kata (Flow B) run the step is when-gated and skips cleanly
+# (quoted operands — a clean Skipped node, NOT the earlier Error). On a Kata-ONLY cluster
+# set this false so the DAG has zero MicroVM steps. This hub runs BOTH substrates, so
+# it's on: Flow D needs it, and the Kata skip is harmless.
 microvmSuspend:
-  enabled: false
-  image: alpine/k8s:1.31.0   # needs kubectl
+  enabled: true
+  image: alpine/k8s:1.31.0   # only patches Sandbox.operatingMode via kubectl (no aws-cli)
 
 # ── Language / stack support ─────────────────────────────────────────────────
 # There is NO per-language profile config here — deliberately. Language support is
