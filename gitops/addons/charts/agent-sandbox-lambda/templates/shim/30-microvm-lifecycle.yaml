@@ -75,7 +75,7 @@ data:
     set -eu
     NS="{{ include "agent-sandbox.namespace" . }}"
     REGION="{{ .Values.microvm.region }}"
-    APIGROUP="{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}"
+    APIGROUP="{{ .Values.microvm.apiGroup | default "kro.run" }}"
     ANN="microvm-lifecycle.agents.x-k8s.io/last-mode"
     INTERVAL="{{ .Values.microvm.lifecycle.intervalSeconds | default 15 }}"
     echo "[microvm-lifecycle] reconciling every ${INTERVAL}s (ns=${NS} region=${REGION})"

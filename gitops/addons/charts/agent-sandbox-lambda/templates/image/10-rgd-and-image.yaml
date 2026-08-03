@@ -45,7 +45,7 @@ spec:
   schema:
     apiVersion: v1alpha1
     kind: MicrovmSandbox
-    group: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}
+    group: {{ .Values.microvm.apiGroup | default "kro.run" | quote }}
     # SCOPE: this RGD builds ONLY the platform IMAGE + the slow-changing infra it
     # needs (S3 artifact bucket, build role, execution role). It deliberately does
     # NOT create a `Microvm` — a MicroVM instance is a per-SESSION, request-time
@@ -166,7 +166,7 @@ spec:
 # here in the chart, not in the per-claim shim. The shim reads THIS object's status
 # (imageARN + executionRoleARN) to RunMicrovm per session. Rebuild the image by
 # bumping microvm.codeArtifactUri (a new artifact) and re-syncing.
-apiVersion: {{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" }}/v1alpha1
+apiVersion: {{ .Values.microvm.apiGroup | default "kro.run" }}/v1alpha1
 kind: MicrovmSandbox
 metadata:
   name: {{ .Values.microvm.image.name | default "coder" }}

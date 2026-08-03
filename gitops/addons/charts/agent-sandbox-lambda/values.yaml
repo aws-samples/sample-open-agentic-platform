@@ -24,7 +24,13 @@ microvm:
   enabled: false
   region: us-west-2
   # API group the generated MicrovmSandbox CRD is served under (KRO schema.group).
-  apiGroup: sandbox.agents.x-k8s.io
+  # MUST be "kro.run": EKS Managed KRO's controller only watches the kro.run group —
+  # an RGD whose schema.group is anything else (even a *.kro.run subdomain) never leaves
+  # state=Inactive ("cache sync timeout ... Resource=microvmsandboxes"), because the
+  # capability's controller identity (hub-KROCapabilityRole via AmazonEKSKROPolicy) has
+  # no list/watch on other groups. The generated CRD is microvmsandboxes.kro.run; the
+  # kind (MicrovmSandbox) is unchanged. Verified by group-probe on the hub 2026-08-03.
+  apiGroup: kro.run
   # Bridge/lifecycle pod image: needs kubectl (read platform image, patch Sandbox)
   # AND the AWS CLI (RunMicrovm/suspend/resume/terminate). alpine/k8s bundles both.
   bridgeImage: alpine/k8s:1.31.0
@@ -42,6 +48,21 @@ microvm:
     clusterName: hub
     controllerNamespace: ack-system
     controllerServiceAccount: ack-lambdamicrovms-controller
+
+  # EKS Managed KRO runs its controller as the cluster's KRO capability role. On this
+  # cluster its k8s identity is the EKS access-entry username
+  #   arn:aws:sts::<accountId>:assumed-role/<clusterName>-KROCapabilityRole/KRO
+  # (session name "KRO"). AmazonEKSKROPolicy grants KRO its own kro.run perms but NOT
+  # CRUD on the ACK children the MicrovmSandbox RGD graph creates (s3 buckets, iam
+  # roles, lambdamicrovms images/instances) — so KRO's instance reconcile hits
+  # "forbidden: ... cannot get resource buckets". templates/shim/40-kro-graph-rbac.yaml
+  # grants exactly those child kinds to this identity. Override roleName/sessionName if
+  # your cluster's capability wiring differs (confirm via
+  #   aws eks describe-access-entry --principal-arn .../KROCapabilityRole).
+  kroCapability:
+    enabled: true
+    roleName: ""          # defaults to "<podIdentity.clusterName>-KROCapabilityRole"
+    sessionName: KRO
 
   # The ONE platform image built by KRO/ACK (10-rgd-microvm-image.yaml). Built ONCE
   # per cluster; the shim reads its status (imageARN + executionRoleARN) to RunMicrovm

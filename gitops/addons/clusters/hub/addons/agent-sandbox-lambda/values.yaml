@@ -8,7 +8,8 @@
 microvm:
   enabled: true
   region: us-west-2
-  apiGroup: sandbox.agents.x-k8s.io
+  # MUST be kro.run — EKS Managed KRO only watches the kro.run group (see chart values.yaml).
+  apiGroup: kro.run
   bridgeImage: alpine/k8s:1.31.0
   # Hub account (for the ACK PodIdentityAssociation role ARN).
   accountId: "940019131157"

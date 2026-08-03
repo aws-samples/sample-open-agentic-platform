@@ -49,7 +49,7 @@ rules:
   # executionRoleARN). It does NOT create/delete it — that object is GitOps-owned
   # platform infra (template 50), built once. Per-session Run/Terminate is done via
   # the AWS SDK, not by mutating this CR.
-  - apiGroups: [{{ .Values.microvm.apiGroup | default "sandbox.agents.x-k8s.io" | quote }}]
+  - apiGroups: [{{ .Values.microvm.apiGroup | default "kro.run" | quote }}]
     resources: ["microvmsandboxes"]
     verbs: ["get", "list", "watch"]
   # Read the owning Sandbox (suspend-vs-teardown in preStop) + patch it to record the
