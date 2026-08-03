@@ -9,6 +9,13 @@ namespace: agent-sandbox-system
 # Argo Workflows install (already on the hub in the `argo` namespace).
 argo:
   namespace: argo
+  # How long a COMPLETED workflow (success or failure) is retained before Argo's
+  # controller garbage-collects it. There is NO workflow archive/DB persistence on
+  # this cluster (workflow-controller-configmap has no `persistence:` block), so once
+  # TTL fires the run is gone for good — not archived. 7 days keeps demo/debug history
+  # visible in the Argo UI across a work week. Was 3600 (1h), which silently dropped
+  # runs an hour after they finished.
+  workflowTtlSecondsAfterCompletion: 604800
 
 warmPool:
   # The Flow A SandboxWarmPool the factory claims from (Kata substrate, default).

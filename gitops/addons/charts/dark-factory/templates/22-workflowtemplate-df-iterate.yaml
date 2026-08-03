@@ -35,7 +35,7 @@ spec:
       - name: comment-author
         value: ""
   ttlStrategy:
-    secondsAfterCompletion: 3600
+    secondsAfterCompletion: {{ .Values.argo.workflowTtlSecondsAfterCompletion | default 604800 }}
   templates:
     - name: main
       dag:

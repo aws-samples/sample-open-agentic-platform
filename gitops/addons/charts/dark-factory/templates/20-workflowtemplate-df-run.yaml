@@ -62,7 +62,7 @@ spec:
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
-    secondsAfterCompletion: 3600
+    secondsAfterCompletion: {{ .Values.argo.workflowTtlSecondsAfterCompletion | default 604800 }}
 {{- if .Values.metrics.enabled }}
   # Success metrics (Argo-native Prometheus). Argo exposes these on the workflow
   # controller's :9090/metrics — scraped into the platform Prometheus. Gives the
