@@ -116,6 +116,43 @@ teardown: suspend/resume/terminate hooks best-effort flush; bridge TerminateMicr
   own (a second sandbox substrate). Running the coder in it is the "make it actually code" step
   — worth confirming it's in scope before the re-architecture.
 
+## 2026-08-03 build attempt — where it got to + the confirmed blocker
+
+Built and deployed the Bedrock-direct async design end-to-end. Live results:
+
+- ✅ **lambda-coder artifact + image**: `examples/dark-factory/coder-microvm/` (hook-server.js
+  + Dockerfile FROM the arm64 coder + the USE_BEDROCK entrypoint branch). MicrovmImage rebuilt
+  to **UPDATED** with `hooks` enabled; exec role has `bedrock:InvokeModel*`. Verified the
+  hook-server runs in the VM — CloudWatch shows `[hook-server] listening on :8080 (lambda-coder,
+  Bedrock-direct)`.
+- ✅ **Bridge payload**: builds JSON (issue ctx + GitHub token + region) with python3 (node is
+  absent in the aws-cli image) and passes `--run-hook-payload` on `run-microvm`. VM launches
+  RUNNING with the payload; no bridge crash.
+- ❌ **BLOCKER: the `/run` hook never fires** → the coder never starts in the VM → no PR.
+  CloudWatch shows the server `listening` but never logs the `/run` handling / background-spawn.
+
+**Confirmed root cause:** `runHookPayload` is a **`SecretKeyReference`, "not a literal"** — the
+docs + the 02-developer-handoff example deliver it via the **declarative `Microvm` CR**
+(`runHookPayload: {name, key}` → the self-managed controller reads the Secret and drives the
+`/run` hook). The imperative `run-microvm --run-hook-payload "<string>"` CLI path the bridge uses
+does **not** invoke `/run` (VM reaches RUNNING but the hook is silent). Two things also worth
+noting from the reference: (a) the intended session model is the CLIENT minting an auth token and
+sending an HTTP request to the VM endpoint with `X-aws-proxy-auth` (request/response), and (b) the
+`/run` hook is service-internal on VM start.
+
+**Correct path (next):** make the per-session VM a **`Microvm` CR** (declarative), not a bridge
+CLI call:
+- bridge (or a per-session step) writes a **Secret** with the payload key, then creates a
+  `Microvm` CR referencing it (`imageIdentifierRef`, `executionRoleRef`, `runHookPayload:{name,key}`,
+  `idlePolicy`), and reads back `status.microvmID` for the lifecycle annotation.
+- the self-managed lambdamicrovms controller reconciles it and delivers the payload to `/run`,
+  which background-spawns the coder.
+- teardown = delete the `Microvm` CR (controller terminates), replacing the imperative
+  TerminateMicrovm.
+This trades the imperative bridge for the declarative CR path the payload mechanism actually
+requires — and it's MORE GitOps-faithful. Est: bridge rewrite (CR create/delete instead of CLI)
++ a per-session Secret; the hook-server/artifact/image/IAM/Bedrock pieces are already done and verified.
+
 ## What exists today (so nothing is lost)
 
 - Substrate live: RGD Active, S3 bucket, build/exec roles, **MicrovmImage CREATED (v1.0)**,
