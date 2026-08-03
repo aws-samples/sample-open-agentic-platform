@@ -1,0 +1,127 @@
+# Flow D — Running the Coder *inside* the Lambda MicroVM (design)
+
+**Status:** design / spike — NOT implemented. Written after proving the Flow D **substrate**
+end-to-end and discovering that running the actual coder in the VM is an application
+re-architecture, not a wiring task.
+
+## TL;DR
+
+The Flow D **substrate + lifecycle is proven live**: a `darkfactory-lambda` GitHub issue →
+Argo sensor → `df-run` claims the Lambda warm pool → the bridge calls `RunMicrovm` → a real
+Lambda MicroVM reaches **RUNNING** in AWS → `suspend`/`resume`/`terminate` are wired → the VM
+is terminated on teardown (verified, zero orphans).
+
+What is **NOT** done: the coder does not actually *execute* inside that MicroVM, so no PR is
+produced. That is because the one-shot `dark-factory-coder` and the Lambda MicroVM
+snapshot/hook execution model are **fundamentally different execution shapes**. Closing the gap
+requires re-architecting the coder, plus VPC/Bifrost networking. This doc specifies that work
+so it can be decided deliberately.
+
+## Why it isn't just wiring — the execution-model mismatch
+
+| | Kata coder (Flow B, works today) | Lambda MicroVM model |
+| --- | --- | --- |
+| Shape | **one-shot batch process**: `node entrypoint.js` runs clone→agent→push→PR, then exits | **long-lived HTTP service** that is *snapshotted* at build, *resumed* per session |
+| Duration | 5–15 min per run | per-request; the `run` lifecycle hook has a **30s timeout** ("keep it short — on the critical path") |
+| Trigger | pod start + `DF_ISSUE_NUMBER` env injected by the SandboxClaim | build-time `ready`/`validate` hooks; per-instance `run` hook receives `runHookPayload` as the HTTP request body |
+| Secrets/context | files projected into the pod (`/etc/secrets/gh-token`, `bifrost-api-key`) + `DF_*` env | `runHookPayload` — a **Kubernetes `SecretKeyReference`** on the `Microvm` CR, delivered as the `/run` hook body (≤16 KB); image must set `hooks.microvmHooks.run: ENABLED` |
+| Network | in-cluster: reaches Bifrost by ClusterIP `172.20.181.17:8080`; git/gh over public :443 | runs **outside the cluster network**; only `INTERNET_EGRESS` by default; cannot reach a ClusterIP; VPC reach needs an egress **network connector** |
+
+The killer facts (verified against `mmeckes/lambdamicrovms-controller` docs + the live `aws
+lambda-microvms`/`lambda-core` CLIs, 2026-08-03):
+
+1. **`/run` hook = 30s timeout.** A 5–15 min coder run cannot happen *in* the hook.
+2. **The intended app model is request/response** (02-developer-handoff: RunMicrovm → mint
+   auth token → HTTP request → response → terminate) — not a batch job.
+3. **`runHookPayload` is delivered as an HTTP body to a `/run` endpoint the app must SERVE** —
+   NOT an env var and NOT a mounted file. (An earlier attempt at an env/file boot-shim was
+   wrong and is discarded.)
+4. So the coder must be **wrapped in a long-running HTTP server** that starts the coding work
+   asynchronously — the coder's current `entrypoint.js` is not written that way.
+
+## Proposed design (async `/run` pattern)
+
+Keep the coder *logic* (`entrypoint.js`) intact; change how it is *invoked*.
+
+```
+build:  MicrovmImage (FROM arm64 dark-factory-coder + a thin HTTP wrapper)
+        hooks.port: 8080
+        microvmImageHooks.ready:  server up → safe to snapshot
+        microvmHooks.run: ENABLED (30s), suspend/resume/terminate ENABLED
+
+run:    controller delivers runHookPayload (Secret {ghToken, bifrostKey, bifrostUrl(NLB),
+        issueNumber, repo, branch, baseBranch, title}) as the /run body
+        → wrapper writes /etc/secrets/{gh-token,bifrost-api-key} + exports DF_*/BIFROST_URL
+        → wrapper spawns `node entrypoint.js` in the BACKGROUND, returns 200 within 30s
+        → coder does clone→agent→push→PR async (many minutes)
+
+observe: df-run's existing `await-coder` step ALREADY polls GitHub for the PR head — reuse it
+        verbatim; it doesn't care whether the coder ran in Kata or a MicroVM.
+
+teardown: suspend/resume/terminate hooks best-effort flush; bridge TerminateMicrovm on exit.
+```
+
+### Components to build
+
+1. **HTTP wrapper + artifact** (`coder-microvm/`): a small server (`server.js`) exposing
+   `ready`, `run`, `suspend`, `resume`, `terminate` on :8080; `run` materializes the payload
+   into the coder's existing file/env contract and background-spawns `entrypoint.js`. Dockerfile
+   `FROM 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:<tag>-arm64`. Zip
+   (Dockerfile + server.js) → S3, per the controller's `ci/package-artifact.sh` format.
+   *(Supersedes the placeholder `microvm-entry.js` listener that only existed to get the image
+   to CREATED.)*
+
+2. **MicrovmImage: enable hooks** (RGD `templates/image/10-rgd-and-image.yaml`): add
+   `hooks.port: 8080`, `microvmImageHooks.ready: ENABLED`, `microvmHooks.run/suspend/resume/
+   terminate: ENABLED`. Without `run: ENABLED` the payload is silently never delivered.
+
+3. **VPC egress connector** (bootstrap Job — honest: *GitOps-provisioned, not continuously
+   reconciled*; no ACK/Crossplane API exists for `lambda-core` connectors). Committed
+   find-or-create Job modeled on `06-securityagent-bootstrap.yaml`:
+   `aws lambda-core get/create-network-connector` with
+   `VpcEgressConfiguration={SubnetIds:[hub subnets], SecurityGroupIds:[sg], NetworkProtocol:IPv4}`
+   → writes the connector ARN to a ConfigMap the MicrovmImage `egressNetworkConnectors` reads.
+   IAM: the bootstrap/capability role needs `lambda-core:*NetworkConnector*` + the EC2 ENI perms
+   Lambda uses to provision ENIs. **Caveat:** if the connector is deleted out-of-band, nothing
+   self-heals until the Job re-runs (not a controller).
+
+4. **Bifrost VPC-reachable** (internal NLB — this part *is* declarative): a `Service
+   type=LoadBalancer` with `service.beta.kubernetes.io/aws-load-balancer-internal: "true"` +
+   `nlb-target-type` in the bifrost chart, reconciled by the AWS Load Balancer Controller. The
+   MicroVM (via the egress connector) reaches Bifrost at the NLB's stable VPC address on :8080.
+   (Bifrost's pod IP `10.0.x.x` is in-VPC and reachable via the connector, but ephemeral — the
+   NLB gives a stable target. Its ClusterIP `172.20.x.x` is NOT routable from a VPC ENI.)
+   **Shared-infra change — needs owner sign-off.**
+
+5. **runHookPayload Secret + Microvm wiring**: the bridge (or a per-session step) writes a
+   Secret with the payload key and the `Microvm`/RunMicrovm references it as
+   `runHookPayload: {name, key}`. Since it's a SecretKeyReference the **controller** delivers it
+   — confirm whether the imperative `RunMicrovm` path the bridge uses accepts the same, or
+   whether this session should create a short-lived `Microvm` CR instead.
+
+6. **Security-group rules**: allow the connector ENIs → Bifrost NLB on :8080.
+
+## Open questions for review
+
+- **Async vs request-driven?** Background-spawn (df-run polls for the PR, minimal coder change)
+  vs. the reference's request/response model (bridge sends an HTTP "code this" request + waits;
+  needs the auth-token path). Background-spawn reuses `await-coder` and is less invasive.
+- **Imperative RunMicrovm vs a `Microvm` CR per session?** `runHookPayload` being a
+  SecretKeyReference is controller-delivered; the current bridge calls `aws run-microvm`
+  imperatively. Decide whether per-session VMs become short-lived `Microvm` CRs (declarative
+  payload delivery) or stay imperative (verify the CLI accepts an inline/secret payload).
+- **Cost:** the VPC egress connector provisions ENIs; the internal NLB is an hourly resource.
+  Both are ongoing while Flow D is enabled.
+- **Is in-VM coder even required for the goal?** The substrate is a valid deliverable on its
+  own (a second sandbox substrate). Running the coder in it is the "make it actually code" step
+  — worth confirming it's in scope before the re-architecture.
+
+## What exists today (so nothing is lost)
+
+- Substrate live: RGD Active, S3 bucket, build/exec roles, **MicrovmImage CREATED (v1.0)**,
+  bridge launches/terminates a real MicroVM from a `darkfactory-lambda` issue.
+- All the substrate + bridge fixes are committed on `flow-d-lambda-microvm-sandbox` (container
+  named `coder`, aws-cli v2 image, kubectl fetch, API-server + Pod Identity egress,
+  downward-API SANDBOX_NAME, microvmSuspend on, `darkfactory-lambda` label).
+- The **placeholder** code artifact (`microvm-entry.js` listener) is what's in S3 today — it
+  only proved the image builds; it must be replaced per §1 above.
