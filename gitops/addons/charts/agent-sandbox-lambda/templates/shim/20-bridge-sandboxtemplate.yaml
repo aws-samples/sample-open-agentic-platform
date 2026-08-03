@@ -77,6 +77,19 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    # EKS Pod Identity credential endpoint (link-local 169.254.170.23:80). The bridge
+    # gets its AWS creds — to call lambda-microvms run/suspend/resume/terminate — from
+    # the Pod Identity agent here. The shared coder-egress policy denies 169.254.0.0/16
+    # (to block IMDS for untrusted coder code), which ALSO blocks Pod Identity, so the
+    # bridge's run-microvm failed "retrieving credentials from container-role: connect
+    # timeout http://169.254.170.23/v1/credentials". Allow ONLY the Pod Identity /32 (NOT
+    # IMDS 169.254.169.254, which stays denied) and ONLY for the bridge selector.
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.microvm.podIdentityEndpoint | default "169.254.170.23/32" | quote }}
+      ports:
+        - protocol: TCP
+          port: 80
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
