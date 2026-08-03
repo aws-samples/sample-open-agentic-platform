@@ -261,9 +261,16 @@ iterate:
 # When the darkfactory-lambda label runs, suspend the MicroVM after the coder
 # pushes (freeing compute while gates run) and resume it on a df-iterate comment.
 # Drives Sandbox.spec.operatingMode; the agent-sandbox microvm-lifecycle controller
-# translates that to suspend-microvm / resume-microvm. No-op for the Kata substrate.
+# translates that to suspend-microvm / resume-microvm.
+#
+# DEFAULT false: this is Flow D (Lambda MicroVM) ONLY. When enabled it adds a
+# microvm-suspend task to the df-run DAG; on a Kata (Flow B) run that task is
+# runtime-skipped, but it STILL renders into the graph — an irrelevant, confusing
+# node in a pipeline that has no MicroVM. Keep it OFF unless a cluster actually runs
+# the Lambda substrate, so the Kata pipeline graph contains only Kata-relevant steps.
+# Flip to true (per-cluster overlay) on a cluster wired for darkfactory-lambda.
 microvmSuspend:
-  enabled: true
+  enabled: false
   image: alpine/k8s:1.31.0   # needs kubectl
 
 # ── Language / stack support ─────────────────────────────────────────────────
