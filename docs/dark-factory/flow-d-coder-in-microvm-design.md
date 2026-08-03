@@ -153,6 +153,30 @@ This trades the imperative bridge for the declarative CR path the payload mechan
 requires — and it's MORE GitOps-faithful. Est: bridge rewrite (CR create/delete instead of CLI)
 + a per-session Secret; the hook-server/artifact/image/IAM/Bedrock pieces are already done and verified.
 
+## 2026-08-03 (later) — declarative Microvm CR path: reconciles + VM runs, /run still silent
+
+Switched the bridge from the imperative `run-microvm` CLI to the **declarative `Microvm` CR**
+path (write payload Secret → create `Microvm` CR with `runHookPayload:{name,key}` → controller
+reconciles → delete CR on teardown). Verified working:
+- ✅ Bridge creates the Secret + `Microvm` CR (`mvm-<issue>`); RBAC for microvms+secrets added.
+- ✅ Controller reconciles it: CR `state=RUNNING`, `ACK.ResourceSynced=True`, `status.microvmID`
+  populated, annotated on the Sandbox. Deleting the CR cleanly terminates the VM (0 orphans).
+- ✅ MicrovmImage is v2.0, `UPDATED`, `hooks` present (run/ready/suspend/resume/terminate).
+- ❌ **STILL no `/run` output**: CloudWatch `/aws/lambda/microvms/coder-image` shows the build-time
+  `[hook-server] listening on :8080` but ZERO runtime events after the VM starts — the coder never
+  logs, no PR. The `/run` hook is not producing coder execution we can observe.
+
+**What's ruled out:** payload delivery mechanism (now declarative CR, the documented path), image
+hooks (present, v2.0 built), IAM (bedrock on exec role), bridge crash (restarts=0), YAML (renders
+clean). **What's NOT yet proven:** that the service actually invokes `/run` against the hook-server,
+and that hook-server's `/run` handler + background-spawn + Bedrock call execute. Can't see inside
+the VM beyond CloudWatch (which is empty at runtime) — needs either (a) the VM's runtime logs routed
+somewhere visible, (b) hitting the VM endpoint directly with an auth token (X-aws-proxy-auth) to
+probe the hook-server, or (c) the controller/service confirming the run-hook HTTP call + its response.
+This is the current debugging frontier — the substrate, image, CR path, and teardown all work; the
+open question is purely whether/how the `/run` hook reaches the in-VM hook-server and why it emits
+no logs.
+
 ## What exists today (so nothing is lost)
 
 - Substrate live: RGD Active, S3 bucket, build/exec roles, **MicrovmImage CREATED (v1.0)**,
