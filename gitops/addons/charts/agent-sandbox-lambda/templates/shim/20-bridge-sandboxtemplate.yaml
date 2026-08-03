@@ -194,7 +194,13 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: bridge
+        # Named `coder` (NOT `bridge`) on purpose: Flow B's SandboxClaim injects env
+        # (DF_ISSUE_NUMBER, DF_REPO, …) into a container called `coder` — the SAME claim
+        # contract as the Kata substrate. The operator REJECTS the claim
+        # ("target container coder not found") if this name differs, so the substrate
+        # must expose a `coder` container to stay transparent to df-run. This container
+        # is still the bridge (runs bridge.sh → RunMicrovm); only the name matches Kata.
+        - name: coder
           image: {{ .Values.microvm.bridgeImage }}
           command: ["/bin/sh", "/scripts/bridge.sh"]
           # Preflight suspend marker: if this pod is being deleted because the owning
