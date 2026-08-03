@@ -112,8 +112,10 @@ spec:
                 {"Effect":"Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"],"Resource":"arn:aws:logs:*:*:log-group:/aws/lambda/microvms/*"}
               ]}
     # 3) IAM role the RUNNING MicroVM assumes (GA — Managed ACK). App-owned exec identity.
-    #    Minimal by default (the coder reaches models via Bifrost, git/gh via public
-    #    egress — no AWS API needed); trust = lambda.amazonaws.com.
+    #    trust = lambda.amazonaws.com. Grants bedrock:InvokeModel so the coder calls
+    #    Bedrock DIRECTLY (Flow D is Bedrock-direct: a MicroVM runs outside the cluster
+    #    and can't reach Bifrost's ClusterIP, so it uses this role's creds over public
+    #    egress instead — see flow-d-coder-in-microvm-design.md). git/gh over public :443.
     - id: execRole
       template:
         apiVersion: iam.services.k8s.aws/v1alpha1
@@ -124,6 +126,11 @@ spec:
           name: ${schema.spec.name}-microvm-exec
           assumeRolePolicyDocument: |
             {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":["sts:AssumeRole","sts:TagSession"]}]}
+          inlinePolicies:
+            bedrock-invoke: |
+              {"Version":"2012-10-17","Statement":[
+                {"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream","bedrock:Converse","bedrock:ConverseStream"],"Resource":["arn:aws:bedrock:*::foundation-model/*","arn:aws:bedrock:*:*:inference-profile/*"]}
+              ]}
     # 4) MicrovmImage (pre-GA — SELF-MANAGED lambdamicrovms controller). Platform-owned.
     #    readyWhen gates the Microvm (resource 5) on a genuinely SUCCESSFUL build —
     #    state CREATED/UPDATED — so the instance never launches from a half-built or
@@ -147,6 +154,28 @@ spec:
           # is built for arm64 for exactly this substrate).
           cpuConfigurations:
             - architecture: ARM_64
+          # Lifecycle hooks — the lambda-coder (hook-server.js) serves these on :8080.
+          #   ready    : build waits for the server to be up before snapshotting a
+          #              clean, waiting coder (else the snapshot is taken too early).
+          #   run      : per-session start; delivers runHookPayload (issue context +
+          #              GitHub token) as the request body → hook-server background-
+          #              spawns the coder. WITHOUT run:ENABLED the payload is silently
+          #              never delivered.
+          #   suspend/resume/terminate : lifecycle acks (coder holds no external state).
+          hooks:
+            port: 8080
+            microvmImageHooks:
+              ready: ENABLED
+              readyTimeoutInSeconds: 120
+            microvmHooks:
+              run: ENABLED
+              runTimeoutInSeconds: 30
+              suspend: ENABLED
+              suspendTimeoutInSeconds: 30
+              resume: ENABLED
+              resumeTimeoutInSeconds: 30
+              terminate: ENABLED
+              terminateTimeoutInSeconds: 30
           # CloudWatch build/runtime logs. On a CREATE_FAILED the controller can't
           # see the build output — this is where it lands:
           #   aws logs tail /aws/lambda/microvms/${schema.spec.name}-image
