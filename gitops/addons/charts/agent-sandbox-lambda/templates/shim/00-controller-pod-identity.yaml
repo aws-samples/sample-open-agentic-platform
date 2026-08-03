@@ -55,12 +55,26 @@ spec:
             ],
             "Resource": "*"
           },
+          {{- /*
+            Scope PassRole by the TARGET role ARN (the build/exec roles KRO creates),
+            NOT by an iam:PassedToService condition. CreateMicrovmImage/RunMicrovm pass
+            the role to the Lambda MicroVM sub-service whose principal is NOT plain
+            lambda.amazonaws.com — a StringEquals on lambda.amazonaws.com fails closed,
+            so the controller got AccessDenied on iam:PassRole for coder-microvm-build
+            (verified: sim ALLOWED for lambda.amazonaws.com yet the live API DENIED, i.e.
+            the real passed-to principal differs; microvms/microvm.lambda.amazonaws.com
+            also implicitDeny). ARN-scoping to *-microvm-build/-exec is net-TIGHTER than
+            the previous Resource:* — only these two purpose-built roles can be passed —
+            and is principal-agnostic so it survives whatever sub-service MicroVM uses.
+          */ -}}
           {
             "Sid": "PassBuildExecRoles",
             "Effect": "Allow",
             "Action": "iam:PassRole",
-            "Resource": "*",
-            "Condition": {"StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}}
+            "Resource": [
+              "arn:aws:iam::{{ .Values.microvm.accountId }}:role/*-microvm-build",
+              "arn:aws:iam::{{ .Values.microvm.accountId }}:role/*-microvm-exec"
+            ]
           }
         ]
       }
