@@ -177,6 +177,32 @@ This is the current debugging frontier — the substrate, image, CR path, and te
 open question is purely whether/how the `/run` hook reaches the in-VM hook-server and why it emits
 no logs.
 
+## 2026-08-03 E2E run #106 — full chain works to /run; 2 pinpointed gaps
+
+Ran a clean GH-issue E2E and **probed the VM directly** (minted an auth token, hit the endpoint).
+Stage-by-stage: issue → label → workflow → bridge claim → Microvm CR (`mvm-106`) → VM RUNNING with
+endpoint — all ✅. Then the decisive probes against the live VM:
+- `GET https://<endpoint>/` (X-aws-proxy-auth) → `{"status":"ok","path":"/"}` → **hook-server is
+  ALIVE and reachable at runtime.**
+- `POST /run` → `{"status":"started"}` → **the /run handler works and background-spawns the coder.**
+
+So the entire chain — including the hook-server and its /run→coder-spawn — is functional. The two
+remaining gaps are now precisely isolated:
+
+1. **The service does not auto-invoke `/run` on launch.** After RunMicrovm/Microvm-CR reconcile, the
+   run hook is not called automatically — I had to POST /run manually to start the coder. Either the
+   run hook fires on a trigger we're not hitting, or the payload/hook wiring needs a specific field to
+   auto-fire. (auth-token minting: `create-microvm-auth-token --expiration-in-minutes N --allowed-ports
+   port=8080`; token is at `.authToken.X-aws-proxy-auth`.)
+2. **Runtime logs don't reach CloudWatch.** `logging.cloudWatch.logGroup` on the image captures BUILD
+   logs only; after the VM runs, `/aws/lambda/microvms/coder-image` has 0 runtime events even though the
+   hook-server clearly runs (proven by the probe). This blinded every prior run — need to wire runtime
+   stdout/stderr to CloudWatch (or read it another way) to observe the coder.
+
+Both are now concrete, small-surface problems (a hook-trigger config + a log-routing config), NOT
+architecture. The substrate, image+hooks, Bedrock exec role, declarative Microvm CR path, payload
+delivery, hook-server, /run→coder-spawn, and clean CR-delete teardown are all verified working.
+
 ## What exists today (so nothing is lost)
 
 - Substrate live: RGD Active, S3 bucket, build/exec roles, **MicrovmImage CREATED (v1.0)**,
