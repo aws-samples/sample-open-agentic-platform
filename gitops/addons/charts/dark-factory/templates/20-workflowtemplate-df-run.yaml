@@ -113,7 +113,11 @@ spec:
           - name: microvm-suspend
             template: microvm-set-mode
             dependencies: [drive-coder]
-            when: "{{`{{workflow.parameters.trigger-label}}`}} == darkfactory-lambda && {{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            # Quote BOTH operands: Argo substitutes the label value inline, so an
+            # unquoted `dark-factory == darkfactory-lambda` is parsed as arithmetic on
+            # bare identifiers and errors ("Failed to evaluate 'when' expression") —
+            # the step then shows phase=Error even though it's correctly Skipped on Kata.
+            when: "\"{{`{{workflow.parameters.trigger-label}}`}}\" == \"darkfactory-lambda\" && \"{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}}\" != \"\""
             arguments:
               parameters:
                 - name: sandbox
