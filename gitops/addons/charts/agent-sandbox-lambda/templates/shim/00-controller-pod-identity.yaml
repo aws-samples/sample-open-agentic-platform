@@ -51,9 +51,27 @@ spec:
               "lambda:GetMicrovmImage","lambda:GetMicrovmImageVersion","lambda:ListMicrovmImages",
               "lambda:RunMicrovm","lambda:GetMicrovm","lambda:TerminateMicrovm","lambda:ListMicrovms",
               "lambda:SuspendMicrovm","lambda:ResumeMicrovm",
-              "lambda:TagResource","lambda:UntagResource","lambda:ListTagsForResource"
+              "lambda:TagResource","lambda:UntagResource","lambda:ListTagsForResource",
+              "lambda:ListNetworkConnectors","lambda:GetNetworkConnector"
             ],
             "Resource": "*"
+          },
+          {{- /*
+            CreateMicrovmImage/RunMicrovm attach a network connector to the MicroVM.
+            With no explicit connectors in the RGD, the service uses the AWS-managed
+            default INTERNET_EGRESS connector, and passing it needs
+            lambda:PassNetworkConnector (verified: image build denied
+            'lambda:PassNetworkConnector on .../network-connector:aws-network-connector:
+            INTERNET_EGRESS'). Scope to the AWS-managed connector ARNs in-region.
+          */ -}}
+          {
+            "Sid": "PassNetworkConnectors",
+            "Effect": "Allow",
+            "Action": "lambda:PassNetworkConnector",
+            "Resource": [
+              "arn:aws:lambda:{{ .Values.microvm.region }}:aws:network-connector:*",
+              "arn:aws:lambda:{{ .Values.microvm.region }}:{{ .Values.microvm.accountId }}:network-connector:*"
+            ]
           },
           {{- /*
             Scope PassRole by the TARGET role ARN (the build/exec roles KRO creates),
