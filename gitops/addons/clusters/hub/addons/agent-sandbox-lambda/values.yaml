@@ -10,7 +10,9 @@ microvm:
   region: us-west-2
   # MUST be kro.run — EKS Managed KRO only watches the kro.run group (see chart values.yaml).
   apiGroup: kro.run
-  bridgeImage: alpine/k8s:1.31.0
+  # aws-cli v2 (has the pre-GA lambda-microvms service; alpine/k8s's aws-cli 1.34 does NOT,
+  # so RunMicrovm never fired). bridge.sh/reconcile.sh fetch kubectl at start. See chart values.
+  bridgeImage: public.ecr.aws/aws-cli/aws-cli:latest
   # Hub account (for the ACK PodIdentityAssociation role ARN).
   accountId: "940019131157"
   podIdentity:
