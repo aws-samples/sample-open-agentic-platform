@@ -183,14 +183,32 @@ data:
     fi
     echo "[microvm-bridge] image=${IMAGE_ARN} execRole=${EXEC_ROLE}"
 
-    # 2) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image.
-    #    idlePolicy enables auto-suspend/resume; explicit suspend/resume is driven by
-    #    the microvm-lifecycle controller (template 52) off Sandbox.operatingMode.
-    echo "[microvm-bridge] RunMicrovm..."
+    # 2) Build the runHookPayload — the per-session context the coder needs, delivered
+    #    as the /run hook body (hook-server.js background-spawns the coder from it).
+    #    Via the CLI --run-hook-payload is a PLAIN STRING (≤16KB); we pass JSON. Includes
+    #    the GitHub token (mounted from the dark-factory-github secret at /etc/df/gh-token)
+    #    + issue context from the claim env. NO Bifrost key — the coder is Bedrock-direct
+    #    via the exec role. If the token file is absent the coder can't push; fail loud.
+    GH_TOKEN="$(cat /etc/df/gh-token 2>/dev/null || echo "")"
+    [ -z "${GH_TOKEN}" ] && echo "[microvm-bridge] WARN: no gh-token mounted — coder cannot open a PR"
+    PAYLOAD=$(GH="${GH_TOKEN}" node -e '
+      const p={ghToken:process.env.GH||"", region:process.env.REGION||"us-west-2",
+        issueNumber:process.env.DF_ISSUE_NUMBER||"", repo:process.env.DF_REPO||"",
+        branch:process.env.DF_BRANCH||"", baseBranch:process.env.DF_BASE_BRANCH||"main",
+        issueTitle:process.env.DF_ISSUE_TITLE||""};
+      process.stdout.write(JSON.stringify(p));' REGION="${REGION}" 2>/dev/null)
+
+    # 3) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image,
+    #    handing it the payload. idlePolicy enables auto-suspend/resume; explicit
+    #    suspend/resume is driven by the microvm-lifecycle controller off operatingMode.
+    #    maxIdleDurationSeconds MUST exceed a coder run (idle = no inbound traffic; a
+    #    background coder would otherwise be auto-suspended mid-run).
+    echo "[microvm-bridge] RunMicrovm (with runHookPayload for issue #${DF_ISSUE_NUMBER})..."
     RUN_JSON=$(aws lambda-microvms run-microvm \
       --region "${REGION}" \
       --image-identifier "${IMAGE_ARN}" \
       --execution-role-arn "${EXEC_ROLE}" \
+      --run-hook-payload "${PAYLOAD}" \
       --idle-policy 'autoResumeEnabled=true,maxIdleDurationSeconds={{ .Values.microvm.defaults.maxIdleDurationSeconds }},suspendedDurationSeconds={{ .Values.microvm.defaults.suspendedDurationSeconds }}' \
       2>&1) || { echo "[microvm-bridge] run-microvm failed: ${RUN_JSON}"; exit 1; }
     VMID=$(echo "${RUN_JSON}" | sed -n 's/.*"[Mm]icrovmId"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -1)
@@ -308,6 +326,11 @@ spec:
               mountPath: /scripts
             - name: tmp
               mountPath: /tmp
+            # GitHub token (read-only) the bridge folds into the runHookPayload so the
+            # coder in the MicroVM can push + open the PR. Same secret the Kata coder uses.
+            - name: gh-token
+              mountPath: /etc/df
+              readOnly: true
       volumes:
         - name: bridge-script
           configMap:
@@ -315,6 +338,11 @@ spec:
             defaultMode: 0555
         - name: tmp
           emptyDir: {}
+        - name: gh-token
+          secret:
+            secretName: {{ .Values.microvm.githubSecretName | default "dark-factory-github" }}
+            defaultMode: 0400
+            optional: true
 ---
 {{- /*
 Lambda-MicroVM SandboxWarmPool. SandboxClaim.spec.warmPoolRef is REQUIRED (a claim
