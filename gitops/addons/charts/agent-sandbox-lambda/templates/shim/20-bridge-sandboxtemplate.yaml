@@ -191,12 +191,19 @@ data:
     #    via the exec role. If the token file is absent the coder can't push; fail loud.
     GH_TOKEN="$(cat /etc/df/gh-token 2>/dev/null || echo "")"
     [ -z "${GH_TOKEN}" ] && echo "[microvm-bridge] WARN: no gh-token mounted — coder cannot open a PR"
-    PAYLOAD=$(GH="${GH_TOKEN}" node -e '
-      const p={ghToken:process.env.GH||"", region:process.env.REGION||"us-west-2",
-        issueNumber:process.env.DF_ISSUE_NUMBER||"", repo:process.env.DF_REPO||"",
-        branch:process.env.DF_BRANCH||"", baseBranch:process.env.DF_BASE_BRANCH||"main",
-        issueTitle:process.env.DF_ISSUE_TITLE||""};
-      process.stdout.write(JSON.stringify(p));' REGION="${REGION}" 2>/dev/null)
+    # Build the JSON payload with python3 (present in the aws-cli image; node is NOT).
+    # json.dumps handles escaping of the token + any quotes in the title safely.
+    PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c '
+import json, os
+print(json.dumps({
+  "ghToken": os.environ.get("GH",""),
+  "region": os.environ.get("REGION","us-west-2"),
+  "issueNumber": os.environ.get("DF_ISSUE_NUMBER",""),
+  "repo": os.environ.get("DF_REPO",""),
+  "branch": os.environ.get("DF_BRANCH",""),
+  "baseBranch": os.environ.get("DF_BASE_BRANCH","main"),
+  "issueTitle": os.environ.get("DF_ISSUE_TITLE",""),
+}))')
 
     # 3) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image,
     #    handing it the payload. idlePolicy enables auto-suspend/resume; explicit
