@@ -99,13 +99,21 @@ metadata:
   labels:
     {{- include "agent-sandbox.labels" . | nindent 4 }}
 rules:
-  # The bridge only READS the platform MicrovmSandbox (image handoff: imageARN +
-  # executionRoleARN). It does NOT create/delete it — that object is GitOps-owned
-  # platform infra (template 50), built once. Per-session Run/Terminate is done via
-  # the AWS SDK, not by mutating this CR.
+  # READS the platform MicrovmSandbox (image handoff: imageARN + executionRoleARN) —
+  # GitOps-owned platform infra (template 50), built once.
   - apiGroups: [{{ .Values.microvm.apiGroup | default "kro.run" | quote }}]
     resources: ["microvmsandboxes"]
     verbs: ["get", "list", "watch"]
+  # Per-session Microvm CR: the bridge CREATES it (declarative path — the only way the
+  # controller fires the /run hook that delivers runHookPayload) and DELETES it on
+  # teardown (controller terminates the VM).
+  - apiGroups: ["lambdamicrovms.services.k8s.aws"]
+    resources: ["microvms"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Per-session payload Secret (runHookPayload SecretKeyReference).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch", "delete"]
   # Read the owning Sandbox (suspend-vs-teardown in preStop) + patch it to record the
   # per-session microvmID (annotation) so the microvm-lifecycle controller can
   # suspend/resume THIS session's VM.
@@ -185,60 +193,60 @@ data:
 
     # 2) Build the runHookPayload — the per-session context the coder needs, delivered
     #    as the /run hook body (hook-server.js background-spawns the coder from it).
-    #    Via the CLI --run-hook-payload is a PLAIN STRING (≤16KB); we pass JSON. Includes
-    #    the GitHub token (mounted from the dark-factory-github secret at /etc/df/gh-token)
-    #    + issue context from the claim env. NO Bifrost key — the coder is Bedrock-direct
-    #    via the exec role. If the token file is absent the coder can't push; fail loud.
+    #    CRITICAL: runHookPayload is a SecretKeyReference delivered by the DECLARATIVE
+    #    Microvm CR (the controller reads the Secret + drives the /run hook). The
+    #    imperative `run-microvm --run-hook-payload` CLI launches the VM but NEVER fires
+    #    /run (verified: VM RUNNING, hook-server listening, but coder never started). So
+    #    we write a Secret + create a Microvm CR. GitHub token from the mounted secret;
+    #    NO Bifrost key — the coder is Bedrock-direct via the exec role.
     GH_TOKEN="$(cat /etc/df/gh-token 2>/dev/null || echo "")"
     [ -z "${GH_TOKEN}" ] && echo "[microvm-bridge] WARN: no gh-token mounted — coder cannot open a PR"
-    # Build the JSON payload with python3 (present in the aws-cli image; node is NOT).
-    # ONE line on purpose: a multi-line python body at column 0 would break out of the
-    # `bridge.sh: |` YAML block scalar (all lines must stay indented). json.dumps escapes
-    # the token + any quotes in the title. Reads DF_*/GH/REGION from the environment.
+    # python3 (node is absent in the aws-cli image); json.dumps escapes token/title. One
+    # line so it stays inside the bridge.sh: | YAML block scalar.
     PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE","")}))')
 
-    # 3) RunMicrovm (IMPERATIVE SDK) — launch this session's VM from the pre-built image,
-    #    handing it the payload. idlePolicy enables auto-suspend/resume; explicit
-    #    suspend/resume is driven by the microvm-lifecycle controller off operatingMode.
-    #    maxIdleDurationSeconds MUST exceed a coder run (idle = no inbound traffic; a
-    #    background coder would otherwise be auto-suspended mid-run).
-    echo "[microvm-bridge] RunMicrovm (with runHookPayload for issue #${DF_ISSUE_NUMBER})..."
-    RUN_JSON=$(aws lambda-microvms run-microvm \
-      --region "${REGION}" \
-      --image-identifier "${IMAGE_ARN}" \
-      --execution-role-arn "${EXEC_ROLE}" \
-      --run-hook-payload "${PAYLOAD}" \
-      --idle-policy 'autoResumeEnabled=true,maxIdleDurationSeconds={{ .Values.microvm.defaults.maxIdleDurationSeconds }},suspendedDurationSeconds={{ .Values.microvm.defaults.suspendedDurationSeconds }}' \
-      2>&1) || { echo "[microvm-bridge] run-microvm failed: ${RUN_JSON}"; exit 1; }
-    VMID=$(echo "${RUN_JSON}" | sed -n 's/.*"[Mm]icrovmId"[ ]*:[ ]*"\([^"]*\)".*/\1/p' | head -1)
-    echo "[microvm-bridge] launched MicroVM ${VMID:-<unknown>}"
+    MVM="mvm-${DF_ISSUE_NUMBER}"          # Microvm CR + payload Secret name for this session
+    # Build BOTH manifests as JSON with python3 and pipe to kubectl apply. JSON (not a
+    # heredoc) on purpose: a heredoc's column-0 EOF terminator breaks out of the
+    # bridge.sh: | YAML block scalar. JSON is valid YAML and stays on indented lines.
+    MAXIDLE={{ .Values.microvm.defaults.maxIdleDurationSeconds }}; SUSPDUR={{ .Values.microvm.defaults.suspendedDurationSeconds }}
+    echo "[microvm-bridge] writing payload Secret + Microvm CR ${MVM} (fires /run for issue #${DF_ISSUE_NUMBER})..."
+    MVM="${MVM}" NS="${NS}" PAYLOAD="${PAYLOAD}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":mvm+"-payload","namespace":ns},"type":"Opaque","stringData":{"payload":e["PAYLOAD"]}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] payload secret apply failed"; exit 1; }
+    MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"idlePolicy":{"autoResumeEnabled":True,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] Microvm CR apply failed"; exit 1; }
 
-    # 3) Record microvmID on the owning Sandbox so the lifecycle controller can
-    #    suspend/resume THIS session's VM (it reads this annotation).
+    # 4) Wait for the controller to report the running VM's id, record it on the Sandbox
+    #    (lifecycle controller reads this to suspend/resume THIS session's VM).
+    VMID=""; i=0
+    while [ "$i" -lt 60 ]; do
+      VMID=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+      [ -n "${VMID}" ] && break
+      i=$((i+1)); sleep 5
+    done
+    echo "[microvm-bridge] Microvm ${MVM} -> ${VMID:-<pending>}"
     [ -n "${VMID}" ] && kubectl annotate sandbox "${SANDBOX_NAME}" -n "${NS}" \
       "microvm-lifecycle.agents.x-k8s.io/microvm-id=${VMID}" --overwrite >/dev/null 2>&1 || true
 
-    # 4) Teardown on real claim end (NOT on suspend): suspend deletes the pod but must
-    #    KEEP the MicroVM so resume works. /tmp/suspending marker (preStop) distinguishes.
+    # 5) Teardown on real claim end (NOT on suspend): deleting the Microvm CR makes the
+    #    controller terminate the VM. On SUSPEND the pod stops but the CR + VM must stay
+    #    (resume reuses them) — the /tmp/suspending marker (preStop) distinguishes.
     cleanup() {
       if [ -f /tmp/suspending ]; then
-        echo "[microvm-bridge] pod stopping for SUSPEND — keeping MicroVM ${VMID}"
+        echo "[microvm-bridge] pod stopping for SUSPEND — keeping Microvm ${MVM}"
         return
       fi
-      echo "[microvm-bridge] TerminateMicrovm ${VMID}"
-      [ -n "${VMID}" ] && aws lambda-microvms terminate-microvm --region "${REGION}" --microvm-identifier "${VMID}" >/dev/null 2>&1 || true
+      echo "[microvm-bridge] deleting Microvm ${MVM} (controller terminates the VM)"
+      kubectl delete microvm "${MVM}" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+      kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
     }
     trap cleanup EXIT INT TERM
 
-    # 5) Hold the pod so Sandbox lifecycle == MicroVM lifecycle. Poll the VM state;
-    #    exit when it's gone (terminated). (Log streaming / exec passthrough is a
-    #    virtual-kubelet follow-up — see docs/dark-factory §4.5.)
-    echo "[microvm-bridge] MicroVM ${VMID} running — pod now mirrors its lifecycle."
-    while [ -n "${VMID}" ]; do
-      ST=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" \
-            --query 'state' --output text 2>/dev/null || echo "")
+    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll the CR's state;
+    #    exit when it's terminated/gone.
+    echo "[microvm-bridge] Microvm ${MVM} running — pod now mirrors its lifecycle."
+    while true; do
+      ST=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.state}' 2>/dev/null || echo "GONE")
       case "${ST}" in
-        TERMINATED|TERMINATING|"") echo "[microvm-bridge] MicroVM state=${ST:-gone} — exiting."; break ;;
+        TERMINATED|TERMINATING|GONE|"") echo "[microvm-bridge] Microvm state=${ST:-gone} — exiting."; break ;;
       esac
       sleep 15
     done
