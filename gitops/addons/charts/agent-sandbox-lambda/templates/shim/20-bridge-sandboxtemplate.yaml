@@ -269,6 +269,17 @@ spec:
         - name: coder
           image: {{ .Values.microvm.bridgeImage }}
           command: ["/bin/sh", "/scripts/bridge.sh"]
+          # SANDBOX_NAME = this pod's own name via the downward API. agent-sandbox names
+          # the Sandbox CR and its pod identically, so this IS the owning Sandbox name.
+          # Without it bridge.sh fell back to df-<issue> (e.g. df-9999) which does NOT
+          # match the real Sandbox (named after the claim, e.g. df-issue-smoke-d), so the
+          # microvm-id annotation write silently failed → the lifecycle controller couldn't
+          # find the VM to suspend and the pod teardown TERMINATED it instead of suspending.
+          env:
+            - name: SANDBOX_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           # Preflight suspend marker: if this pod is being deleted because the owning
           # Sandbox went operatingMode=Suspended, the microvm-lifecycle controller has
           # (or will) suspend the MicroVM — the bridge must NOT TerminateMicrovm. The
@@ -281,7 +292,7 @@ spec:
                   - -c
                   - |
                     # If the owning Sandbox is Suspended, mark so cleanup() keeps the CR.
-                    M=$(kubectl get sandbox "df-${DF_ISSUE_NUMBER:-}" \
+                    M=$(kubectl get sandbox "${SANDBOX_NAME:-df-${DF_ISSUE_NUMBER:-}}" \
                         -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "")
                     [ "$M" = "Suspended" ] && touch /tmp/suspending || true
           securityContext:
