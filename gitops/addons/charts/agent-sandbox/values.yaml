@@ -63,6 +63,17 @@ networkPolicy:
     - 172.16.0.0/12       # RFC-1918
     - 192.168.0.0/16      # RFC-1918
     - 169.254.0.0/16      # link-local (blocks IMDS 169.254.169.254)
+  # Public DNS resolvers the coder Kata VM uses (its pod dnsConfig.nameservers).
+  # A Kata guest VM can't use in-cluster CoreDNS (and EKS Auto Mode doesn't run a
+  # kube-dns Service here), so the coder resolves via PUBLIC DNS. The egress policy
+  # must therefore allow :53 to these resolver IPs — the in-cluster :53 rule alone
+  # does NOT (public resolver IPs aren't in-cluster), which silently broke name
+  # resolution (coder crashed with EAI_AGAIN api.github.com though :443 worked).
+  # Scoped to the exact resolver /32s — tighter than the :443 public allow. Keep in
+  # sync with the SandboxTemplate podTemplate dnsConfig.nameservers.
+  dnsResolvers:
+    - 8.8.8.8/32          # Google Public DNS
+    - 1.1.1.1/32          # Cloudflare DNS
 
   # Admin-tier ClusterNetworkPolicy (31-clusternetworkpolicy.yaml) — control-plane
   # isolation that applies regardless of pod ownership (the standard NetworkPolicy
