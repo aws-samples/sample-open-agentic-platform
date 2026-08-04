@@ -38,6 +38,11 @@ function startCoder(payload) {
   const env = {
     ...process.env,
     USE_BEDROCK: "1",
+    // MicroVM rootfs is read-only + there's no /workspace volume mount (unlike Kata,
+    // where the operator mounts a writable workspace). entrypoint.js mkdir's
+    // ${WORKSPACE}/artifacts and clones there, so point it at the writable tmpfs —
+    // else it crashes EACCES on /workspace/artifacts before doing any work.
+    WORKSPACE: "/tmp/workspace",
     GH_TOKEN_PATH: `${SECRETS_DIR}/gh-token`,
     AWS_REGION: d.region || process.env.AWS_REGION || "us-west-2",
     DF_ISSUE_NUMBER: d.issueNumber ? String(d.issueNumber) : "",
