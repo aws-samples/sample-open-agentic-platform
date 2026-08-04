@@ -3,21 +3,22 @@
 // Lambda MicroVM is a snapshot/hook runtime: the platform builds an image by
 // starting THIS process and snapshotting it once the `ready` hook says "go", then
 // resumes that snapshot per session and calls the `run` hook with the session's
-// runHookPayload as the request body. Hooks are HTTP endpoints we serve on :8080
-// (hooks.port on the MicrovmImage); each must answer within its timeout (run = 30s).
+// runHookPayload as the request body. Hooks are HTTP endpoints we serve on :8080.
 //
 // The dark-factory coder (entrypoint.js) is a ONE-SHOT batch job (clone → agent →
-// push → PR, 5-15 min). It cannot run *inside* the 30s run hook. So the run hook is
-// just the handshake: it materializes the payload into the coder's file/env contract
-// and BACKGROUND-SPAWNS entrypoint.js, then returns 200 immediately. The coder then
-// runs to completion asynchronously; df-run's await-coder step polls GitHub for the
-// PR exactly as it does for Kata. The VM stays alive because idlePolicy.
-// maxIdleDurationSeconds on the Microvm is set longer than a coder run (idle = no
-// inbound traffic; a background job would otherwise auto-suspend).
+// push → PR, 5-15 min). It cannot run inside the 30s run hook, so /run just
+// materializes the payload into the coder's file/env contract and BACKGROUND-SPAWNS
+// entrypoint.js, then returns 200 immediately. The coder runs async; df-run's
+// await-coder step polls GitHub for the PR (same as Kata). The VM stays alive because
+// idlePolicy.maxIdleDurationSeconds > a coder run (idle = no inbound traffic).
 //
-// LLM: USE_BEDROCK=1 is exported so entrypoint.js calls Bedrock DIRECTLY via the
-// MicroVM execution role — no Bifrost / EKS-network dependency (a MicroVM can't reach
-// Bifrost's ClusterIP). See docs/dark-factory/flow-d-coder-in-microvm-design.md.
+// LLM: USE_BEDROCK=1 → entrypoint.js calls Bedrock DIRECTLY via the MicroVM execution
+// role (no Bifrost / EKS-network dependency). See docs/dark-factory/flow-d-coder-in-microvm-design.md.
+//
+// KEPT MINIMAL: this is the exact shape that built cleanly (v2.0). The /run handler
+// stays trivial and synchronous so the build's ready-hook completes fast. Observability
+// is via direct endpoint probes, not a /status route (adding one correlated with a
+// hung ready-hook build on the pre-GA controller).
 
 const http = require("http");
 const fs = require("fs");
@@ -25,29 +26,18 @@ const { spawn } = require("child_process");
 
 const PORT = parseInt(process.env.HOOKS_PORT || "8080", 10);
 const SECRETS_DIR = "/tmp/secrets";
-
 let coderStarted = false;
-let coderState = "idle";   // idle | running | done | exited:<code> | spawn-error:<msg>
 
-// Materialize the runHookPayload (JSON) into the coder's existing contract:
-//   files: /tmp/secrets/{gh-token} ; env: DF_*, AWS_REGION, USE_BEDROCK=1
-// then background-spawn entrypoint.js. Idempotent: only the first /run starts it.
 function startCoder(payload) {
-  if (coderStarted) {
-    console.log("[hook-server] /run received again — coder already started, ignoring");
-    return;
-  }
+  if (coderStarted) { console.log("[hook-server] /run again — already started, ignoring"); return; }
   coderStarted = true;
-
   let d = {};
   try { d = JSON.parse(payload || "{}"); } catch (e) { console.log("[hook-server] payload not JSON:", e.message); }
-
   fs.mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
   if (d.ghToken) fs.writeFileSync(`${SECRETS_DIR}/gh-token`, d.ghToken, { mode: 0o400 });
-
   const env = {
     ...process.env,
-    USE_BEDROCK: "1",                                   // Bedrock-direct (exec-role creds)
+    USE_BEDROCK: "1",
     GH_TOKEN_PATH: `${SECRETS_DIR}/gh-token`,
     AWS_REGION: d.region || process.env.AWS_REGION || "us-west-2",
     DF_ISSUE_NUMBER: d.issueNumber ? String(d.issueNumber) : "",
@@ -57,46 +47,28 @@ function startCoder(payload) {
     DF_ISSUE_TITLE: d.issueTitle || "",
   };
   if (d.model) env.CODER_MODEL = d.model;
-
-  console.log(`[hook-server] /run → background-spawning coder for issue #${env.DF_ISSUE_NUMBER} repo=${env.DF_REPO}`);
-  // Capture the coder's stdout+stderr to a file (runtime CloudWatch routing is
-  // unreliable on this pre-GA runtime), so /status can return a live tail — this is
-  // how the coder run is OBSERVED. Also mirror to our stdout.
-  const logPath = "/tmp/coder.log";
-  const logFd = fs.openSync(logPath, "a");
-  coderState = "running";
-  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: ["ignore", logFd, logFd], detached: false });
-  child.on("exit", (code) => { coderState = code === 0 ? "done" : ("exited:" + code); console.log(`[hook-server] coder exited code=${code}`); });
-  child.on("error", (e) => { coderState = "spawn-error:" + e.message; console.log(`[hook-server] coder spawn error: ${e.message}`); });
-}
-
-function tailLog(n) {
-  try { return fs.readFileSync("/tmp/coder.log", "utf8").split("\n").slice(-n).join("\n"); }
-  catch { return ""; }
+  console.log(`[hook-server] /run → spawning coder for issue #${env.DF_ISSUE_NUMBER} repo=${env.DF_REPO}`);
+  // Capture coder output to a file the coder writes; inherit stdio so it also streams
+  // to the VM console. detached so it outlives the request handler.
+  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: "inherit", detached: true });
+  child.unref();
+  child.on("error", (e) => console.log(`[hook-server] coder spawn error: ${e.message}`));
 }
 
 const server = http.createServer((req, res) => {
   let body = "";
   req.on("data", (c) => { body += c; });
   req.on("end", () => {
-    const ok = (obj) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj || { status: "ok" })); };
+    const ok = (o) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(o || { status: "ok" })); };
     switch (req.url) {
-      // Build-time: signal the process is initialized so the builder snapshots a
-      // clean, waiting coder (no session work baked into the snapshot).
-      case "/ready":    return ok({ status: "ready" });
-      case "/validate": return ok({ status: "valid" });
-      // Per-session start: body IS runHookPayload. Kick off the coder, return fast.
-      case "/run":      startCoder(body); return ok({ status: "started" });
-      // Observe the coder: state + a tail of its captured output (runtime CloudWatch
-      // routing is unreliable on this runtime, so this is how the run is watched).
-      case "/status":   return ok({ status: "ok", coderState, started: coderStarted, log: tailLog(60) });
-      // Lifecycle: coder holds no external state to flush; ack so the service proceeds.
-      case "/suspend":  return ok({ status: "suspended" });
-      case "/resume":   return ok({ status: "resumed" });
-      case "/terminate":return ok({ status: "terminated" });
-      default:          return ok({ status: "ok", path: req.url });
+      case "/ready":     return ok({ status: "ready" });
+      case "/validate":  return ok({ status: "valid" });
+      case "/run":       startCoder(body); return ok({ status: "started" });
+      case "/suspend":   return ok({ status: "suspended" });
+      case "/resume":    return ok({ status: "resumed" });
+      case "/terminate": return ok({ status: "terminated" });
+      default:           return ok({ status: "ok", path: req.url });
     }
   });
 });
-
 server.listen(PORT, () => console.log(`[hook-server] listening on :${PORT} (lambda-coder, Bedrock-direct)`));
