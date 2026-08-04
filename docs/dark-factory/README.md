@@ -26,6 +26,7 @@ spokes as normal deployments.
 2. [Two flows at a glance](#2-two-flows-at-a-glance)
 3. [Flow A — Agent Sandbox capability](#3-flow-a--agent-sandbox-capability-permanent-platform-feature)
 4. [Flow B — the Dark Factory pipeline](#4-flow-b--the-dark-factory-pipeline)
+   - [Flow D — Lambda MicroVM substrate (alternative to Flow A)](#45-flow-d--lambda-microvm-substrate-alternative-to-flow-a)
 5. [The pluggable coding assistant](#5-the-pluggable-coding-assistant)
 6. [Independent verification](#6-independent-verification-the-heart-of-the-pattern)
 7. [Live status in the PR](#7-live-status-in-the-pr)
@@ -83,6 +84,15 @@ useful on its own and the factory is a consumer of it.
 > **Why split them?** The sandbox capability is generically useful (any agent workload can claim
 > an isolated VM). The Dark Factory is one *consumer* of that capability. Keeping them separate
 > means the isolation substrate can ship, be tested, and be reused independently of the factory.
+
+> **Flow D — a second substrate.** Flow A's isolation boundary is a **Kata micro-VM pod** on a
+> platform-owned nested-virt node group. **Flow D** offers an *alternative* Flow-A substrate — an
+> **AWS Lambda MicroVM** (serverless micro-VM, no node group) provisioned via the ACK `lambdamicrovms`
+> controller and composed by a single **KRO `ResourceGraphDefinition`**. Flow B is unchanged and can
+> target either substrate through the same `SandboxClaim` contract. See
+> [§4.5](#45-flow-d--lambda-microvm-substrate-alternative-to-flow-a) and
+> [`diagrams/flow-d-microvm-sandbox.md`](diagrams/flow-d-microvm-sandbox.md). *(Flow C is reserved for
+> other work.)*
 
 > **Why the hub, not a spoke?** The Dark Factory is a **pre-dev build/author** activity: it *writes*
 > code and needs GitHub write access. That belongs on the **hub — the control/build plane** — not on
@@ -253,6 +263,102 @@ UI — the substrate for scaling across many concurrent issues.
 |---|---|---|
 | *"Add a `weather-agent` to the examples"* | Deploy into an **ephemeral namespace** on the hub → run holdout scenarios → delete namespace | Namespace + branch artifacts |
 | *"Build an EKS cluster with X"* | **Dry-run / crossplane-render** by default; a `deep-test` label spins a **real ephemeral `PlatformCluster`** (appmod-blueprints composition) | Delete the `PlatformCluster` claim |
+
+---
+
+## 4.5. Flow D — Lambda MicroVM substrate (alternative to Flow A)
+
+> 📊 **See the diagrams:** [`diagrams/flow-d-microvm-sandbox.md`](diagrams/flow-d-microvm-sandbox.md)
+> (substrate architecture + platform/app ownership split + the RuntimeClass-shim bridge).
+
+Flow A's isolation boundary is a **Kata micro-VM pod** on a platform-owned nested-virt node group.
+**Flow D is a second Flow-A substrate**: an **AWS Lambda MicroVM** — a *serverless* micro-VM with no
+node group to run or pay for while idle, per-claim lifecycle, and sub-second warm starts. Flow B is
+unchanged: it still creates a `SandboxClaim`, a pod still shows up, and the **same `dark-factory-coder`**
+runs its coding/testing loop — except the coder executes inside a Lambda MicroVM. *(Flow C is reserved
+for other work; this substrate is Flow D.)*
+
+### How it's built — KRO RGD over ACK primitives
+
+| Layer | Mechanism | Notes |
+|---|---|---|
+| **Composition** | **Managed KRO** (EKS Capability) + one `MicrovmSandbox` `ResourceGraphDefinition` | One CR expands into the IMAGE primitives below (built once); the running `Microvm` is NOT in the graph — the shim runs it imperatively |
+| **GA primitives** | **Managed ACK** (EKS Capability) — `iam` Role, `s3` Bucket | AWS-run; the image store + build/exec roles |
+| **Image primitive** | **Self-managed ACK** — the pre-GA `lambdamicrovms` controller | `MicrovmImage` CRD (`lambdamicrovms.services.k8s.aws/v1alpha1`); the `Microvm` is created via SDK by the shim, not as a graph resource |
+
+> **Why self-managed for the MicroVM controller?** Managed ACK bundles only controllers whose service
+> is **GA upstream** (see the [ACK community services / GA list](https://aws-controllers-k8s.github.io/community/docs/community/services/)).
+> `lambdamicrovms` is **pre-GA** (`v1alpha1`, not on that list), so it isn't in Managed ACK yet — it
+> runs as its own GitOps addon. **Managed ACK + self-managed lambdamicrovms coexist** (different CRD
+> groups → no conflict). When `lambdamicrovms` goes GA, delete the self-managed addon and Managed ACK
+> adopts it — **the RGD is unchanged**. This "install both now" posture is deliberate and futuristic.
+>
+> The **Managed KRO + Managed ACK capabilities themselves** are enabled at the platform layer in the
+> **appmod-blueprints** repo (an EKS Capability toggle) — see that repo's
+> `docs/EKS-Capabilities-KRO-ACK-Setup.md`. This repo owns only the **self-managed `lambdamicrovms`
+> controller + the KRO `MicrovmSandbox` RGD + the sandbox shim** (Flow D).
+
+### The split: KRO builds the image ONCE; the shim runs the VM per session
+
+This is the load-bearing design decision (and it matches the ACK controller's own guidance —
+image build is slow/declarative, running a VM is fast/imperative):
+
+- **Platform image — declarative, built ONCE by KRO/ACK.** The `MicrovmSandbox` RGD
+  (`agent-sandbox-lambda/templates/image/`) composes only the slow-changing infra: `MicrovmImage`
+  (`baseImageARN`, `buildRoleARN`, `codeArtifact.uri` — an **S3 zip** of the arm64 `dark-factory-coder`
+  + a Dockerfile) plus its **build role**, **execution role**, and **S3 artifact bucket** (ACK GA
+  controllers). A **single committed `MicrovmSandbox` instance** (GitOps-applied) is reconciled once;
+  KRO gates the handoff on a successful build (`readyWhen state == CREATED||UPDATED`). Its status
+  surfaces `imageARN` + `executionRoleARN`. The RGD **does not** contain a `Microvm`.
+- **Per-session VM — imperative, driven by the shim.** Running a MicroVM (`RunMicrovm`), and its
+  `suspend` / `resume` / `TerminateMicrovm`, are request-time SDK ops the ACK controller does **not**
+  reconcile. So the shim owns them — never a `Microvm` CR per claim.
+
+### The RuntimeClass shim (claim → pod → MicroVM)
+
+A literal K8s `RuntimeClass` (like `kata-clh`) maps to a **node-local containerd handler**; Lambda
+MicroVM is a **remote AWS service**, so a true node-level RuntimeClass would require a virtual-kubelet
+provider (a large Go runtime — **out of scope**). Flow D instead ships a **`lambda-microvm`
+SandboxTemplate variant** (`agent-sandbox-lambda/templates/shim/`) whose pod is a lightweight
+**bridge**: on claim it **reads the platform image handoff** (`imageARN` + `executionRoleARN` from the
+one built `MicrovmSandbox`) and calls **`RunMicrovm`** (SDK) to launch this session's VM, records the
+`microvmID` as an annotation on the owning `Sandbox`, and holds the pod so its lifecycle mirrors the
+MicroVM's. On real teardown it calls `TerminateMicrovm`. To Flow B and the user the UX is identical to
+Flow A. Interactive exec/attach passthrough is **best-effort**; full fidelity is a virtual-kubelet follow-up.
+
+### Suspend / resume / terminate — the coder VM persists across the review loop
+
+Because the substrate is a Lambda MicroVM (not a pod), Flow D uses **suspend/resume through the Agent
+Sandbox CRD** to keep the coder's context across the whole review→fix→re-review loop — the payoff of
+this substrate over Kata (where each fix round claims a fresh pod):
+
+1. **Coder finishes the coding task → SUSPEND** (`df-run` flips `Sandbox.operatingMode=Suspended`; the
+   `microvm-lifecycle` reconcile loop calls `suspend-microvm` by the annotated id). Compute is freed;
+   the VM's memory/disk are snapshotted.
+2. DevOps + Security agents review the PR while the coder is suspended.
+3. **Findings + "fix" → RESUME the SAME VM** (df-iterate sets `operatingMode=Running` → `resume-microvm`).
+   Context intact — no cold re-implement.
+4. Coder fixes → SUSPEND again; loop 2–4 until both agents clear.
+5. **Final exit (merge) → TERMINATE** (`df-merge-teardown` calls `TerminateMicrovm`, then deletes the
+   claim). This is the **only** place the VM is destroyed — `df-run`'s onExit is substrate-aware and
+   **keeps** the suspended Lambda VM (unlike Kata, which frees its pod on df-run exit).
+
+The ACK `Microvm` has no suspend field, so the `microvm-lifecycle` loop supplies the intent→SDK
+translation — pure shim, no virtual-kubelet. See
+[`diagrams/flow-d-microvm-sandbox.md` §D.3a](diagrams/flow-d-microvm-sandbox.md).
+
+### Delivery & status
+
+Shipped as GitOps in its **own chart** — `gitops/addons/charts/agent-sandbox-lambda/` (separate from
+the Kata `agent-sandbox` chart), structured as `templates/image/` (KRO RGD + the one platform
+`MicrovmSandbox`) and `templates/shim/` (bridge SandboxTemplate + warm pool + `microvm-lifecycle`
+controller). **Disabled by default** (`microvm.enabled=false`); the hub overlay
+(`clusters/hub/addons/agent-sandbox-lambda/values.yaml`) carries cluster-specific values, and a gated
+`agent-sandbox-lambda` addon entry deploys it hub-only. The platform-capability enablement (Managed ACK
++ Managed KRO) lands separately in the **appmod-blueprints** platform repo (they're EKS Capabilities,
+like the Managed ArgoCD the hub already runs). This PR delivers the **design + GitOps scaffold**; the
+live end-to-end path (enable capabilities → sync controller → publish the arm64 artifact → run a MicroVM
+coder with suspend/resume) is the follow-up.
 
 ---
 

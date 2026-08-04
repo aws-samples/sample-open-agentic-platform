@@ -96,6 +96,17 @@ async function main() {
   // Iteration cap: count via a df-iterations/<n> label on the PR (issue API).
   const issue = await gh("GET", `/repos/${REPO}/issues/${PR}`);
   const labels = (issue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+  // Substrate routing: the fix round must run on the SAME substrate the PR came from,
+  // so it lands on the right warm pool (Lambda MicroVM vs Kata). The ORIGINATING ISSUE
+  // (not the PR — the coder doesn't copy the label onto the PR) carries the label that
+  // fired it. Read the issue's labels; default to plain dark-factory (Kata) on any miss.
+  let triggerLabel = "dark-factory";
+  try {
+    const origIssue = await gh("GET", `/repos/${REPO}/issues/${issueNumber}`);
+    const il = (origIssue.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+    if (il.includes("darkfactory-lambda")) triggerLabel = "darkfactory-lambda";
+  } catch (e) { console.log(`[df-iterate] could not read issue #${issueNumber} labels (${e.message}) — defaulting Kata`); }
+  console.log(`[df-iterate] substrate trigger-label=${triggerLabel}`);
   const cur = labels.filter((l) => l.startsWith(ITER_LABEL_PREFIX)).map((l) => parseInt(l.slice(ITER_LABEL_PREFIX.length), 10)).filter((n) => !isNaN(n));
   const count = cur.length ? Math.max(...cur) : 0;
   if (count >= MAX_ITERATIONS) {
@@ -109,12 +120,19 @@ async function main() {
   await gh("POST", `/repos/${REPO}/issues/${PR}/labels`, { labels: [`${ITER_LABEL_PREFIX}${next}`] }).catch(() => {});
 
   console.log(`[df-iterate] revision ${next}/${MAX_ITERATIONS} for issue #${issueNumber} (PR #${PR})`);
+  // Substrate-routed template: Lambda fix rounds run the MicroVM-native df-run-lambda
+  // (resumes the SAME suspended VM); Kata fix rounds run the certified df-run. Keyed on
+  // the originating issue's label (resolved above as triggerLabel).
+  const isLambda = triggerLabel === "darkfactory-lambda";
+  const wfTemplate = isLambda ? "df-run-lambda" : "df-run";
+  const wfName = isLambda ? `df-run-lambda-${issueNumber}-i${next}` : `df-run-${issueNumber}-i${next}`;
+  console.log(`[df-iterate] substrate=${triggerLabel} → template=${wfTemplate}`);
   const wf = {
     apiVersion: "argoproj.io/v1alpha1", kind: "Workflow",
     // Dedup per issue+round so a duplicate comment webhook is a no-op.
-    metadata: { name: `df-run-${issueNumber}-i${next}`, namespace: ARGO_NAMESPACE },
+    metadata: { name: wfName, namespace: ARGO_NAMESPACE },
     spec: {
-      workflowTemplateRef: { name: "df-run" },
+      workflowTemplateRef: { name: wfTemplate },
       arguments: { parameters: [
         { name: "issue-id", value: `${issueNumber}` },        // no id in this payload; number is unique enough for the mutex/claim
         { name: "issue-number", value: `${issueNumber}` },
@@ -122,6 +140,9 @@ async function main() {
         { name: "issue-title", value: pr.title },
         { name: "issue-body", value: "" },
         { name: "base-branch", value: pr.base.ref },
+        // Route the fix round to the SAME substrate the PR came from (Lambda vs Kata),
+        // so claim-sandbox picks the right warm pool. df-run branches its warm-pool on this.
+        { name: "trigger-label", value: triggerLabel },
         // base64 the comment (may be multi-line markdown) so it can't break the
         // claim-sandbox manifest YAML; the coder decodes it. Leave plain empty.
         { name: "iterate-note", value: "" },

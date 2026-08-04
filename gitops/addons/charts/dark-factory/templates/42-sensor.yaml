@@ -59,12 +59,16 @@ spec:
   template:
     serviceAccountName: dark-factory-sensor
   dependencies:
-    - name: issue-labeled
+    # TWO label dependencies — one per substrate — so each fires a DIFFERENT
+    # WorkflowTemplate (Argo Events trigger conditions can only reference dependency
+    # NAMES, not field values, so routing by label ⇒ separate dependencies + triggers):
+    #   issue-labeled-kata   → df-run         (certified Kata pipeline)
+    #   issue-labeled-lambda → df-run-lambda  (Flow D MicroVM-native pipeline)
+    - name: issue-labeled-kata
       eventSourceName: dark-factory-github
       eventName: dark-factory
       filters:
         data:
-          # Only fire when the `dark-factory` label was ADDED to an issue.
           - path: headers.X-Github-Event
             type: string
             value: ["issues"]
@@ -74,6 +78,20 @@ spec:
           - path: body.label.name
             type: string
             value: ["dark-factory"]
+    - name: issue-labeled-lambda
+      eventSourceName: dark-factory-github
+      eventName: dark-factory
+      filters:
+        data:
+          - path: headers.X-Github-Event
+            type: string
+            value: ["issues"]
+          - path: body.action
+            type: string
+            value: ["labeled"]
+          - path: body.label.name
+            type: string
+            value: ["darkfactory-lambda"]
     - name: pr-approved
       eventSourceName: dark-factory-github
       eventName: dark-factory
@@ -129,10 +147,10 @@ spec:
                 path: body.comment.body
 {{- end }}
   triggers:
+    # ---- KATA: dark-factory label → df-run (certified pipeline) ----
     - template:
         name: submit-df-run
-        # With multiple dependencies, each trigger must name the one it fires on.
-        conditions: "issue-labeled"
+        conditions: "issue-labeled-kata"
         argoWorkflow:
           operation: submit
           source:
@@ -146,8 +164,7 @@ spec:
                 # delivery spawned a competing df-run that force-pushed its own
                 # commit and split the commit statuses across SHAs. With a fixed
                 # name, the 2nd+ submit collides (AlreadyExists) and is a harmless
-                # no-op — one issue = one in-flight run. The name is overwritten by
-                # the issue-id parameter below; this is a fallback if that is empty.
+                # no-op — one issue = one in-flight run.
                 name: df-run-pending
                 namespace: {{ .Values.argo.namespace }}
               spec:
@@ -161,40 +178,101 @@ spec:
                     - name: issue-title
                     - name: issue-body
                     - name: base-branch
-          # Map GitHub webhook fields → workflow parameters.
+                    - name: trigger-label
           parameters:
-            # Deterministic workflow name = df-run-<issue-id> (the dedup key).
-            # sprig `int64` renders the large JSON number as a plain integer —
-            # without it Go templating emits scientific notation (4.88e+09),
-            # which is an invalid RFC-1123 metadata.name.
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataTemplate: "df-run-{{ `{{ .Input.body.issue.id | int64 }}` }}"
               dest: metadata.name
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.issue.id
               dest: spec.arguments.parameters.0.value
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.issue.number
               dest: spec.arguments.parameters.1.value
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.repository.full_name
               dest: spec.arguments.parameters.2.value
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.issue.title
               dest: spec.arguments.parameters.3.value
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.issue.body
               dest: spec.arguments.parameters.4.value
             - src:
-                dependencyName: issue-labeled
+                dependencyName: issue-labeled-kata
                 dataKey: body.repository.default_branch
               dest: spec.arguments.parameters.5.value
+            - src:
+                dependencyName: issue-labeled-kata
+                dataKey: body.label.name
+              dest: spec.arguments.parameters.6.value
+
+    # ---- LAMBDA: darkfactory-lambda label → df-run-lambda (Flow D MicroVM) ----
+    - template:
+        name: submit-df-run-lambda
+        conditions: "issue-labeled-lambda"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                name: df-run-lambda-pending
+                namespace: {{ .Values.argo.namespace }}
+              spec:
+                workflowTemplateRef:
+                  name: df-run-lambda
+                arguments:
+                  parameters:
+                    - name: issue-id
+                    - name: issue-number
+                    - name: repo
+                    - name: issue-title
+                    - name: issue-body
+                    - name: base-branch
+                    - name: trigger-label
+          parameters:
+            # Dedup key = df-run-lambda-<issue-NUMBER> (stable across first run + fix
+            # rounds → one workflow name per issue, matching the mvm-<number> CR).
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataTemplate: "df-run-lambda-{{ `{{ .Input.body.issue.number }}` }}"
+              dest: metadata.name
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.issue.id
+              dest: spec.arguments.parameters.0.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.issue.number
+              dest: spec.arguments.parameters.1.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.repository.full_name
+              dest: spec.arguments.parameters.2.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.issue.title
+              dest: spec.arguments.parameters.3.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.issue.body
+              dest: spec.arguments.parameters.4.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.repository.default_branch
+              dest: spec.arguments.parameters.5.value
+            - src:
+                dependencyName: issue-labeled-lambda
+                dataKey: body.label.name
+              dest: spec.arguments.parameters.6.value
 
     # ---- PR review approved → df-merge-teardown (the ONLY merge path) ----
     - template:

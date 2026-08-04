@@ -411,6 +411,27 @@ agent-sandbox:
     coderTemplate:
       bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
 
+# agent-sandbox-lambda — Flow D. A SECOND, opt-in Agent-Sandbox substrate: the coder
+# runs in an AWS Lambda MicroVM (Firecracker) instead of a Kata pod. KRO builds the
+# platform image ONCE (MicrovmImage + build/exec IAM + S3 + logs via ACK GA
+# controllers); a shim (bridge pod + lifecycle controller) drives the per-session VM
+# (RunMicrovm/suspend/resume/TerminateMicrovm) imperatively. Same namespace + operator
+# as agent-sandbox; only ADDS the MicroVM path. DORMANT until the per-cluster overlay
+# flips microvm.enabled=true (needs Managed KRO+ACK, the self-managed ack-lambdamicrovms
+# controller, and a published arm64 coder artifact). Hub-only, sync-wave 2.
+agent-sandbox-lambda:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-sandbox-lambda'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+
 # kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
 # kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
 # agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by
@@ -467,6 +488,49 @@ kata-deploy:
         enabled: true
     runtimeClasses:
       enabled: false
+
+# ack-lambdamicrovms (Flow D) — SELF-MANAGED ACK controller for the pre-GA
+# Lambda MicroVM service (lambdamicrovms.services.k8s.aws: MicrovmImage + Microvm).
+# Self-managed because Managed ACK (EKS Capability) only bundles GA-upstream
+# controllers, and lambdamicrovms is still v1alpha1. Managed ACK (GA iam/s3) and
+# this self-managed controller COEXIST (different CRD groups). When lambdamicrovms
+# goes GA, delete this addon and Managed ACK adopts it — the KRO RGD is unchanged.
+#
+# DISABLED by default: Flow D is dormant until a cluster opts in. Hub-only, like
+# the rest of the sandbox substrate. Installs the OCI chart
+# oci://public.ecr.aws/aws-controllers-k8s/lambdamicrovms-chart. Sync-wave 0 so the
+# CRDs + controller are up before the agent-sandbox chart's MicrovmSandbox RGD
+# (wave 2) references them.
+ack-lambdamicrovms:
+  enabled: true
+  namespace: ack-system
+  chartName: lambdamicrovms-chart
+  defaultVersion: '0.1.1'
+  chartRepository: 'public.ecr.aws/aws-controllers-k8s'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  # Hub-only: the MicroVM substrate lives with the rest of the sandbox capability
+  # on the build plane. alwaysSelector pins generation to environment:
+  # control-plane regardless of useSelectors — never generated on a spoke.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+  # ACK chart reads these at the ROOT of values (chart v0.1.1). The controller
+  # reconciles the Microvm + MicrovmImage CRDs; it uses EKS Pod Identity for AWS
+  # auth (empty SA annotations — the pod-identity association is created out of
+  # band / by the platform), so no IRSA role-arn annotation is set here.
+  valuesObject:
+    aws:
+      region: '{{default "us-west-2" (index .metadata.annotations "aws_region")}}'
+    serviceAccount:
+      create: true
+      name: ack-lambdamicrovms-controller
+    # Cluster-scoped install so the single MicrovmSandbox RGD (any namespace) can
+    # create Microvm/MicrovmImage CRs the controller reconciles.
+    installScope: cluster
+    deletionPolicy: delete
 
 # Dark Factory (Flow B) — Argo Workflows that turn a GitHub issue into a PR by
 # claiming the Flow A warm pool. Hub-only (co-located with Argo Workflows + the

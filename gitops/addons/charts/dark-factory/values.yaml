@@ -18,8 +18,12 @@ argo:
   workflowTtlSecondsAfterCompletion: 604800
 
 warmPool:
-  # The Flow A SandboxWarmPool the factory claims from.
+  # The Flow A SandboxWarmPool the factory claims from (Kata substrate, default).
   name: coder-warmpool
+  # Flow D: the Lambda-MicroVM SandboxWarmPool the factory claims from when the
+  # darkfactory-lambda label fires (coder runs in a MicroVM). Must match
+  # agent-sandbox microvm.warmPool.name.
+  lambdaName: coder-warmpool-microvm
   # Namespace of the pool / where claims + coder pods are created.
   namespace: agent-sandbox-system
 
@@ -252,6 +256,35 @@ reviewImage: 940019131157.dkr.ecr.us-west-2.amazonaws.com/dark-factory-coder:v0.
 iterate:
   enabled: true
   maxIterations: 3
+
+# ── Flow D — Lambda MicroVM substrate (df-run-lambda ONLY) ───────────────────
+# The Kata df-run template has ZERO MicroVM logic (it's byte-identical to the certified
+# Kata pipeline). Flow D runs in a SEPARATE WorkflowTemplate, df-run-lambda, which
+# provisions the Lambda MicroVM directly (Microvm CR + /run), suspends it during review
+# (scale-to-zero), resumes the SAME VM on a fix round, and terminates it at merge. These
+# values feed that template; they mirror the agent-sandbox-lambda chart's microvm.* keys.
+microvm:
+  enabled: true
+  region: us-west-2
+  namespace: agent-sandbox-system     # where the Microvm CR + platform MicrovmSandbox live
+  # aws-cli v2 (has the lambda-microvms verbs); kubectl is fetched at step start.
+  stepImage: public.ecr.aws/aws-cli/aws-cli:latest
+  image:
+    name: coder                       # the platform MicrovmSandbox name (image handoff)
+  defaults:
+    maxIdleDurationSeconds: 1800      # RUNNING-idle backstop (we drive /run immediately)
+    # Lambda caps SUSPEND at 8h (28800s). Use the max so the VM survives the full
+    # review→fix window; df-merge-teardown terminates it explicitly at merge.
+    suspendedDurationSeconds: 28800
+  # Pod Identity: the df-run-lambda steps run as the dark-factory-workflow SA (argo ns)
+  # and call aws lambda-microvms (get/suspend/resume/terminate/create-auth-token). Bind
+  # that SA to the SAME lambda-microvms role the bridge/lifecycle use (least-privilege;
+  # additive; no existing role policy changes). ACK eks PodIdentityAssociation.
+  podIdentity:
+    clusterName: hub
+    accountId: "940019131157"
+    # role: <clusterName>-ack-lambdamicrovms-controller
+  workflowServiceAccount: dark-factory-workflow
 
 # ── Language / stack support ─────────────────────────────────────────────────
 # There is NO per-language profile config here — deliberately. Language support is

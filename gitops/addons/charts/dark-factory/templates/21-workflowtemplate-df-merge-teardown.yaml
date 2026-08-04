@@ -39,9 +39,22 @@ spec:
         tasks:
           - name: merge
             template: merge-pr
+{{- if .Values.microvm.enabled }}
+          # Flow D: this is the FINAL exit — TERMINATE the Lambda MicroVM that df-run-lambda
+          # kept SUSPENDED across the review→fix loop. Deletes the Microvm CR (stable name
+          # mvm-<issue-number>) → the controller TerminateMicrovm's the VM. No-op for Kata
+          # (there is no such CR). Advisory — never fails the merge.
+          - name: microvm-terminate
+            template: microvm-terminate
+            dependencies: [merge]
+{{- end }}
           - name: teardown
             template: teardown-claim
+{{- if .Values.microvm.enabled }}
+            dependencies: [microvm-terminate]
+{{- else }}
             dependencies: [merge]
+{{- end }}
 
     # ---- Merge the PR — only if every dark-factory/* check is green ----
     - name: merge-pr
@@ -91,8 +104,36 @@ spec:
           echo "[df-merge] human-approved PR #${PR} in ${REPO} — verifying + merging"
           node /scripts/merge.js
 
+{{- if .Values.microvm.enabled }}
+    # ---- Flow D: terminate the Lambda MicroVM (final exit) ----
+    # df-run-lambda kept the VM SUSPENDED (CR mvm-<issue-number>) across the review→fix
+    # loop. At merge we DELETE that CR → the controller TerminateMicrovm's the VM. Stable
+    # name, so no Sandbox/annotation lookup needed. No-op for Kata (no such CR). Advisory.
+    - name: microvm-terminate
+      script:
+        image: {{ .Values.microvm.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
+        command: [sh]
+        source: |
+          set -eu
+          NS="{{ .Values.microvm.namespace | default "agent-sandbox-system" }}"
+          MVM="mvm-{{`{{workflow.parameters.issue-number}}`}}"
+          if ! command -v kubectl >/dev/null 2>&1; then
+            KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+            curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl" -o /tmp/kubectl
+            chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+          fi
+          if kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1; then
+            echo "[microvm-terminate] deleting Microvm/${MVM} → controller TerminateMicrovm (final exit)"
+            kubectl delete microvm "${MVM}" -n "${NS}" --wait=false 2>&1 || echo "[microvm-terminate] delete failed (advisory)"
+            kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+          else
+            echo "[microvm-terminate] no Microvm/${MVM} — nothing to terminate (Kata or already gone)"
+          fi
+{{- end }}
+
     # ---- Teardown the claim (operator refills the pool) ----
-    # Delete by the issue-number label (the PR-review event has no issue id).
+    # Delete by the issue-number label (the PR-review event has no issue id). For Lambda
+    # this also removes the (idle) bridge pod; the VM is already terminated above.
     - name: teardown-claim
       resource:
         action: delete

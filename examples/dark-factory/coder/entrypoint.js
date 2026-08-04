@@ -226,28 +226,21 @@ http.createServer((cReq,cRes)=>{
 }
 
 function runCoder(repoDir) {
-  // Bifrost is an Anthropic-compatible gateway. Point Claude Code at its
-  // /anthropic route via ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY. Do NOT set
-  // CLAUDE_CODE_USE_BEDROCK — that flag makes Claude Code use the AWS Bedrock
-  // SDK directly (needs AWS creds in the VM, which we deliberately withhold)
-  // and ignores ANTHROPIC_BASE_URL. Bifrost auth is optional on this platform,
-  // so the key may be absent; send a placeholder so the CLI doesn't prompt.
-  const key = readSecret(BIFROST_KEY_PATH) || "bifrost";
-  // Route through the localhost UA-shim (see startBifrostUaShim) so Bifrost
-  // doesn't apply its broken claude-cli request transform.
-  const base = startBifrostUaShim(`${BIFROST_URL.replace(/\/+$/, "")}/anthropic`);
-  const env = {
+  // Two LLM transports, selected by USE_BEDROCK:
+  //   - Kata (Flow B, default): Bifrost gateway. The Kata VM is credential-less +
+  //     in-cluster, so it reaches models through Bifrost's /anthropic route (which
+  //     also gives centralized Langfuse observability). CLAUDE_CODE_USE_BEDROCK is
+  //     deliberately UNSET here (it would make the CLI use the Bedrock SDK directly
+  //     and ignore ANTHROPIC_BASE_URL).
+  //   - Lambda MicroVM (Flow D): USE_BEDROCK=1. A MicroVM runs OUTSIDE the cluster
+  //     network and can't reach Bifrost's ClusterIP; forcing it back in-cluster
+  //     needed a VPC connector + internal NLB. Instead the MicroVM's EXECUTION ROLE
+  //     grants bedrock:InvokeModel, so Claude Code calls Bedrock directly over public
+  //     egress — no EKS network dependency. Trade-off: these calls bypass Bifrost's
+  //     Langfuse telemetry (documented in flow-d-coder-in-microvm-design.md).
+  const useBedrock = /^(1|true|yes)$/i.test(process.env.USE_BEDROCK || "");
+  const baseEnv = {
     ...process.env,
-    ANTHROPIC_BASE_URL: base,
-    ANTHROPIC_API_KEY: key,
-    // Bifrost maps model ALIASES → Bedrock model IDs. Claude Code's default
-    // model name (e.g. claude-sonnet-4) isn't a Bifrost alias and returns
-    // "provided model identifier is invalid" (400). Use the platform's Bifrost
-    // alias (verified: 'claude-sonnet' → us.anthropic.claude-sonnet-4-5). Set
-    // both the primary and the small/fast model so the CLI never falls back to
-    // an unknown identifier.
-    ANTHROPIC_MODEL: process.env.CODER_MODEL || "claude-sonnet",
-    ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_MODEL || "claude-sonnet",
     // The sandbox runs with readOnlyRootFilesystem, so $HOME (/home/node) is NOT
     // writable. Claude Code writes its config, session state, and — critically —
     // per-invocation SHELL SNAPSHOT files that its Bash tool sources before every
@@ -262,9 +255,41 @@ function runCoder(repoDir) {
     // Non-interactive: never open a browser / prompt for login in headless mode.
     CI: "1",
   };
-  fs.mkdirSync("/tmp/coder-home/.claude", { recursive: true });
-  delete env.CLAUDE_CODE_USE_BEDROCK;
-  console.log(`[coder] LLM: base=${base} model=${env.ANTHROPIC_MODEL}`);
+  let env;
+  if (useBedrock) {
+    // Bedrock-direct: creds come from the MicroVM execution role (Pod Identity /
+    // instance creds); the CLI uses the Bedrock SDK. Model must be a real Bedrock
+    // model ID (NOT a Bifrost alias). AWS_REGION comes from the runHookPayload/env.
+    env = {
+      ...baseEnv,
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: process.env.AWS_REGION || process.env.CODER_REGION || "us-west-2",
+      ANTHROPIC_MODEL: process.env.CODER_MODEL || "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_SMALL_MODEL || process.env.CODER_MODEL || "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    };
+    fs.mkdirSync("/tmp/coder-home/.claude", { recursive: true });
+    console.log(`[coder] LLM: Bedrock-direct region=${env.AWS_REGION} model=${env.ANTHROPIC_MODEL}`);
+  } else {
+    // Bifrost is an Anthropic-compatible gateway. Route through the localhost
+    // UA-shim so Bifrost doesn't apply its broken claude-cli request transform.
+    // Bifrost auth is optional; send a placeholder so the CLI doesn't prompt.
+    const key = readSecret(BIFROST_KEY_PATH) || "bifrost";
+    const base = startBifrostUaShim(`${BIFROST_URL.replace(/\/+$/, "")}/anthropic`);
+    env = {
+      ...baseEnv,
+      ANTHROPIC_BASE_URL: base,
+      ANTHROPIC_API_KEY: key,
+      // Bifrost maps model ALIASES → Bedrock model IDs. Claude Code's default
+      // model name (e.g. claude-sonnet-4) isn't a Bifrost alias and returns
+      // "provided model identifier is invalid" (400). Use the platform's Bifrost
+      // alias (verified: 'claude-sonnet' → us.anthropic.claude-sonnet-4-5).
+      ANTHROPIC_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+      ANTHROPIC_SMALL_FAST_MODEL: process.env.CODER_MODEL || "claude-sonnet",
+    };
+    fs.mkdirSync("/tmp/coder-home/.claude", { recursive: true });
+    delete env.CLAUDE_CODE_USE_BEDROCK;
+    console.log(`[coder] LLM: Bifrost base=${base} model=${env.ANTHROPIC_MODEL}`);
+  }
   // Inherit stdio so the coder CLI's own output + errors stream into the pod
   // logs (kubectl logs), instead of being swallowed by execFileSync's exception.
   const opts = { cwd: repoDir, env, stdio: "inherit", maxBuffer: 64 * 1024 * 1024 };

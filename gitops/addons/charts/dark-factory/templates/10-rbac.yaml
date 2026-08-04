@@ -76,13 +76,29 @@ rules:
     verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
-    verbs: ["get", "list", "watch"]
+    # patch: Flow D suspend/resume flips Sandbox.spec.operatingMode from the workflow.
+    verbs: ["get", "list", "watch", "patch"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "create", "update", "patch"]
+{{- if .Values.microvm.enabled }}
+  # Flow D (df-run-lambda): provision-microvm creates the Microvm CR + its runHookPayload
+  # Secret directly (no SandboxClaim); set-microvm-power reads the CR for the id;
+  # df-merge-teardown deletes the CR at merge. Least-privilege, this namespace only.
+  - apiGroups: ["lambdamicrovms.services.k8s.aws"]
+    resources: ["microvms"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch", "delete"]
+  # Read the platform image handoff (imageARN + execRoleARN) built once by KRO/ACK.
+  - apiGroups: ["kro.run"]
+    resources: ["microvmsandboxes"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -99,6 +115,28 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: dark-factory-workflow-sandbox
+{{- if .Values.microvm.enabled }}
+---
+# Flow D: bind the workflow SA to the lambda-microvms role via EKS Pod Identity, so the
+# df-run-lambda steps (provision/power/terminate) can call aws lambda-microvms
+# (get/suspend/resume/terminate-microvm + create-microvm-auth-token). Reuses the SAME
+# role the bridge/lifecycle controllers already use (user-approved) — additive,
+# no IAM policy change. The ACK eks controller reconciles this into a real EKS association.
+apiVersion: eks.services.k8s.aws/v1alpha1
+kind: PodIdentityAssociation
+metadata:
+  name: {{ .Values.microvm.podIdentity.clusterName }}-dark-factory-workflow
+  namespace: {{ .Values.warmPool.namespace }}
+  labels:
+    {{- include "dark-factory.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  clusterName: {{ .Values.microvm.podIdentity.clusterName }}
+  namespace: {{ .Values.argo.namespace }}
+  serviceAccount: {{ .Values.microvm.workflowServiceAccount | default "dark-factory-workflow" }}
+  roleARN: "arn:aws:iam::{{ .Values.microvm.podIdentity.accountId }}:role/{{ .Values.microvm.podIdentity.clusterName }}-ack-lambdamicrovms-controller"
+{{- end }}
 {{- if .Values.deployTest.enabled }}
 ---
 # P4 deploy-test: the ONLY cluster-scoped grant. Lets the workflow create/delete
