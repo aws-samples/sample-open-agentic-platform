@@ -51,6 +51,13 @@ function startCoder(payload) {
     DF_BASE_BRANCH: d.baseBranch || "main",
     DF_ISSUE_TITLE: d.issueTitle || "",
   };
+  // Fix round (df-iterate): the bridge folds the human's change request into the
+  // payload as iterateNoteB64. Without this, a Lambda fix round re-runs the coder
+  // with NO instructions → it sees the PR already open and reports "done" on the
+  // old sha with zero changes (the Kata path injects DF_ITERATE_NOTE_B64 as claim
+  // env; the MicroVM has no claim env, so it must ride in on the runHookPayload).
+  if (d.iterateNoteB64) env.DF_ITERATE_NOTE_B64 = d.iterateNoteB64;
+  if (d.iterateNote) env.DF_ITERATE_NOTE = d.iterateNote;
   if (d.model) env.CODER_MODEL = d.model;
   console.log(`[hook-server] /run → spawning coder for issue #${env.DF_ISSUE_NUMBER} repo=${env.DF_REPO}`);
   // Capture the coder's stdout+stderr to /tmp/coder.log so /logs can return it —

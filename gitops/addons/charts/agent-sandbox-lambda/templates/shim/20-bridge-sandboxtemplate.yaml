@@ -203,7 +203,13 @@ data:
     [ -z "${GH_TOKEN}" ] && echo "[microvm-bridge] WARN: no gh-token mounted — coder cannot open a PR"
     # python3 (node is absent in the aws-cli image); json.dumps escapes token/title. One
     # line so it stays inside the bridge.sh: | YAML block scalar.
-    PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE","")}))')
+    # FIX ROUND: df-run injects DF_ITERATE_NOTE_B64 (the human change request) into this
+    # `coder` container's env (same claim contract as Kata). The MicroVM coder has no
+    # claim env, so fold the note into the runHookPayload — hook-server maps it back to
+    # the coder's DF_ITERATE_NOTE_B64. Without this a Lambda fix round runs with NO
+    # instructions and reports "done" on the OLD sha (zero commits).
+    [ -n "${DF_ITERATE_NOTE_B64:-}" ] && echo "[microvm-bridge] fix round: forwarding iterate note to coder"
+    PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE",""),"iterateNoteB64":e("DF_ITERATE_NOTE_B64",""),"iterateNote":e("DF_ITERATE_NOTE","")}))')
 
     MVM="mvm-${DF_ISSUE_NUMBER}"          # Microvm CR + payload Secret name for this session
     # Build BOTH manifests as JSON with python3 and pipe to kubectl apply. JSON (not a
