@@ -28,7 +28,7 @@ microvm:
   # `coder-microvm-artifacts`). Previously pointed at a hand-named bucket that the RGD
   # never provisioned, so the image build hit NoSuchBucket/CREATE_FAILED. Publish the
   # artifact zip to this exact bucket/key.
-  codeArtifactUri: "s3://coder-microvm-artifacts/coder-v0.2.5-arm64.zip"
+  codeArtifactUri: "s3://coder-microvm-artifacts/coder-v0.2.5-arm64-r2.zip"
   image:
     enabled: true
     name: coder
