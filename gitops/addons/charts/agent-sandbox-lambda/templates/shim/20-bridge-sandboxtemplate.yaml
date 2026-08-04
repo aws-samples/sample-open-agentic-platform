@@ -212,20 +212,25 @@ data:
     PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE",""),"iterateNoteB64":e("DF_ITERATE_NOTE_B64",""),"iterateNote":e("DF_ITERATE_NOTE","")}))')
 
     MVM="mvm-${DF_ISSUE_NUMBER}"          # Microvm CR + payload Secret name for this session
-    # FRESH VM PER FIX ROUND: the CR name is stable (mvm-<issue>), so on a fix round the
-    # previous round's VM is still around — SUSPENDED after the first PR. `kubectl apply`
-    # on the same name RESUMES that snapshot, which restores hook-server's one-shot
-    # coderStarted=true guard in memory → the second /run is IGNORED and the coder never
-    # re-runs (observed: fix round reports "done" on the OLD sha, zero commits, even with
-    # the iterate note forwarded). The documented semantic is "a fresh Microvm CR per fix
-    # round" — so delete the stale CR + payload Secret and wait for TerminateMicrovm before
-    # recreating, guaranteeing a clean hook-server that accepts /run.
+    # RESUME-ON-FIX-ROUND (the suspend/resume highlight): the CR name is stable
+    # (mvm-<issue>). On a fix round the previous round's VM is still around — SUSPENDED
+    # after the first PR (idlePolicy.autoResumeEnabled=false keeps it down). Rather than
+    # terminate + rebuild a fresh VM, we RESUME the suspended one via the Sandbox CRD:
+    # flip operatingMode=Running → the microvm-lifecycle controller calls resume-microvm →
+    # the SAME VM (memory+disk preserved) comes back, and hook-server accepts a NEW /run
+    # because its guard is keyed on a per-invocation run-id (issue+note hash), not a
+    # one-shot boolean (see coder-microvm/hook-server.js). This is the whole Flow D value
+    # prop: scale-to-zero between rounds, warm-resume for the fix. Fresh VMs are only made
+    # on the FIRST round (no existing CR).
+    RESUME_ROUND=""
     if kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1; then
-      echo "[microvm-bridge] fix round: terminating stale VM ${MVM} to get a fresh hook-server"
-      kubectl delete microvm "${MVM}" -n "${NS}" --wait=false >/dev/null 2>&1 || true
-      kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
-      i=0; while [ "$i" -lt 60 ]; do kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1 || break; i=$((i+1)); sleep 5; done
-      echo "[microvm-bridge] stale VM ${MVM} gone (waited ${i}x5s) — creating fresh"
+      echo "[microvm-bridge] fix round: resuming suspended VM ${MVM} via Sandbox.operatingMode=Running"
+      kubectl patch sandbox "${SANDBOX_NAME}" -n "${NS}" --type merge \
+        -p '{"spec":{"operatingMode":"Running"}}' >/dev/null 2>&1 \
+        && echo "[microvm-bridge] operatingMode=Running set — microvm-lifecycle will resume the VM" \
+        || echo "[microvm-bridge] WARN: could not set operatingMode=Running"
+      # Refresh the payload Secret so the controller/hook sees the NEW iterate note.
+      RESUME_ROUND=1
     fi
     # Build BOTH manifests as JSON with python3 and pipe to kubectl apply. JSON (not a
     # heredoc) on purpose: a heredoc's column-0 EOF terminator breaks out of the
@@ -238,7 +243,7 @@ data:
     # Microvm CR: ingress ALL_INGRESS (so the bridge can reach the endpoint to drive /run),
     # egress INTERNET_EGRESS (Bedrock + git/gh), runtime logging → CloudWatch (logStream
     # 'runtime' so the coder's stdout is visible, separate from build logs).
-    MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" INGRESS="${INGRESS}" REGION="${REGION}" LOGGRP="${LOGGRP}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; r=e["REGION"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"ingressNetworkConnectors":[e["INGRESS"]],"egressNetworkConnectors":["arn:aws:lambda:"+r+":aws:network-connector:aws-network-connector:INTERNET_EGRESS"],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"logging":{"cloudWatch":{"logGroup":e["LOGGRP"],"logStream":"runtime-"+mvm}},"idlePolicy":{"autoResumeEnabled":True,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] Microvm CR apply failed"; exit 1; }
+    MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" INGRESS="${INGRESS}" REGION="${REGION}" LOGGRP="${LOGGRP}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; r=e["REGION"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"ingressNetworkConnectors":[e["INGRESS"]],"egressNetworkConnectors":["arn:aws:lambda:"+r+":aws:network-connector:aws-network-connector:INTERNET_EGRESS"],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"logging":{"cloudWatch":{"logGroup":e["LOGGRP"],"logStream":"runtime-"+mvm}},"idlePolicy":{"autoResumeEnabled":False,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] Microvm CR apply failed"; exit 1; }
 
     # 4) Wait for the controller to report the running VM's id, record it on the Sandbox
     #    (lifecycle controller reads this to suspend/resume THIS session's VM).
@@ -292,33 +297,53 @@ data:
     }
     trap cleanup EXIT INT TERM
 
-    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll the CR state + the
-    #    in-VM coder /logs so the coder run is OBSERVABLE in the bridge logs (runtime
-    #    CloudWatch routing is unreliable on this runtime).
-    #    SUSPEND-AFTER-CODE (Flow D behavior, done HERE — not as a df-run DAG step, so the
-    #    pipeline graph stays substrate-agnostic/clean for Kata): once the coder has pushed
-    #    its PR (log shows "PR opened"/"done"), suspend the MicroVM to free compute while the
-    #    review gates run; the VM's memory+disk persist for a resume on the next fix round.
+    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll the in-VM coder /logs
+    #    (OBSERVABILITY — runtime CloudWatch routing is unreliable on this runtime) ONLY
+    #    until the coder pushes its PR. Then suspend and STOP touching the endpoint.
+    #
+    #    SUSPEND-VIA-CRD (the Flow D highlight): suspend/resume is driven declaratively
+    #    through Sandbox.spec.operatingMode, reconciled by the microvm-lifecycle controller
+    #    (template 30) — NOT by an imperative suspend-microvm call here. Two reasons this
+    #    matters and why the old imperative path FAILED to keep the VM suspended:
+    #      (a) The CR is created with idlePolicy.autoResumeEnabled=FALSE, so a suspended VM
+    #          stays suspended. With autoResume=true (the old value) ANY hit to the VM
+    #          endpoint auto-resumes it — and this loop used to curl /logs every 20s
+    #          FOREVER, so the VM bounced back to RUNNING seconds after every suspend
+    #          (observed in the Lambda console: never actually suspended).
+    #      (b) Routing suspend through operatingMode is the whole point — it shows the
+    #          Agent Sandbox CRD driving MicroVM scale-to-zero via the shim controller.
+    #    So: once the coder pushes, set operatingMode=Suspended (controller suspends the
+    #    VM), then switch to a lightweight CR-existence watch that NEVER touches the
+    #    endpoint again. The VM's memory+disk persist; a fix round flips operatingMode
+    #    back to Running (controller resumes) and the pipeline claims a fresh session.
     SUSPENDED_ONCE=""
     echo "[microvm-bridge] Microvm ${MVM} running — pod now mirrors its lifecycle."
     while true; do
+      # CR gone/terminating => real teardown => exit (cleanup trap handles CR delete).
       ST=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.state}' 2>/dev/null || echo "GONE")
       case "${ST}" in
         TERMINATED|TERMINATING|GONE|"") echo "[microvm-bridge] Microvm state=${ST:-gone} — exiting."; break ;;
       esac
-      if [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
+      if [ -z "${SUSPENDED_ONCE}" ] && [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
+        # Pre-suspend: poll /logs for observability + to detect "coder pushed PR".
         LOG=$(curl -sS -m 10 "https://${EP}/logs" -H "X-aws-proxy-auth: ${TOKEN}" 2>/dev/null \
           | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("log","")[-800:])' 2>/dev/null || echo "")
         [ -n "${LOG}" ] && echo "[microvm-bridge] coder-log-tail: $(echo "$LOG" | tail -1)"
-        # Coder finished (pushed PR) → suspend the VM once (Flow D), if not on a Kata run.
-        if [ -z "${SUSPENDED_ONCE}" ] && echo "${LOG}" | grep -qiE 'PR opened|done — PR|status success'; then
-          echo "[microvm-bridge] coder pushed PR — suspending MicroVM ${VMID} (Flow D free-compute-during-review)"
-          aws lambda-microvms suspend-microvm --region "${REGION}" --microvm-identifier "${VMID}" >/dev/null 2>&1 \
-            && echo "[microvm-bridge] suspend-microvm ok" || echo "[microvm-bridge] suspend-microvm skipped/failed"
+        if echo "${LOG}" | grep -qiE 'PR opened|done — PR|status success'; then
+          echo "[microvm-bridge] coder pushed PR — requesting SUSPEND via Sandbox.operatingMode (controller reconciles)"
+          kubectl patch sandbox "${SANDBOX_NAME}" -n "${NS}" --type merge \
+            -p '{"spec":{"operatingMode":"Suspended"}}' >/dev/null 2>&1 \
+            && echo "[microvm-bridge] operatingMode=Suspended set — microvm-lifecycle will suspend ${VMID}" \
+            || echo "[microvm-bridge] WARN: could not set operatingMode=Suspended"
           SUSPENDED_ONCE=1
         fi
+        sleep 20
+      else
+        # Post-suspend: do NOT touch the endpoint (autoResume=false, but never poke it
+        # anyway) — just watch for teardown. Longer interval; endpoint stays quiet so the
+        # VM stays SUSPENDED in the console until a fix round resumes it via operatingMode.
+        sleep 30
       fi
-      sleep 20
     done
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1

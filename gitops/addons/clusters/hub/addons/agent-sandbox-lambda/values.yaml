@@ -28,11 +28,13 @@ microvm:
   # `coder-microvm-artifacts`). Previously pointed at a hand-named bucket that the RGD
   # never provisioned, so the image build hit NoSuchBucket/CREATE_FAILED. Publish the
   # artifact zip to this exact bucket/key.
-  # r6: fixed the Lambda fix-round (df-iterate) path — hook-server now maps the
-  # iterate note (folded into runHookPayload by the bridge) to the coder's
-  # DF_ITERATE_NOTE_B64, so a fix round actually revises the branch instead of
-  # re-running with no instructions and reporting "done" on the old sha.
-  codeArtifactUri: "s3://coder-microvm-artifacts/coder-v0.2.5-arm64-r6.zip"
+  # r7: hook-server /run guard is now keyed on a per-invocation run-id (issue+note
+  # hash) instead of a one-shot boolean, so a RESUMED VM (fix round) accepts a fresh
+  # /run and re-runs the coder — the resume path was previously a no-op because the
+  # snapshot froze coderStarted=true. Also truncates /tmp/coder.log per run so the
+  # bridge's "PR pushed" grep doesn't match the previous round's line.
+  # r6: fix-round iterate note forwarded (bridge payload -> hook-server -> coder env).
+  codeArtifactUri: "s3://coder-microvm-artifacts/coder-v0.2.5-arm64-r7.zip"
   image:
     enabled: true
     name: coder

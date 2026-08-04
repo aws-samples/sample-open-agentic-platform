@@ -26,13 +26,39 @@ const { spawn } = require("child_process");
 
 const PORT = parseInt(process.env.HOOKS_PORT || "8080", 10);
 const SECRETS_DIR = "/tmp/secrets";
-let coderStarted = false;
+// Run-id of the coder invocation currently in flight (or last completed). NOT a plain
+// boolean: the VM is SUSPENDED after the first PR and RESUMED for a fix round, and the
+// resumed process keeps its in-memory state — a one-shot `coderStarted=true` guard,
+// frozen in the snapshot, made the resumed VM ignore the fix round's /run entirely (the
+// coder never re-ran; the fix round reported "done" on the old sha). Instead we key on a
+// per-invocation run-id (issue + iterate-note hash): a /run whose id differs from the
+// one in flight starts a fresh coder (this is a new round after a resume); a /run that
+// repeats the current id is a duplicate webhook and is ignored.
+let currentRunId = null;
+let coderRunning = false;
+
+function runIdOf(d) {
+  const note = d.iterateNoteB64 || d.iterateNote || "";
+  // Cheap stable hash of issue+note so a fix round (new note) => new id => re-run.
+  let h = 0; const s = `${d.issueNumber || ""}:${note}`;
+  for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; }
+  return `${d.issueNumber || "?"}#${(h >>> 0).toString(36)}`;
+}
 
 function startCoder(payload) {
-  if (coderStarted) { console.log("[hook-server] /run again — already started, ignoring"); return; }
-  coderStarted = true;
   let d = {};
   try { d = JSON.parse(payload || "{}"); } catch (e) { console.log("[hook-server] payload not JSON:", e.message); }
+  const rid = runIdOf(d);
+  if (rid === currentRunId) { console.log(`[hook-server] /run duplicate for ${rid} — ignoring`); return; }
+  if (coderRunning) { console.log(`[hook-server] /run for ${rid} but ${currentRunId} still running — ignoring`); return; }
+  const isRerun = currentRunId !== null;   // a prior run existed => this is a post-resume fix round
+  currentRunId = rid;
+  coderRunning = true;
+  // Truncate the coder log on each new run. Otherwise the previous round's
+  // "done — PR opened on <old sha>" line lingers and the bridge's /logs grep matches it
+  // instantly, suspending the VM before the fix-round coder has done anything.
+  try { fs.writeFileSync("/tmp/coder.log", ""); } catch {}
+  console.log(`[hook-server] /run accepted run-id=${rid}${isRerun ? " (post-resume re-run)" : ""}`);
   fs.mkdirSync(SECRETS_DIR, { recursive: true, mode: 0o700 });
   if (d.ghToken) fs.writeFileSync(`${SECRETS_DIR}/gh-token`, d.ghToken, { mode: 0o400 });
   const env = {
@@ -66,7 +92,10 @@ function startCoder(payload) {
   const logFd = fs.openSync("/tmp/coder.log", "a");
   const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: ["ignore", logFd, logFd], detached: true });
   child.unref();
-  child.on("error", (e) => { try { fs.appendFileSync("/tmp/coder.log", "SPAWN-ERROR: " + e.message + "\n"); } catch {} });
+  child.on("error", (e) => { coderRunning = false; try { fs.appendFileSync("/tmp/coder.log", "SPAWN-ERROR: " + e.message + "\n"); } catch {} });
+  // Clear the in-flight flag when the coder exits so a resumed VM's next /run (fix round)
+  // is accepted. `unref`'d + detached, but we still get 'exit' while this process lives.
+  child.on("exit", (code) => { coderRunning = false; console.log(`[hook-server] coder run-id=${currentRunId} exited code=${code}`); });
 }
 
 const server = http.createServer((req, res) => {
@@ -78,7 +107,7 @@ const server = http.createServer((req, res) => {
       case "/ready":     return ok({ status: "ready" });
       case "/validate":  return ok({ status: "valid" });
       case "/run":       startCoder(body); return ok({ status: "started" });
-      case "/logs":      { let l=""; try { l=fs.readFileSync("/tmp/coder.log","utf8"); } catch {} return ok({ status:"ok", started: coderStarted, log: l.slice(-6000) }); }
+      case "/logs":      { let l=""; try { l=fs.readFileSync("/tmp/coder.log","utf8"); } catch {} return ok({ status:"ok", runId: currentRunId, running: coderRunning, log: l.slice(-6000) }); }
       case "/suspend":   return ok({ status: "suspended" });
       case "/resume":    return ok({ status: "resumed" });
       case "/terminate": return ok({ status: "terminated" });
