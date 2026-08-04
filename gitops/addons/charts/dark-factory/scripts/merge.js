@@ -87,8 +87,19 @@ async function main() {
   // if the Security or DevOps agent BOT posted findings (a review body reporting
   // "N finding(s)" or change-requesting inline review comments).
   try {
-    const reviews = (await api("GET", `/repos/${REPO}/pulls/${PR}/reviews?per_page=100`)) || [];
-    const comments = (await api("GET", `/repos/${REPO}/pulls/${PR}/comments?per_page=100`)) || [];
+    const allReviews = (await api("GET", `/repos/${REPO}/pulls/${PR}/reviews?per_page=100`)) || [];
+    const allComments = (await api("GET", `/repos/${REPO}/pulls/${PR}/comments?per_page=100`)) || [];
+    // CRITICAL: only count findings on the CURRENT head sha. A fix round pushes a NEW
+    // commit and the agents re-review it (posting fresh commit STATUSES, already checked
+    // green above); their earlier REVIEW bodies/inline comments remain attached to the
+    // OLD (superseded) sha. Without this filter merge.js counts those stale first-round
+    // findings and refuses to merge every PR that was ever fixed — observed on PR #136:
+    // security/devops reviews on sha 3b11b497 (round 1) blocked a merge whose head
+    // 8089fa0a (fix round) was fully green. Match reviews by commit_id and inline
+    // comments by original_commit_id/commit_id to the head sha.
+    const onHead = (c) => c === sha;
+    const reviews = allReviews.filter((r) => onHead(r.commit_id));
+    const comments = allComments.filter((c) => onHead(c.commit_id) || onHead(c.original_commit_id));
     const isSecBot = (l) => /aws-security-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
     const isDevBot = (l) => /aws-devops-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
     const botFindings = (pred) => {
