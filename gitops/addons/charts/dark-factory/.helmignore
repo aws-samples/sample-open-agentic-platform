@@ -1,0 +1,8 @@
+# Terraform working files — iam/securityagent.tf is committed as code, but the
+# provider plugins, state, and lock are NOT chart content (and state may hold secrets).
+iam/.terraform
+iam/.terraform.lock.hcl
+iam/terraform.tfstate
+iam/terraform.tfstate.backup
+iam/_provider.tf
+*.zip

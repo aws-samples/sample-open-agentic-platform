@@ -358,3 +358,195 @@ oam-agent-components:
     global:
       awsRegion: '{{.metadata.annotations.aws_region}}'
       clusterName: '{{.metadata.annotations.aws_cluster_name}}'
+
+# Agent Sandbox OPERATOR (upstream agent-sandbox v0.5.1) — the controller +
+# Sandbox/SandboxClaim/SandboxTemplate/SandboxWarmPool CRDs + webhooks. Vendored
+# manifest applied directly (it's a self-contained install; the ~400KB CRD set
+# is too large for a Helm-templated chart). ServerSideApply + Replace handle the
+# oversized CRDs. Sync-wave 0: CRDs + operator MUST exist before the kata-deploy
+# runtime (wave 1) and the agent-sandbox chart CRs (wave 2).
+agent-sandbox-operator:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.5.1'
+  path: 'gitops/addons/charts/agent-sandbox/upstream'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  syncPolicyAppSet:
+    preserveResourcesOnDeletion: false
+  # Agent Sandbox is a HUB-only capability. The Dark Factory (Flow B) is a
+  # pre-dev build/author activity that writes code + holds GitHub write access —
+  # it belongs on the hub (build plane, co-located with Argo Workflows), not on
+  # a spoke (deploy/run plane hosting enterprise workloads). alwaysSelector is
+  # honored regardless of the global useSelectors flag, so the generated
+  # ApplicationSet matches ONLY the cluster whose `environment` label is
+  # `control-plane` (the hub) — spoke apps are pruned. Kata runs on a dedicated
+  # tainted nested-virt MNG (Auto Mode can't host it) — see docs/dark-factory §10.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+
+# Agent Sandbox capability chart — RuntimeClasses, kata-readiness (removes the
+# runtime-not-ready startup taint), coder SandboxTemplate, SandboxWarmPool, and
+# the egress NetworkPolicy. Sync-wave 2: after the operator (wave 0) + kata
+# runtime (wave 1). Consumers (the Dark Factory, Flow B) then claim from the
+# warm pool via a SandboxClaim(warmPoolRef).
+agent-sandbox:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-sandbox'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  # Hub-only (see agent-sandbox-operator note above). alwaysSelector pins
+  # generation to the `environment: control-plane` cluster regardless of useSelectors.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+  valuesObject:
+    coderTemplate:
+      bifrostUrl: '{{default "http://bifrost.bifrost.svc.cluster.local:8080" (index .metadata.annotations "bifrost_url")}}'
+
+# agent-sandbox-lambda — Flow D. A SECOND, opt-in Agent-Sandbox substrate: the coder
+# runs in an AWS Lambda MicroVM (Firecracker) instead of a Kata pod. KRO builds the
+# platform image ONCE (MicrovmImage + build/exec IAM + S3 + logs via ACK GA
+# controllers); a shim (bridge pod + lifecycle controller) drives the per-session VM
+# (RunMicrovm/suspend/resume/TerminateMicrovm) imperatively. Same namespace + operator
+# as agent-sandbox; only ADDS the MicroVM path. DORMANT until the per-cluster overlay
+# flips microvm.enabled=true (needs Managed KRO+ACK, the self-managed ack-lambdamicrovms
+# controller, and a published arm64 coder artifact). Hub-only, sync-wave 2.
+agent-sandbox-lambda:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/agent-sandbox-lambda'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '2'
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+
+# kata-deploy — installs the Kata runtime (containerd handlers for kata-clh /
+# kata-qemu) on the tainted kata MNG nodes. Separate app (not a subchart dep of
+# agent-sandbox) so ArgoCD pulls the upstream OCI chart directly. Gated by
+# enable_agent_sandbox_kata — only clusters with a kata-capable nested-virt MNG
+# (see docs/dark-factory §12a) should carry that label. Sync-wave 1: runtime is
+# installed on nodes before the Sandbox operator (wave 2) schedules VMs.
+kata-deploy:
+  enabled: true
+  namespace: kube-system
+  chartName: kata-deploy
+  defaultVersion: '3.32.0'
+  # OCI chart at oci://ghcr.io/kata-containers/kata-deploy-charts/kata-deploy.
+  # Do NOT set chartNamespace — the appset would build chart=<ns>/<name>
+  # (kata-containers/kata-deploy) producing a wrong OCI path. The namespace is
+  # already part of chartRepository.
+  chartRepository: 'ghcr.io/kata-containers/kata-deploy-charts'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '1'
+  # Hub-only: the kata runtime is only installed where the nested-virt MNG
+  # exists (the hub). alwaysSelector pins generation to `environment:
+  # control-plane` regardless of useSelectors — no spoke kata-deploy app.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+  # The kata-deploy OCI chart reads these keys at the ROOT of values (verified
+  # against chart v3.32.0 templates/kata-deploy.yaml → .Values.nodeSelector /
+  # .Values.tolerations). Do NOT nest them under a `kata-deploy:` key.
+  valuesObject:
+    image:
+      reference: quay.io/kata-containers/kata-deploy
+      tag: '3.32.0'
+    # Run the DaemonSet ONLY on the tainted nested-virt kata node — never on the
+    # hub's Auto Mode control-plane nodes (where it crashes on the TEE/nydus
+    # snapshotter and would churn containerd).
+    nodeSelector:
+      kata-enabled: 'true'
+    tolerations:
+      - key: kata
+        operator: Equal
+        value: 'true'
+        effect: NoSchedule
+      - key: katacontainers.io/runtime-not-ready
+        operator: Exists
+        effect: NoSchedule
+    # Only install the two VMMs the platform uses (clh default + qemu); the
+    # RuntimeClasses are rendered by the agent-sandbox chart, not kata-deploy.
+    shims:
+      disableAll: true
+      qemu:
+        enabled: true
+      clh:
+        enabled: true
+    runtimeClasses:
+      enabled: false
+
+# ack-lambdamicrovms (Flow D) — SELF-MANAGED ACK controller for the pre-GA
+# Lambda MicroVM service (lambdamicrovms.services.k8s.aws: MicrovmImage + Microvm).
+# Self-managed because Managed ACK (EKS Capability) only bundles GA-upstream
+# controllers, and lambdamicrovms is still v1alpha1. Managed ACK (GA iam/s3) and
+# this self-managed controller COEXIST (different CRD groups). When lambdamicrovms
+# goes GA, delete this addon and Managed ACK adopts it — the KRO RGD is unchanged.
+#
+# DISABLED by default: Flow D is dormant until a cluster opts in. Hub-only, like
+# the rest of the sandbox substrate. Installs the OCI chart
+# oci://public.ecr.aws/aws-controllers-k8s/lambdamicrovms-chart. Sync-wave 0 so the
+# CRDs + controller are up before the agent-sandbox chart's MicrovmSandbox RGD
+# (wave 2) references them.
+ack-lambdamicrovms:
+  enabled: true
+  namespace: ack-system
+  chartName: lambdamicrovms-chart
+  defaultVersion: '0.1.1'
+  chartRepository: 'public.ecr.aws/aws-controllers-k8s'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '0'
+  # Hub-only: the MicroVM substrate lives with the rest of the sandbox capability
+  # on the build plane. alwaysSelector pins generation to environment:
+  # control-plane regardless of useSelectors — never generated on a spoke.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
+  # ACK chart reads these at the ROOT of values (chart v0.1.1). The controller
+  # reconciles the Microvm + MicrovmImage CRDs; it uses EKS Pod Identity for AWS
+  # auth (empty SA annotations — the pod-identity association is created out of
+  # band / by the platform), so no IRSA role-arn annotation is set here.
+  valuesObject:
+    aws:
+      region: '{{default "us-west-2" (index .metadata.annotations "aws_region")}}'
+    serviceAccount:
+      create: true
+      name: ack-lambdamicrovms-controller
+    # Cluster-scoped install so the single MicrovmSandbox RGD (any namespace) can
+    # create Microvm/MicrovmImage CRs the controller reconciles.
+    installScope: cluster
+    deletionPolicy: delete
+
+# Dark Factory (Flow B) — Argo Workflows that turn a GitHub issue into a PR by
+# claiming the Flow A warm pool. Hub-only (co-located with Argo Workflows + the
+# sandbox pool); sync-wave 3 so it lands after the agent-sandbox capability
+# (wave 2). Deploys the WorkflowTemplates + workflow RBAC.
+dark-factory:
+  enabled: true
+  namespace: agent-sandbox-system
+  defaultVersion: '0.1.0'
+  path: 'gitops/addons/charts/dark-factory'
+  annotationsAppSet:
+    argocd.argoproj.io/sync-wave: '3'
+  # Hub-only. alwaysSelector pins generation to environment: control-plane
+  # regardless of useSelectors — never generated on a spoke.
+  alwaysSelector:
+    matchExpressions:
+      - key: environment
+        operator: In
+        values: ['control-plane']
