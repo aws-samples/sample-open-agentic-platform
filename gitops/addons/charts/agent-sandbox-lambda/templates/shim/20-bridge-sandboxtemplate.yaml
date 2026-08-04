@@ -210,9 +210,14 @@ data:
     # heredoc) on purpose: a heredoc's column-0 EOF terminator breaks out of the
     # bridge.sh: | YAML block scalar. JSON is valid YAML and stays on indented lines.
     MAXIDLE={{ .Values.microvm.defaults.maxIdleDurationSeconds }}; SUSPDUR={{ .Values.microvm.defaults.suspendedDurationSeconds }}
-    echo "[microvm-bridge] writing payload Secret + Microvm CR ${MVM} (fires /run for issue #${DF_ISSUE_NUMBER})..."
-    MVM="${MVM}" NS="${NS}" PAYLOAD="${PAYLOAD}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":mvm+"-payload","namespace":ns},"type":"Opaque","stringData":{"payload":e["PAYLOAD"]}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] payload secret apply failed"; exit 1; }
-    MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"idlePolicy":{"autoResumeEnabled":True,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] Microvm CR apply failed"; exit 1; }
+    INGRESS="arn:aws:lambda:${REGION}:aws:network-connector:aws-network-connector:ALL_INGRESS"
+    LOGGRP="/aws/lambda/microvms/{{ .Values.microvm.image.name | default "coder" }}-image"
+    echo "[microvm-bridge] writing payload Secret + Microvm CR ${MVM} for issue #${DF_ISSUE_NUMBER}..."
+    MVM="${MVM}" NS="${NS}" PAYLOAD="${PAYLOAD}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":mvm+"-payload","namespace":ns},"type":"Opaque","stringData":{"payload":e["PAYLOAD"]}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] payload secret apply failed"; exit 1; }
+    # Microvm CR: ingress ALL_INGRESS (so the bridge can reach the endpoint to drive /run),
+    # egress INTERNET_EGRESS (Bedrock + git/gh), runtime logging → CloudWatch (logStream
+    # 'runtime' so the coder's stdout is visible, separate from build logs).
+    MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" INGRESS="${INGRESS}" REGION="${REGION}" LOGGRP="${LOGGRP}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; r=e["REGION"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"ingressNetworkConnectors":[e["INGRESS"]],"egressNetworkConnectors":["arn:aws:lambda:"+r+":aws:network-connector:aws-network-connector:INTERNET_EGRESS"],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"logging":{"cloudWatch":{"logGroup":e["LOGGRP"],"logStream":"runtime-"+mvm}},"idlePolicy":{"autoResumeEnabled":True,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[microvm-bridge] Microvm CR apply failed"; exit 1; }
 
     # 4) Wait for the controller to report the running VM's id, record it on the Sandbox
     #    (lifecycle controller reads this to suspend/resume THIS session's VM).
@@ -225,6 +230,32 @@ data:
     echo "[microvm-bridge] Microvm ${MVM} -> ${VMID:-<pending>}"
     [ -n "${VMID}" ] && kubectl annotate sandbox "${SANDBOX_NAME}" -n "${NS}" \
       "microvm-lifecycle.agents.x-k8s.io/microvm-id=${VMID}" --overwrite >/dev/null 2>&1 || true
+
+    # 4b) DRIVE the coder: wait for RUNNING + an endpoint, mint an auth token, and POST the
+    #     payload to /run on the endpoint. This is the deterministic invocation (verified by
+    #     probe): the service's internal /run auto-fire wasn't reliably starting the coder, so
+    #     the bridge drives it explicitly like the reference run_session. hook-server's /run
+    #     background-spawns the coder (returns fast); df-run's await-coder polls GitHub for the PR.
+    if [ -n "${VMID}" ]; then
+      EP=""; i=0
+      while [ "$i" -lt 60 ]; do
+        S=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" --query 'state' --output text 2>/dev/null || echo "")
+        EP=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" --query 'endpoint' --output text 2>/dev/null || echo "")
+        [ "$S" = "RUNNING" ] && [ -n "${EP}" ] && [ "${EP}" != "None" ] && break
+        i=$((i+1)); sleep 5
+      done
+      TOKEN=$(aws lambda-microvms create-microvm-auth-token --region "${REGION}" --microvm-identifier "${VMID}" \
+        --expiration-in-minutes 60 --allowed-ports 'port=8080' 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)["authToken"]["X-aws-proxy-auth"])' 2>/dev/null || echo "")
+      if [ -n "${EP}" ] && [ -n "${TOKEN}" ]; then
+        echo "[microvm-bridge] driving coder: POST /run on ${EP}"
+        RC=$(curl -sS -m 30 -o /tmp/run.out -w '%{http_code}' -X POST "https://${EP}/run" \
+          -H "X-aws-proxy-auth: ${TOKEN}" -H 'Content-Type: application/json' -d "${PAYLOAD}" 2>/tmp/run.err || echo "000")
+        echo "[microvm-bridge] /run -> HTTP ${RC} $(cat /tmp/run.out 2>/dev/null | head -c 120)"
+      else
+        echo "[microvm-bridge] WARN: no endpoint/token — cannot drive /run (ep=${EP:-none} token=$([ -n "${TOKEN}" ] && echo yes || echo no))"
+      fi
+    fi
 
     # 5) Teardown on real claim end (NOT on suspend): deleting the Microvm CR makes the
     #    controller terminate the VM. On SUSPEND the pod stops but the CR + VM must stay
