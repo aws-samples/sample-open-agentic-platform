@@ -99,8 +99,19 @@ microvm:
   #   coder codes → SUSPEND → agents review → (fix findings) → RESUME same VM →
   #   … loop until cleared → merge/exit → TERMINATE.
   defaults:
-    maxIdleDurationSeconds: 900
-    suspendedDurationSeconds: 300
+    # maxIdleDurationSeconds: how long a RUNNING VM may sit idle (no inbound) before the
+    # runtime suspends it. Must exceed a coder run (a few min) — the bridge suspends
+    # explicitly anyway, this is just a backstop.
+    maxIdleDurationSeconds: 1800
+    # suspendedDurationSeconds: how long a SUSPENDED VM is kept before the runtime
+    # AUTO-TERMINATES it. THIS IS CRITICAL for the review→fix loop: the VM is suspended
+    # while the external review agents run (~8–15 min) and then waits for a human to post
+    # "fix findings" (minutes to hours). At the old 300s (5 min) the VM was ALWAYS
+    # auto-terminated before the fix round, so RESUME hit "has been terminated and its
+    # state cannot be changed" and the same-VM warm-resume was impossible. Keep it
+    # suspended long enough to span a realistic review+human cycle (24h); teardown
+    # terminates it explicitly at merge, so this only bounds abandoned PRs.
+    suspendedDurationSeconds: 86400
 
   # microvm-lifecycle controller (30-microvm-lifecycle.yaml) — reconciles
   # Sandbox.operatingMode Running↔Suspended → suspend/resume-microvm. Loop interval.

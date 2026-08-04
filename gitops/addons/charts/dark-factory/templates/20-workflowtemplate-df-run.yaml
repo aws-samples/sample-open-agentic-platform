@@ -27,10 +27,12 @@ metadata:
 spec:
   serviceAccountName: dark-factory-workflow
   # Serialize per issue (no double-claim for the same issue) and cap total
-  # concurrent runs against the kata pool size.
+  # concurrent runs against the kata pool size. Keyed on issue-NUMBER (stable across
+  # first run + fix rounds) to match the claim/Sandbox name below — so a fix round is
+  # serialized against its own issue's first run and can't race a second claim.
   synchronization:
     mutex:
-      name: "df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+      name: "df-issue-{{`{{workflow.parameters.issue-number}}`}}"
   entrypoint: main
   arguments:
     parameters:
@@ -227,8 +229,19 @@ spec:
         manifest: |
           apiVersion: extensions.agents.x-k8s.io/v1beta1
           kind: SandboxClaim
+          # Name the claim (and therefore the Sandbox) by issue-NUMBER, which is STABLE
+          # across the first run and every fix round — NOT issue-id. The sensor's first
+          # run passes issue-id=<github event id> (e.g. 5064265549) while df-iterate
+          # passes issue-id=<issue number> (e.g. 133); keying the claim on issue-id made
+          # a fix round create a SECOND, differently-named Sandbox (df-issue-133) while
+          # the first run's Sandbox (df-issue-5064265549) still existed — BOTH annotated
+          # with the SAME microvm-id. The Lambda lifecycle controller then saw two
+          # Sandboxes giving OPPOSITE operatingMode intents for one VM and flapped
+          # suspend↔resume until the VM died with an Internal service error. issue-number
+          # is unique per issue and already names the Microvm CR (mvm-<issue-number>), so
+          # this gives exactly one Sandbox per VM across all rounds.
           metadata:
-            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
+            name: df-issue-{{`{{workflow.parameters.issue-number}}`}}
             namespace: {{ .Values.warmPool.namespace }}
             labels:
               dark-factory.io/issue: "{{`{{workflow.parameters.issue-id}}`}}"
@@ -880,7 +893,9 @@ spec:
           set -eu
           LABEL="{{`{{workflow.parameters.trigger-label}}`}}"
           NS="{{ .Values.warmPool.namespace }}"
-          CLAIM="df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+          # issue-NUMBER — must match the claim name created in claim-sandbox (stable across
+          # first run + fix rounds); issue-id diverges between the sensor and df-iterate.
+          CLAIM="df-issue-{{`{{workflow.parameters.issue-number}}`}}"
           if [ "$LABEL" = "darkfactory-lambda" ]; then
             echo "[teardown] lambda substrate — KEEPING ${CLAIM} (VM stays SUSPENDED until merge)."
             exit 0
