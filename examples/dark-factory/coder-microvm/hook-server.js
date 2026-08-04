@@ -48,11 +48,13 @@ function startCoder(payload) {
   };
   if (d.model) env.CODER_MODEL = d.model;
   console.log(`[hook-server] /run → spawning coder for issue #${env.DF_ISSUE_NUMBER} repo=${env.DF_REPO}`);
-  // Capture coder output to a file the coder writes; inherit stdio so it also streams
-  // to the VM console. detached so it outlives the request handler.
-  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: "inherit", detached: true });
+  // Capture the coder's stdout+stderr to /tmp/coder.log so /logs can return it —
+  // runtime CloudWatch routing doesn't work on this runtime, and there's no shell,
+  // so this file (read over the HTTP token) is the ONLY way to see what the coder did.
+  const logFd = fs.openSync("/tmp/coder.log", "a");
+  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: ["ignore", logFd, logFd], detached: true });
   child.unref();
-  child.on("error", (e) => console.log(`[hook-server] coder spawn error: ${e.message}`));
+  child.on("error", (e) => { try { fs.appendFileSync("/tmp/coder.log", "SPAWN-ERROR: " + e.message + "\n"); } catch {} });
 }
 
 const server = http.createServer((req, res) => {
@@ -64,6 +66,7 @@ const server = http.createServer((req, res) => {
       case "/ready":     return ok({ status: "ready" });
       case "/validate":  return ok({ status: "valid" });
       case "/run":       startCoder(body); return ok({ status: "started" });
+      case "/logs":      { let l=""; try { l=fs.readFileSync("/tmp/coder.log","utf8"); } catch {} return ok({ status:"ok", started: coderStarted, log: l.slice(-6000) }); }
       case "/suspend":   return ok({ status: "suspended" });
       case "/resume":    return ok({ status: "resumed" });
       case "/terminate": return ok({ status: "terminated" });
