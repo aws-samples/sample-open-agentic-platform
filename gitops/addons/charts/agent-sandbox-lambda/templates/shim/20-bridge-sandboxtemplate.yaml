@@ -271,9 +271,14 @@ data:
     }
     trap cleanup EXIT INT TERM
 
-    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll BOTH the CR state
-    #    AND the in-VM coder /status (state + log tail) so the coder run is OBSERVABLE in
-    #    the bridge logs (runtime CloudWatch routing is unreliable on this runtime).
+    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll the CR state + the
+    #    in-VM coder /logs so the coder run is OBSERVABLE in the bridge logs (runtime
+    #    CloudWatch routing is unreliable on this runtime).
+    #    SUSPEND-AFTER-CODE (Flow D behavior, done HERE — not as a df-run DAG step, so the
+    #    pipeline graph stays substrate-agnostic/clean for Kata): once the coder has pushed
+    #    its PR (log shows "PR opened"/"done"), suspend the MicroVM to free compute while the
+    #    review gates run; the VM's memory+disk persist for a resume on the next fix round.
+    SUSPENDED_ONCE=""
     echo "[microvm-bridge] Microvm ${MVM} running — pod now mirrors its lifecycle."
     while true; do
       ST=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.state}' 2>/dev/null || echo "GONE")
@@ -281,9 +286,16 @@ data:
         TERMINATED|TERMINATING|GONE|"") echo "[microvm-bridge] Microvm state=${ST:-gone} — exiting."; break ;;
       esac
       if [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
-        STATUS=$(curl -sS -m 10 "https://${EP}/status" -H "X-aws-proxy-auth: ${TOKEN}" 2>/dev/null \
-          | python3 -c 'import json,sys; d=json.load(sys.stdin); print("coder="+str(d.get("coderState")));  print("---LOG---"); print(d.get("log","")[-1500:])' 2>/dev/null || echo "")
-        [ -n "${STATUS}" ] && echo "[microvm-bridge] /status: ${STATUS}"
+        LOG=$(curl -sS -m 10 "https://${EP}/logs" -H "X-aws-proxy-auth: ${TOKEN}" 2>/dev/null \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("log","")[-800:])' 2>/dev/null || echo "")
+        [ -n "${LOG}" ] && echo "[microvm-bridge] coder-log-tail: $(echo "$LOG" | tail -1)"
+        # Coder finished (pushed PR) → suspend the VM once (Flow D), if not on a Kata run.
+        if [ -z "${SUSPENDED_ONCE}" ] && echo "${LOG}" | grep -qiE 'PR opened|done — PR|status success'; then
+          echo "[microvm-bridge] coder pushed PR — suspending MicroVM ${VMID} (Flow D free-compute-during-review)"
+          aws lambda-microvms suspend-microvm --region "${REGION}" --microvm-identifier "${VMID}" >/dev/null 2>&1 \
+            && echo "[microvm-bridge] suspend-microvm ok" || echo "[microvm-bridge] suspend-microvm skipped/failed"
+          SUSPENDED_ONCE=1
+        fi
       fi
       sleep 20
     done

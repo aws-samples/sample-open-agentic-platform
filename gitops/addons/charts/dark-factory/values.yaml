@@ -257,21 +257,16 @@ iterate:
   enabled: true
   maxIterations: 3
 
-# ── Flow D — MicroVM suspend/resume demo ─────────────────────────────────────
-# When the darkfactory-lambda label runs, suspend the MicroVM after the coder
-# pushes (freeing compute while gates run) and resume it on a df-iterate comment.
-# Drives Sandbox.spec.operatingMode; the agent-sandbox microvm-lifecycle controller
-# translates that to suspend-microvm / resume-microvm.
-#
-# ENABLE on clusters that run the Lambda substrate (Flow D). It adds a microvm-suspend
-# task to the df-run DAG that, on a darkfactory-lambda run, sets Sandbox.operatingMode=
-# Suspended after the coder pushes (the microvm-lifecycle controller then calls
-# suspend-microvm). On a Kata (Flow B) run the step is when-gated and skips cleanly
-# (quoted operands — a clean Skipped node, NOT the earlier Error). On a Kata-ONLY cluster
-# set this false so the DAG has zero MicroVM steps. This hub runs BOTH substrates, so
-# it's on: Flow D needs it, and the Kata skip is harmless.
+# ── Flow D — MicroVM suspend/resume ──────────────────────────────────────────
+# DEFAULT false — and it should STAY false. Suspend-after-code is NOT a df-run DAG
+# step anymore: because ONE df-run template serves BOTH substrates on a shared hub, a
+# rendered microvm-suspend step could only be runtime-SKIPPED on a Kata run, leaving a
+# confusing (if harmless) Skipped node in every Kata graph. Instead the Flow D bridge
+# (agent-sandbox-lambda, bridge.sh) suspends its OWN MicroVM after the coder pushes the
+# PR — lambda-only by construction, so the pipeline graph is substrate-agnostic and the
+# Kata DAG contains ZERO MicroVM steps. Leave this false; the bridge owns suspend/resume.
 microvmSuspend:
-  enabled: true
+  enabled: false
   image: alpine/k8s:1.31.0   # only patches Sandbox.operatingMode via kubectl (no aws-cli)
 
 # ── Language / stack support ─────────────────────────────────────────────────
