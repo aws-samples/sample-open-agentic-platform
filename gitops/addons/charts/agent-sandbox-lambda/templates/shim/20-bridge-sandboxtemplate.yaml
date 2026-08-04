@@ -283,15 +283,25 @@ data:
       fi
     fi
 
-    # 5) Teardown on real claim end (NOT on suspend): deleting the Microvm CR makes the
-    #    controller terminate the VM. On SUSPEND the pod stops but the CR + VM must stay
-    #    (resume reuses them) — the /tmp/suspending marker (preStop) distinguishes.
+    # 5) Teardown vs suspend — decided by whether the OWNING SANDBOX STILL EXISTS.
+    #    The agent-sandbox operator handles operatingMode=Suspended by DELETING THE POD
+    #    (verified in the operator log: "Deleting Pod because .Spec.OperatingMode is
+    #    Suspended") while KEEPING the Sandbox object alive in state SandboxSuspended. So
+    #    the bridge pod is torn down on EVERY suspend — and its cleanup trap must NOT delete
+    #    the Microvm CR then, or the VM is terminated instead of suspended (exactly the bug
+    #    we hit: Sandbox survived Suspended, but the VM was gone).
+    #      - Sandbox STILL EXISTS  => this is a SUSPEND (or transient pod restart) => KEEP CR.
+    #      - Sandbox GONE          => real teardown (df-merge-teardown deleted the claim) =>
+    #                                 delete CR so the controller TerminateMicrovm's the VM.
+    #    (Checking Sandbox existence is more robust than a preStop /tmp marker, which raced
+    #    the SIGTERM and didn't reliably stick.)
     cleanup() {
-      if [ -f /tmp/suspending ]; then
-        echo "[microvm-bridge] pod stopping for SUSPEND — keeping Microvm ${MVM}"
+      if kubectl get sandbox "${SANDBOX_NAME}" -n "${NS}" >/dev/null 2>&1; then
+        M=$(kubectl get sandbox "${SANDBOX_NAME}" -n "${NS}" -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "")
+        echo "[microvm-bridge] pod stopping but Sandbox ${SANDBOX_NAME} still exists (operatingMode=${M:-?}) — KEEPING Microvm ${MVM} (suspend, not teardown)"
         return
       fi
-      echo "[microvm-bridge] deleting Microvm ${MVM} (controller terminates the VM)"
+      echo "[microvm-bridge] Sandbox ${SANDBOX_NAME} gone — real teardown: deleting Microvm ${MVM} (controller terminates the VM)"
       kubectl delete microvm "${MVM}" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
       kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
     }
@@ -316,7 +326,6 @@ data:
     #    VM), then switch to a lightweight CR-existence watch that NEVER touches the
     #    endpoint again. The VM's memory+disk persist; a fix round flips operatingMode
     #    back to Running (controller resumes) and the pipeline claims a fresh session.
-    SUSPENDED_ONCE=""
     echo "[microvm-bridge] Microvm ${MVM} running — pod now mirrors its lifecycle."
     while true; do
       # CR gone/terminating => real teardown => exit (cleanup trap handles CR delete).
@@ -324,26 +333,27 @@ data:
       case "${ST}" in
         TERMINATED|TERMINATING|GONE|"") echo "[microvm-bridge] Microvm state=${ST:-gone} — exiting."; break ;;
       esac
-      if [ -z "${SUSPENDED_ONCE}" ] && [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
-        # Pre-suspend: poll /logs for observability + to detect "coder pushed PR".
+      if [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
+        # Poll /logs for observability + to detect "coder pushed PR".
         LOG=$(curl -sS -m 10 "https://${EP}/logs" -H "X-aws-proxy-auth: ${TOKEN}" 2>/dev/null \
           | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("log","")[-800:])' 2>/dev/null || echo "")
         [ -n "${LOG}" ] && echo "[microvm-bridge] coder-log-tail: $(echo "$LOG" | tail -1)"
         if echo "${LOG}" | grep -qiE 'PR opened|done — PR|status success'; then
-          echo "[microvm-bridge] coder pushed PR — requesting SUSPEND via Sandbox.operatingMode (controller reconciles)"
+          # Coder is done → request SUSPEND declaratively. The operator then DELETES this
+          # pod (operatingMode=Suspended), and the microvm-lifecycle controller reconciles
+          # the same intent into suspend-microvm. We EXIT right after setting it: the pod is
+          # about to be killed anyway, and exiting cleanly lets the cleanup trap run while
+          # the Sandbox still exists → it KEEPS the CR (VM suspends, not terminates). We do
+          # NOT keep polling /logs — every endpoint hit would auto-resume the VM.
+          echo "[microvm-bridge] coder pushed PR — requesting SUSPEND via Sandbox.operatingMode (controller reconciles suspend-microvm ${VMID})"
           kubectl patch sandbox "${SANDBOX_NAME}" -n "${NS}" --type merge \
             -p '{"spec":{"operatingMode":"Suspended"}}' >/dev/null 2>&1 \
-            && echo "[microvm-bridge] operatingMode=Suspended set — microvm-lifecycle will suspend ${VMID}" \
+            && echo "[microvm-bridge] operatingMode=Suspended set — exiting bridge (pod will be removed; CR + VM persist)" \
             || echo "[microvm-bridge] WARN: could not set operatingMode=Suspended"
-          SUSPENDED_ONCE=1
+          break
         fi
-        sleep 20
-      else
-        # Post-suspend: do NOT touch the endpoint (autoResume=false, but never poke it
-        # anyway) — just watch for teardown. Longer interval; endpoint stays quiet so the
-        # VM stays SUSPENDED in the console until a fix round resumes it via operatingMode.
-        sleep 30
       fi
+      sleep 20
     done
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
@@ -400,21 +410,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-          # Preflight suspend marker: if this pod is being deleted because the owning
-          # Sandbox went operatingMode=Suspended, the microvm-lifecycle controller has
-          # (or will) suspend the MicroVM — the bridge must NOT TerminateMicrovm. The
-          # controller writes operatingMode; the bridge checks it to set the marker.
-          lifecycle:
-            preStop:
-              exec:
-                command:
-                  - /bin/sh
-                  - -c
-                  - |
-                    # If the owning Sandbox is Suspended, mark so cleanup() keeps the CR.
-                    M=$(kubectl get sandbox "${SANDBOX_NAME:-df-${DF_ISSUE_NUMBER:-}}" \
-                        -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "")
-                    [ "$M" = "Suspended" ] && touch /tmp/suspending || true
+          # NOTE: no preStop suspend marker needed anymore — cleanup() decides suspend-vs-
+          # teardown by whether the owning Sandbox still EXISTS (it survives Suspended,
+          # is gone on real teardown), which is race-free unlike a preStop /tmp marker.
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

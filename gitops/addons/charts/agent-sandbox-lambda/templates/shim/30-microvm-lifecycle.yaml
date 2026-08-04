@@ -89,10 +89,15 @@ data:
     INTERVAL="{{ .Values.microvm.lifecycle.intervalSeconds | default 15 }}"
     echo "[microvm-lifecycle] reconciling every ${INTERVAL}s (ns=${NS} region=${REGION})"
     while true; do
-      # Only Sandboxes on the lambda-microvm substrate (bridge sets this label).
+      # Select Sandboxes on the lambda-microvm substrate by the microvm-id ANNOTATION the
+      # bridge writes after RunMicrovm — NOT a label. The agent-sandbox operator does NOT
+      # propagate SandboxTemplate labels onto the Sandbox object, so a label selector
+      # (agent-sandbox.io/substrate=lambda-microvm) matches NOTHING and the controller
+      # stays blind to every real session (observed: operatingMode=Suspended set, Sandbox
+      # went SandboxSuspended, but the VM was never suspended because this loop skipped it).
+      # Only lambda sessions carry the microvm-id annotation, so it's the reliable signal.
       for sb in $(kubectl get sandbox -n "$NS" \
-            -l agent-sandbox.io/substrate=lambda-microvm \
-            -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+            -o jsonpath='{range .items[?(@.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id)]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
         MODE=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath='{.spec.operatingMode}' 2>/dev/null || echo "Running")
         LAST=$(kubectl get sandbox "$sb" -n "$NS" -o jsonpath="{.metadata.annotations.${ANN}}" 2>/dev/null || echo "")
         [ "$MODE" = "$LAST" ] && continue   # no transition
