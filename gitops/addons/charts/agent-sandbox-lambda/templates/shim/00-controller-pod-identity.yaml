@@ -51,6 +51,7 @@ spec:
               "lambda:GetMicrovmImage","lambda:GetMicrovmImageVersion","lambda:ListMicrovmImages",
               "lambda:RunMicrovm","lambda:GetMicrovm","lambda:TerminateMicrovm","lambda:ListMicrovms",
               "lambda:SuspendMicrovm","lambda:ResumeMicrovm",
+              "lambda:CreateMicrovmAuthToken","lambda:CreateMicrovmShellAuthToken",
               "lambda:TagResource","lambda:UntagResource","lambda:ListTagsForResource",
               "lambda:ListNetworkConnectors","lambda:GetNetworkConnector"
             ],
