@@ -97,9 +97,14 @@ async function main() {
     // security/devops reviews on sha 3b11b497 (round 1) blocked a merge whose head
     // 8089fa0a (fix round) was fully green. Match reviews by commit_id and inline
     // comments by original_commit_id/commit_id to the head sha.
-    const onHead = (c) => c === sha;
-    const reviews = allReviews.filter((r) => onHead(r.commit_id));
-    const comments = allComments.filter((c) => onHead(c.commit_id) || onHead(c.original_commit_id));
+    // A review counts only if it was submitted against the current head. An inline
+    // comment counts only if it was ORIGINALLY filed against the current head
+    // (original_commit_id) — GitHub auto-advances an inline comment's commit_id to the
+    // latest head when the line still exists, so round-1 comments reappear with
+    // commit_id==head; original_commit_id preserves the sha they were truly filed on.
+    // Matching on original_commit_id excludes those carried-forward round-1 findings.
+    const reviews = allReviews.filter((r) => r.commit_id === sha);
+    const comments = allComments.filter((c) => (c.original_commit_id || c.commit_id) === sha);
     const isSecBot = (l) => /aws-security-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
     const isDevBot = (l) => /aws-devops-agent/i.test(l || "") && /\[bot\]/i.test(l || "");
     const botFindings = (pred) => {
