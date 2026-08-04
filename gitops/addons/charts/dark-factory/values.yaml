@@ -257,17 +257,25 @@ iterate:
   enabled: true
   maxIterations: 3
 
-# ── Flow D — MicroVM suspend/resume ──────────────────────────────────────────
-# DEFAULT false — and it should STAY false. Suspend-after-code is NOT a df-run DAG
-# step anymore: because ONE df-run template serves BOTH substrates on a shared hub, a
-# rendered microvm-suspend step could only be runtime-SKIPPED on a Kata run, leaving a
-# confusing (if harmless) Skipped node in every Kata graph. Instead the Flow D bridge
-# (agent-sandbox-lambda, bridge.sh) suspends its OWN MicroVM after the coder pushes the
-# PR — lambda-only by construction, so the pipeline graph is substrate-agnostic and the
-# Kata DAG contains ZERO MicroVM steps. Leave this false; the bridge owns suspend/resume.
-microvmSuspend:
-  enabled: false
-  image: alpine/k8s:1.31.0   # only patches Sandbox.operatingMode via kubectl (no aws-cli)
+# ── Flow D — Lambda MicroVM substrate (df-run-lambda ONLY) ───────────────────
+# The Kata df-run template has ZERO MicroVM logic (it's byte-identical to the certified
+# Kata pipeline). Flow D runs in a SEPARATE WorkflowTemplate, df-run-lambda, which
+# provisions the Lambda MicroVM directly (Microvm CR + /run), suspends it during review
+# (scale-to-zero), resumes the SAME VM on a fix round, and terminates it at merge. These
+# values feed that template; they mirror the agent-sandbox-lambda chart's microvm.* keys.
+microvm:
+  enabled: true
+  region: us-west-2
+  namespace: agent-sandbox-system     # where the Microvm CR + platform MicrovmSandbox live
+  # aws-cli v2 (has the lambda-microvms verbs); kubectl is fetched at step start.
+  stepImage: public.ecr.aws/aws-cli/aws-cli:latest
+  image:
+    name: coder                       # the platform MicrovmSandbox name (image handoff)
+  defaults:
+    maxIdleDurationSeconds: 1800      # RUNNING-idle backstop (we drive /run immediately)
+    # Lambda caps SUSPEND at 8h (28800s). Use the max so the VM survives the full
+    # review→fix window; df-merge-teardown terminates it explicitly at merge.
+    suspendedDurationSeconds: 28800
 
 # ── Language / stack support ─────────────────────────────────────────────────
 # There is NO per-language profile config here — deliberately. Language support is

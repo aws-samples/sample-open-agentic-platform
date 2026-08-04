@@ -20,17 +20,19 @@ Parameters (supplied by the trigger / Sensor):
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
-  name: df-run
+  name: df-run-lambda
   namespace: {{ .Values.argo.namespace }}
   labels:
     {{- include "dark-factory.labels" . | nindent 4 }}
 spec:
   serviceAccountName: dark-factory-workflow
   # Serialize per issue (no double-claim for the same issue) and cap total
-  # concurrent runs against the kata pool size.
+  # concurrent runs against the kata pool size. Keyed on issue-NUMBER (stable across
+  # first run + fix rounds) to match the claim/Sandbox name below — so a fix round is
+  # serialized against its own issue's first run and can't race a second claim.
   synchronization:
     mutex:
-      name: "df-issue-{{`{{workflow.parameters.issue-id}}`}}"
+      name: "df-issue-{{`{{workflow.parameters.issue-number}}`}}"
   entrypoint: main
   arguments:
     parameters:
@@ -62,7 +64,7 @@ spec:
   # Always release the claimed sandbox, on success OR failure.
   onExit: teardown
   ttlStrategy:
-    secondsAfterCompletion: 3600
+    secondsAfterCompletion: {{ .Values.argo.workflowTtlSecondsAfterCompletion | default 604800 }}
 {{- if .Values.metrics.enabled }}
   # Success metrics (Argo-native Prometheus). Argo exposes these on the workflow
   # controller's :9090/metrics — scraped into the platform Prometheus. Gives the
@@ -88,18 +90,37 @@ spec:
     # on a PR existing, and is advisory in v1 (posts a commit status; never fails the
     # run unless its *.blocking / blockSeverity is raised). `status` waits for all
     # enabled verify steps via its dependencies list.
+    # ---- DAG (MicroVM-native, NO SandboxClaim/bridge/warm-pool) ----
+    # provision-microvm (create Microvm CR + drive /run) → drive-coder (poll GitHub for
+    # PR) → suspend-microvm (scale-to-zero during review) → [verify fan] → status.
+    # On a FIX ROUND the workflow first RESUMES the same suspended VM (resume-microvm),
+    # re-drives /run with the new note, then re-suspends. Teardown (onExit) deletes the
+    # Microvm CR → controller TerminateMicrovm.
     - name: main
       dag:
         tasks:
-          - name: claim
-            template: claim-sandbox
+          # 1. Provision the MicroVM directly (create CR + Secret, wait RUNNING, POST /run).
+          #    On a fix round (iterate-note set) it RESUMES the existing suspended VM instead.
+          - name: provision-microvm
+            template: provision-microvm
+          # 2. Poll GitHub for the PR the coder opens (substrate-agnostic; reused verbatim).
           - name: drive-coder
             template: await-coder
-            dependencies: [claim]
+            dependencies: [provision-microvm]
             arguments:
               parameters:
                 - name: sandbox
-                  value: "{{`{{tasks.claim.outputs.parameters.sandbox}}`}}"
+                  value: ""
+          # 3. SUSPEND the VM once the coder pushed its PR — scale-to-zero during review.
+          #    Explicit DAG step (this template is Lambda-only, so no substrate gating).
+          - name: suspend-microvm
+            template: set-microvm-power
+            dependencies: [drive-coder]
+            when: "{{`{{tasks.drive-coder.outputs.parameters.pr-number}}`}} != \"\""
+            arguments:
+              parameters:
+                - name: action
+                  value: "suspend"
 {{- if .Values.holdout.enabled }}
           # P2 — holdout gate: hidden scenarios + a different-family judge.
           - name: holdout-gate
@@ -182,62 +203,130 @@ spec:
                 - name: phase
                   value: "pr-open"
 
-    # ---- 1. Claim a warm sandbox (creates the SandboxClaim with issue env) ----
-    - name: claim-sandbox
+    # ---- 1. Provision the Lambda MicroVM directly (NO SandboxClaim/bridge/warm-pool) ----
+    # Creates the runHookPayload Secret + the Microvm CR (the ACK lambdamicrovms
+    # controller does RunMicrovm), waits for RUNNING + an endpoint, mints an auth token,
+    # and POSTs /run to start the coder. On a FIX ROUND (iterate-note set) it RESUMES the
+    # same suspended VM if still alive (warm resume — the Flow D value prop), else recreates.
+    # Every hard-won Flow D fix is encoded here:
+    #   • autoResumeEnabled=false + we never poll the endpoint after /run → suspend STICKS.
+    #   • suspendedDurationSeconds=8h so the VM survives the review→fix window.
+    #   • HTTP_INGRESS (ALL_INGRESS blocks auth-token minting).
+    #   • runHookPayload carries ghToken + DF_* + the iterate note (the coder has no claim env).
+    #   • CR/Secret named mvm-<issue-number> (stable across rounds → one VM per issue).
+    #   • image/exec-role read from the platform MicrovmSandbox status (built once by KRO/ACK).
+    - name: provision-microvm
       outputs:
         parameters:
-          - name: sandbox
+          - name: microvm-id
+            valueFrom: { path: /tmp/vmid }
+      script:
+        image: {{ .Values.microvm.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
+        command: [sh]
+        env:
+          - name: GH_TOKEN
             valueFrom:
-              jsonPath: "{.status.sandbox.name}"
-      resource:
-        action: create
-        setOwnerReference: false
-        successCondition: status.conditions.0.status == True
-        failureCondition: status.conditions.0.reason == EnvVarsInjectionRejected
-        manifest: |
-          apiVersion: extensions.agents.x-k8s.io/v1beta1
-          kind: SandboxClaim
-          metadata:
-            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
-            namespace: {{ .Values.warmPool.namespace }}
-            labels:
-              dark-factory.io/issue: "{{`{{workflow.parameters.issue-id}}`}}"
-              # issue NUMBER too: df-merge-teardown / df-iterate are fired by PR
-              # events whose payload carries the branch (df/issue-<number>) but NOT
-              # the issue id, so they select the claim to reap by this label.
-              dark-factory.io/issue-number: "{{`{{workflow.parameters.issue-number}}`}}"
-              dark-factory.io/managed-by: df-run
-          spec:
-            warmPoolRef:
-              name: {{ .Values.warmPool.name }}
-            lifecycle:
-              ttlSecondsAfterFinished: {{ .Values.claimTtlSeconds }}
-            env:
-              - { containerName: coder, name: DF_ISSUE_NUMBER, value: "{{`{{workflow.parameters.issue-number}}`}}" }
-              - { containerName: coder, name: DF_REPO, value: "{{`{{workflow.parameters.repo}}`}}" }
-              - { containerName: coder, name: DF_BRANCH, value: "df/issue-{{`{{workflow.parameters.issue-number}}`}}" }
-              - { containerName: coder, name: DF_BASE_BRANCH, value: "{{`{{workflow.parameters.base-branch}}`}}" }
-              - { containerName: coder, name: DF_ISSUE_TITLE, value: "{{`{{workflow.parameters.issue-title}}`}}" }
-              # Engine the coder VM runs: claude (default) | kiro. entrypoint.js
-              # branches on this (=="kiro" → kiro headless, else claude -p).
-              - { containerName: coder, name: CODER_ENGINE, value: "{{ .Values.coder.engine }}" }
-              # Back-compat alias (older coder images read CODER_PROFILE).
-              - { containerName: coder, name: CODER_PROFILE, value: "{{ .Values.coder.engine }}" }
-              - { containerName: coder, name: BIFROST_URL, value: "{{ .Values.bifrost.url }}" }
-              # Revision note: prefer the base64 form (safe for arbitrary markdown —
-              # auto-fed agent findings contain newlines/quotes/braces that broke the
-              # raw YAML injection). Both are single-line values here; the coder
-              # decodes B64 first, else uses the plain one.
-              - { containerName: coder, name: DF_ITERATE_NOTE, value: "{{`{{workflow.parameters.iterate-note}}`}}" }
-              - { containerName: coder, name: DF_ITERATE_NOTE_B64, value: "{{`{{workflow.parameters.iterate-note-b64}}`}}" }
-{{- if and .Values.devopsAgent.enabled (eq .Values.devopsAgent.gate "label") }}
-              # DevOps Agent via the coding-agent plugin, run inside the coder
-              # step BEFORE the PR opens — ONLY in label-gate mode. In the default
-              # check-gate mode the DevOps Agent GitHub App reviews the PR instead,
-              # so the coder does not attempt the (VM-incompatible) plugin path.
-              - { containerName: coder, name: DF_DEVOPS_AGENT_MODE, value: "claude-plugin" }
-              - { containerName: coder, name: DF_DEVOPS_CLEAR_LABEL, value: "{{ .Values.review.handoffLabel }}" }
-{{- end }}
+              secretKeyRef:
+                name: {{ .Values.github.tokenSecret }}
+                key: token
+          - name: ISSUE_NUMBER
+            value: "{{`{{workflow.parameters.issue-number}}`}}"
+          - name: REPO
+            value: "{{`{{workflow.parameters.repo}}`}}"
+          - name: BASE_BRANCH
+            value: "{{`{{workflow.parameters.base-branch}}`}}"
+          - name: ISSUE_TITLE
+            value: "{{`{{workflow.parameters.issue-title}}`}}"
+          - name: ITERATE_NOTE_B64
+            value: "{{`{{workflow.parameters.iterate-note-b64}}`}}"
+          - name: ITERATE_NOTE
+            value: "{{`{{workflow.parameters.iterate-note}}`}}"
+        source: |
+          set -eu
+          REGION="{{ .Values.microvm.region }}"
+          NS="{{ .Values.microvm.namespace | default "agent-sandbox-system" }}"
+          PLATFORM_IMAGE="{{ .Values.microvm.image.name | default "coder" }}"
+          MVM="mvm-${ISSUE_NUMBER}"
+          BRANCH="df/issue-${ISSUE_NUMBER}"
+          MAXIDLE={{ .Values.microvm.defaults.maxIdleDurationSeconds | default 1800 }}
+          SUSPDUR={{ .Values.microvm.defaults.suspendedDurationSeconds | default 28800 }}
+          INGRESS="arn:aws:lambda:${REGION}:aws:network-connector:aws-network-connector:HTTP_INGRESS"
+          EGRESS="arn:aws:lambda:${REGION}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"
+          LOGGRP="/aws/lambda/microvms/${PLATFORM_IMAGE}-image"
+          # aws-cli image has no kubectl — fetch a static one (same as the old bridge).
+          if ! command -v kubectl >/dev/null 2>&1; then
+            KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+            curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl" -o /tmp/kubectl
+            chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+          fi
+          # 1) Read the platform image handoff (imageARN + execRoleARN — built ONCE by KRO/ACK).
+          echo "[provision] reading platform image ${PLATFORM_IMAGE} (waiting for build ready)..."
+          i=0; IMAGE_ARN=""; EXEC_ROLE=""
+          while [ "$i" -lt 240 ]; do
+            IST=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.imageState}' 2>/dev/null || echo "")
+            if [ "${IST}" = "CREATED" ] || [ "${IST}" = "UPDATED" ]; then
+              IMAGE_ARN=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.imageARN}' 2>/dev/null || echo "")
+              EXEC_ROLE=$(kubectl get microvmsandbox "${PLATFORM_IMAGE}" -n "${NS}" -o jsonpath='{.status.executionRoleARN}' 2>/dev/null || echo "")
+              [ -n "${IMAGE_ARN}" ] && [ -n "${EXEC_ROLE}" ] && break
+            fi
+            i=$((i+1)); sleep 5
+          done
+          [ -z "${IMAGE_ARN}" ] || [ -z "${EXEC_ROLE}" ] && { echo "[provision] ERROR: platform image not ready (imageState=${IST:-none})"; exit 1; }
+          echo "[provision] image=${IMAGE_ARN} execRole=${EXEC_ROLE}"
+          # 2) FIX ROUND vs FIRST RUN: if a CR exists, check the VM's ACTUAL AWS state.
+          #    RUNNING/SUSPENDED/PENDING → RESUME the same VM (warm resume). Else (TERMINATED
+          #    past the 8h suspend cap, or a service error) → recreate a fresh VM.
+          FRESH=1
+          if kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1; then
+            PRIORVMID=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+            PRIORSTATE=""
+            [ -n "${PRIORVMID}" ] && PRIORSTATE=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${PRIORVMID}" --query 'state' --output text 2>/dev/null || echo "")
+            echo "[provision] fix round: prior VM ${PRIORVMID:-none} state=${PRIORSTATE:-unknown}"
+            case "${PRIORSTATE}" in
+              RUNNING|SUSPENDED|PENDING)
+                echo "[provision] RESUMING same VM ${PRIORVMID} (warm resume)"
+                aws lambda-microvms resume-microvm --region "${REGION}" --microvm-identifier "${PRIORVMID}" 2>/dev/null || true
+                # Refresh the payload Secret so the resumed hook-server gets the NEW note.
+                FRESH=0; VMID="${PRIORVMID}"
+                ;;
+              *)
+                echo "[provision] prior VM not resumable (${PRIORSTATE:-gone}) — recreating fresh"
+                kubectl delete microvm "${MVM}" -n "${NS}" --wait=false >/dev/null 2>&1 || true
+                kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+                j=0; while [ "$j" -lt 60 ]; do kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1 || break; j=$((j+1)); sleep 5; done
+                ;;
+            esac
+          fi
+          # 3) Build the runHookPayload (ghToken + DF_* + iterate note) and (re)write the Secret.
+          PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" IN="${ISSUE_NUMBER}" RP="${REPO}" BR="${BRANCH}" BB="${BASE_BRANCH}" IT="${ISSUE_TITLE}" NB="${ITERATE_NOTE_B64}" NP="${ITERATE_NOTE}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("IN",""),"repo":e("RP",""),"branch":e("BR",""),"baseBranch":e("BB","main"),"issueTitle":e("IT",""),"iterateNoteB64":e("NB",""),"iterateNote":e("NP","")}))')
+          MVM="${MVM}" NS="${NS}" PAYLOAD="${PAYLOAD}" python3 -c 'import json,os; e=os.environ; print(json.dumps({"apiVersion":"v1","kind":"Secret","metadata":{"name":e["MVM"]+"-payload","namespace":e["NS"]},"type":"Opaque","stringData":{"payload":e["PAYLOAD"]}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[provision] payload secret apply failed"; exit 1; }
+          # 4) On a FIRST RUN (or recreate), create the Microvm CR (autoResume=false).
+          if [ "${FRESH}" = "1" ]; then
+            MVM="${MVM}" NS="${NS}" IMG="${IMAGE_ARN}" EXECROLE="${EXEC_ROLE}" MAXIDLE="${MAXIDLE}" SUSPDUR="${SUSPDUR}" INGRESS="${INGRESS}" EGRESS="${EGRESS}" LOGGRP="${LOGGRP}" python3 -c 'import json,os; e=os.environ; mvm=e["MVM"]; ns=e["NS"]; print(json.dumps({"apiVersion":"lambdamicrovms.services.k8s.aws/v1alpha1","kind":"Microvm","metadata":{"name":mvm,"namespace":ns},"spec":{"imageIdentifier":e["IMG"],"executionRoleARN":e["EXECROLE"],"ingressNetworkConnectors":[e["INGRESS"]],"egressNetworkConnectors":[e["EGRESS"]],"runHookPayload":{"name":mvm+"-payload","key":"payload","namespace":ns},"logging":{"cloudWatch":{"logGroup":e["LOGGRP"],"logStream":"runtime-"+mvm}},"idlePolicy":{"autoResumeEnabled":False,"maxIdleDurationSeconds":int(e["MAXIDLE"]),"suspendedDurationSeconds":int(e["SUSPDUR"])}}}))' | kubectl apply -f - >/dev/null 2>&1 || { echo "[provision] Microvm CR apply failed"; exit 1; }
+            VMID=""; i=0
+            while [ "$i" -lt 60 ]; do
+              VMID=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+              [ -n "${VMID}" ] && break; i=$((i+1)); sleep 5
+            done
+          fi
+          echo "${VMID:-}" > /tmp/vmid
+          [ -z "${VMID:-}" ] && { echo "[provision] ERROR: no microvmID"; exit 1; }
+          echo "[provision] Microvm ${MVM} -> ${VMID}"
+          # 5) Wait for RUNNING + endpoint, mint token, POST /run (background-spawns the coder).
+          EP=""; i=0
+          while [ "$i" -lt 72 ]; do
+            S=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" --query 'state' --output text 2>/dev/null || echo "")
+            EP=$(aws lambda-microvms get-microvm --region "${REGION}" --microvm-identifier "${VMID}" --query 'endpoint' --output text 2>/dev/null || echo "")
+            [ "$S" = "RUNNING" ] && [ -n "${EP}" ] && [ "${EP}" != "None" ] && break
+            i=$((i+1)); sleep 5
+          done
+          [ -z "${EP}" ] || [ "${EP}" = "None" ] && { echo "[provision] ERROR: VM never reached RUNNING+endpoint (state=${S:-none})"; exit 1; }
+          TOKEN=$(aws lambda-microvms create-microvm-auth-token --region "${REGION}" --microvm-identifier "${VMID}" --expiration-in-minutes 60 --allowed-ports 'port=8080' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["authToken"]["X-aws-proxy-auth"])' 2>/dev/null || echo "")
+          [ -z "${TOKEN}" ] && { echo "[provision] ERROR: could not mint auth token"; exit 1; }
+          echo "[provision] driving coder: POST /run on ${EP}"
+          RC=$(curl -sS -m 30 -o /tmp/run.out -w '%{http_code}' -X POST "https://${EP}/run" -H "X-aws-proxy-auth: ${TOKEN}" -H 'Content-Type: application/json' -d "${PAYLOAD}" 2>/tmp/run.err || echo "000")
+          echo "[provision] /run -> HTTP ${RC} $(cat /tmp/run.out 2>/dev/null | head -c 120)"
+          case "${RC}" in 2*) echo "[provision] coder started." ;; *) echo "[provision] ERROR: /run returned ${RC}"; exit 1 ;; esac
 
     # ---- 2. Wait for the coder VM to finish — GitHub is the completion bus ----
     # The coder image (baked into the SandboxTemplate) auto-runs on VM start,
@@ -808,14 +897,49 @@ spec:
           echo "[df-run] phase={{`{{inputs.parameters.phase}}`}} — updating PR body from live verdicts (${REPO} ${BRANCH})"
           node /scripts/status.js
 
-    # ---- onExit: release the claim (operator refills the pool) ----
+    # ---- suspend/resume the Lambda MicroVM directly (scale-to-zero) ----
+    # Calls suspend-microvm / resume-microvm on the VM the provision step created (id read
+    # from the Microvm CR by stable name mvm-<issue-number>). Direct AWS call — NO Sandbox/
+    # operatingMode/lifecycle-controller dependency (this template owns the VM outright).
+    # Advisory: never fails the run (suspend is a cost optimization, not correctness).
+    - name: set-microvm-power
+      inputs:
+        parameters:
+          - name: action   # suspend | resume
+      script:
+        image: {{ .Values.microvm.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
+        command: [sh]
+        source: |
+          set -eu
+          ACTION="{{`{{inputs.parameters.action}}`}}"
+          REGION="{{ .Values.microvm.region }}"
+          NS="{{ .Values.microvm.namespace | default "agent-sandbox-system" }}"
+          MVM="mvm-{{`{{workflow.parameters.issue-number}}`}}"
+          if ! command -v kubectl >/dev/null 2>&1; then
+            KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+            curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl" -o /tmp/kubectl
+            chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+          fi
+          VMID=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.microvmID}' 2>/dev/null || echo "")
+          [ -z "${VMID}" ] && { echo "[power] no microvmID for ${MVM} — skipping (advisory)"; exit 0; }
+          echo "[power] ${ACTION}-microvm ${VMID}"
+          aws lambda-microvms "${ACTION}-microvm" --region "${REGION}" --microvm-identifier "${VMID}" 2>&1 || echo "[power] ${ACTION} skipped/failed (advisory)"
+          echo "[power] done."
+      activeDeadlineSeconds: 180
+
+    # ---- onExit: KEEP the suspended VM (terminated only at merge) ----
+    # Flow D lifecycle: the VM is SUSPENDED (by suspend-microvm above) and must SURVIVE
+    # the review→fix loop so a fix round can RESUME the SAME VM. The Microvm CR is
+    # therefore NOT deleted here — it is deleted at merge by df-merge-teardown, which
+    # triggers the controller's TerminateMicrovm. This onExit is a no-op guard: if the
+    # run FAILED before ever creating/suspending a VM, there's nothing to keep, but we
+    # still never delete on the normal path (the suspended VM is the whole point).
     - name: teardown
-      resource:
-        action: delete
-        flags: ["--ignore-not-found"]
-        manifest: |
-          apiVersion: extensions.agents.x-k8s.io/v1beta1
-          kind: SandboxClaim
-          metadata:
-            name: df-issue-{{`{{workflow.parameters.issue-id}}`}}
-            namespace: {{ .Values.warmPool.namespace }}
+      script:
+        image: {{ .Values.microvm.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
+        command: [sh]
+        source: |
+          set -eu
+          MVM="mvm-{{`{{workflow.parameters.issue-number}}`}}"
+          echo "[teardown] lambda: KEEPING Microvm/${MVM} (stays SUSPENDED until merge → df-merge-teardown terminates it)."
+          exit 0

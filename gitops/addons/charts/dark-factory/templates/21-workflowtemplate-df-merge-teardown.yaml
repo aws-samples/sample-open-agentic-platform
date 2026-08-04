@@ -39,18 +39,18 @@ spec:
         tasks:
           - name: merge
             template: merge-pr
-{{- if .Values.microvmSuspend.enabled }}
-          # Flow D: this is the FINAL exit — TERMINATE the Lambda MicroVM that was
-          # kept suspended across the review→fix loop. Runs before the claim delete so
-          # the VM is destroyed explicitly (the suspended VM would otherwise be kept by
-          # the bridge's suspend-marker on pod delete → leak). No-op for Kata.
+{{- if .Values.microvm.enabled }}
+          # Flow D: this is the FINAL exit — TERMINATE the Lambda MicroVM that df-run-lambda
+          # kept SUSPENDED across the review→fix loop. Deletes the Microvm CR (stable name
+          # mvm-<issue-number>) → the controller TerminateMicrovm's the VM. No-op for Kata
+          # (there is no such CR). Advisory — never fails the merge.
           - name: microvm-terminate
             template: microvm-terminate
             dependencies: [merge]
 {{- end }}
           - name: teardown
             template: teardown-claim
-{{- if .Values.microvmSuspend.enabled }}
+{{- if .Values.microvm.enabled }}
             dependencies: [microvm-terminate]
 {{- else }}
             dependencies: [merge]
@@ -104,30 +104,31 @@ spec:
           echo "[df-merge] human-approved PR #${PR} in ${REPO} — verifying + merging"
           node /scripts/merge.js
 
-{{- if .Values.microvmSuspend.enabled }}
+{{- if .Values.microvm.enabled }}
     # ---- Flow D: terminate the Lambda MicroVM (final exit) ----
-    # Resolve the per-session microvm id from the owning Sandbox annotation (the bridge
-    # wrote it after RunMicrovm), then TerminateMicrovm. A suspended VM can be
-    # terminated directly. Advisory (never fails the merge) — the reaper + idlePolicy
-    # are backstops. Needs lambda-microvms:TerminateMicrovm on the workflow's IRSA role.
+    # df-run-lambda kept the VM SUSPENDED (CR mvm-<issue-number>) across the review→fix
+    # loop. At merge we DELETE that CR → the controller TerminateMicrovm's the VM. Stable
+    # name, so no Sandbox/annotation lookup needed. No-op for Kata (no such CR). Advisory.
     - name: microvm-terminate
       script:
-        image: {{ .Values.microvmSuspend.image | default "alpine/k8s:1.31.0" }}
+        image: {{ .Values.microvm.stepImage | default "public.ecr.aws/aws-cli/aws-cli:latest" }}
         command: [sh]
         source: |
           set -eu
-          NS="{{ .Values.warmPool.namespace }}"
-          REGION="{{ .Values.securityAgent.region | default "us-west-2" }}"
-          NUM="{{`{{workflow.parameters.issue-number}}`}}"
-          # Find the Sandbox for this issue (by the number label the claim/sandbox carry).
-          SB=$(kubectl get sandbox -n "$NS" -l "dark-factory.io/issue-number=${NUM}" \
-                -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-          [ -z "$SB" ] && { echo "[microvm-terminate] no Sandbox for issue #${NUM} — nothing to terminate"; exit 0; }
-          VMID=$(kubectl get sandbox "$SB" -n "$NS" -o jsonpath='{.metadata.annotations.microvm-lifecycle\.agents\.x-k8s\.io/microvm-id}' 2>/dev/null || echo "")
-          [ -z "$VMID" ] && { echo "[microvm-terminate] Sandbox/$SB has no microvm-id — nothing to terminate"; exit 0; }
-          echo "[microvm-terminate] TerminateMicrovm ${VMID} (issue #${NUM}, final exit)"
-          command -v aws >/dev/null 2>&1 || { echo "[microvm-terminate] aws cli missing on image — skipping (advisory)"; exit 0; }
-          aws lambda-microvms terminate-microvm --region "$REGION" --microvm-identifier "$VMID" 2>&1 || echo "[microvm-terminate] terminate failed (advisory)"
+          NS="{{ .Values.microvm.namespace | default "agent-sandbox-system" }}"
+          MVM="mvm-{{`{{workflow.parameters.issue-number}}`}}"
+          if ! command -v kubectl >/dev/null 2>&1; then
+            KV="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"
+            curl -fsSL "https://dl.k8s.io/release/${KV}/bin/linux/amd64/kubectl" -o /tmp/kubectl
+            chmod +x /tmp/kubectl; export PATH="/tmp:$PATH"
+          fi
+          if kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1; then
+            echo "[microvm-terminate] deleting Microvm/${MVM} → controller TerminateMicrovm (final exit)"
+            kubectl delete microvm "${MVM}" -n "${NS}" --wait=false 2>&1 || echo "[microvm-terminate] delete failed (advisory)"
+            kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+          else
+            echo "[microvm-terminate] no Microvm/${MVM} — nothing to terminate (Kata or already gone)"
+          fi
 {{- end }}
 
     # ---- Teardown the claim (operator refills the pool) ----
