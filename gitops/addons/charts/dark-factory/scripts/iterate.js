@@ -120,12 +120,19 @@ async function main() {
   await gh("POST", `/repos/${REPO}/issues/${PR}/labels`, { labels: [`${ITER_LABEL_PREFIX}${next}`] }).catch(() => {});
 
   console.log(`[df-iterate] revision ${next}/${MAX_ITERATIONS} for issue #${issueNumber} (PR #${PR})`);
+  // Substrate-routed template: Lambda fix rounds run the MicroVM-native df-run-lambda
+  // (resumes the SAME suspended VM); Kata fix rounds run the certified df-run. Keyed on
+  // the originating issue's label (resolved above as triggerLabel).
+  const isLambda = triggerLabel === "darkfactory-lambda";
+  const wfTemplate = isLambda ? "df-run-lambda" : "df-run";
+  const wfName = isLambda ? `df-run-lambda-${issueNumber}-i${next}` : `df-run-${issueNumber}-i${next}`;
+  console.log(`[df-iterate] substrate=${triggerLabel} → template=${wfTemplate}`);
   const wf = {
     apiVersion: "argoproj.io/v1alpha1", kind: "Workflow",
     // Dedup per issue+round so a duplicate comment webhook is a no-op.
-    metadata: { name: `df-run-${issueNumber}-i${next}`, namespace: ARGO_NAMESPACE },
+    metadata: { name: wfName, namespace: ARGO_NAMESPACE },
     spec: {
-      workflowTemplateRef: { name: "df-run" },
+      workflowTemplateRef: { name: wfTemplate },
       arguments: { parameters: [
         { name: "issue-id", value: `${issueNumber}` },        // no id in this payload; number is unique enough for the mutex/claim
         { name: "issue-number", value: `${issueNumber}` },

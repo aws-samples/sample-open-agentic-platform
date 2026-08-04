@@ -276,6 +276,15 @@ microvm:
     # Lambda caps SUSPEND at 8h (28800s). Use the max so the VM survives the full
     # review→fix window; df-merge-teardown terminates it explicitly at merge.
     suspendedDurationSeconds: 28800
+  # Pod Identity: the df-run-lambda steps run as the dark-factory-workflow SA (argo ns)
+  # and call aws lambda-microvms (get/suspend/resume/terminate/create-auth-token). Bind
+  # that SA to the SAME lambda-microvms role the bridge/lifecycle use (least-privilege;
+  # additive; no existing role policy changes). ACK eks PodIdentityAssociation.
+  podIdentity:
+    clusterName: hub
+    accountId: "940019131157"
+    # role: <clusterName>-ack-lambdamicrovms-controller
+  workflowServiceAccount: dark-factory-workflow
 
 # ── Language / stack support ─────────────────────────────────────────────────
 # There is NO per-language profile config here — deliberately. Language support is
