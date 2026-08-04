@@ -212,6 +212,21 @@ data:
     PAYLOAD=$(GH="${GH_TOKEN}" REGION="${REGION}" python3 -c 'import json,os; e=os.environ.get; print(json.dumps({"ghToken":e("GH",""),"region":e("REGION","us-west-2"),"issueNumber":e("DF_ISSUE_NUMBER",""),"repo":e("DF_REPO",""),"branch":e("DF_BRANCH",""),"baseBranch":e("DF_BASE_BRANCH","main"),"issueTitle":e("DF_ISSUE_TITLE",""),"iterateNoteB64":e("DF_ITERATE_NOTE_B64",""),"iterateNote":e("DF_ITERATE_NOTE","")}))')
 
     MVM="mvm-${DF_ISSUE_NUMBER}"          # Microvm CR + payload Secret name for this session
+    # FRESH VM PER FIX ROUND: the CR name is stable (mvm-<issue>), so on a fix round the
+    # previous round's VM is still around — SUSPENDED after the first PR. `kubectl apply`
+    # on the same name RESUMES that snapshot, which restores hook-server's one-shot
+    # coderStarted=true guard in memory → the second /run is IGNORED and the coder never
+    # re-runs (observed: fix round reports "done" on the OLD sha, zero commits, even with
+    # the iterate note forwarded). The documented semantic is "a fresh Microvm CR per fix
+    # round" — so delete the stale CR + payload Secret and wait for TerminateMicrovm before
+    # recreating, guaranteeing a clean hook-server that accepts /run.
+    if kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1; then
+      echo "[microvm-bridge] fix round: terminating stale VM ${MVM} to get a fresh hook-server"
+      kubectl delete microvm "${MVM}" -n "${NS}" --wait=false >/dev/null 2>&1 || true
+      kubectl delete secret "${MVM}-payload" -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+      i=0; while [ "$i" -lt 60 ]; do kubectl get microvm "${MVM}" -n "${NS}" >/dev/null 2>&1 || break; i=$((i+1)); sleep 5; done
+      echo "[microvm-bridge] stale VM ${MVM} gone (waited ${i}x5s) — creating fresh"
+    fi
     # Build BOTH manifests as JSON with python3 and pipe to kubectl apply. JSON (not a
     # heredoc) on purpose: a heredoc's column-0 EOF terminator breaks out of the
     # bridge.sh: | YAML block scalar. JSON is valid YAML and stays on indented lines.
