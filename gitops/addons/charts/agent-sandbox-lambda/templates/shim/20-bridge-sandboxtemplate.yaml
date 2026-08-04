@@ -375,8 +375,11 @@ spec:
             capabilities:
               drop: ["ALL"]
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 200m, memory: 128Mi }
+            # The bridge runs python3 (JSON), curl, a fetched kubectl, and an aws-cli v2
+            # (glibc) in a poll loop — 128Mi OOMKilled it mid fix-round (bridge died before
+            # the coder's new commit landed → await-coder spun forever). Give it real headroom.
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 1Gi }
           volumeMounts:
             - name: bridge-script
               mountPath: /scripts
