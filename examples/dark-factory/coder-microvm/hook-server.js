@@ -27,6 +27,7 @@ const PORT = parseInt(process.env.HOOKS_PORT || "8080", 10);
 const SECRETS_DIR = "/tmp/secrets";
 
 let coderStarted = false;
+let coderState = "idle";   // idle | running | done | exited:<code> | spawn-error:<msg>
 
 // Materialize the runHookPayload (JSON) into the coder's existing contract:
 //   files: /tmp/secrets/{gh-token} ; env: DF_*, AWS_REGION, USE_BEDROCK=1
@@ -58,9 +59,20 @@ function startCoder(payload) {
   if (d.model) env.CODER_MODEL = d.model;
 
   console.log(`[hook-server] /run → background-spawning coder for issue #${env.DF_ISSUE_NUMBER} repo=${env.DF_REPO}`);
-  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: "inherit", detached: false });
-  child.on("exit", (code) => console.log(`[hook-server] coder exited code=${code}`));
-  child.on("error", (e) => console.log(`[hook-server] coder spawn error: ${e.message}`));
+  // Capture the coder's stdout+stderr to a file (runtime CloudWatch routing is
+  // unreliable on this pre-GA runtime), so /status can return a live tail — this is
+  // how the coder run is OBSERVED. Also mirror to our stdout.
+  const logPath = "/tmp/coder.log";
+  const logFd = fs.openSync(logPath, "a");
+  coderState = "running";
+  const child = spawn("node", ["/app/entrypoint.js"], { env, stdio: ["ignore", logFd, logFd], detached: false });
+  child.on("exit", (code) => { coderState = code === 0 ? "done" : ("exited:" + code); console.log(`[hook-server] coder exited code=${code}`); });
+  child.on("error", (e) => { coderState = "spawn-error:" + e.message; console.log(`[hook-server] coder spawn error: ${e.message}`); });
+}
+
+function tailLog(n) {
+  try { return fs.readFileSync("/tmp/coder.log", "utf8").split("\n").slice(-n).join("\n"); }
+  catch { return ""; }
 }
 
 const server = http.createServer((req, res) => {
@@ -75,6 +87,9 @@ const server = http.createServer((req, res) => {
       case "/validate": return ok({ status: "valid" });
       // Per-session start: body IS runHookPayload. Kick off the coder, return fast.
       case "/run":      startCoder(body); return ok({ status: "started" });
+      // Observe the coder: state + a tail of its captured output (runtime CloudWatch
+      // routing is unreliable on this runtime, so this is how the run is watched).
+      case "/status":   return ok({ status: "ok", coderState, started: coderStarted, log: tailLog(60) });
       // Lifecycle: coder holds no external state to flush; ack so the service proceeds.
       case "/suspend":  return ok({ status: "suspended" });
       case "/resume":   return ok({ status: "resumed" });

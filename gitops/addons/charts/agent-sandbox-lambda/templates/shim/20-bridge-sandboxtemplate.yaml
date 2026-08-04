@@ -271,15 +271,21 @@ data:
     }
     trap cleanup EXIT INT TERM
 
-    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll the CR's state;
-    #    exit when it's terminated/gone.
+    # 6) Hold the pod so Sandbox lifecycle == Microvm lifecycle. Poll BOTH the CR state
+    #    AND the in-VM coder /status (state + log tail) so the coder run is OBSERVABLE in
+    #    the bridge logs (runtime CloudWatch routing is unreliable on this runtime).
     echo "[microvm-bridge] Microvm ${MVM} running — pod now mirrors its lifecycle."
     while true; do
       ST=$(kubectl get microvm "${MVM}" -n "${NS}" -o jsonpath='{.status.state}' 2>/dev/null || echo "GONE")
       case "${ST}" in
         TERMINATED|TERMINATING|GONE|"") echo "[microvm-bridge] Microvm state=${ST:-gone} — exiting."; break ;;
       esac
-      sleep 15
+      if [ -n "${EP:-}" ] && [ -n "${TOKEN:-}" ]; then
+        STATUS=$(curl -sS -m 10 "https://${EP}/status" -H "X-aws-proxy-auth: ${TOKEN}" 2>/dev/null \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); print("coder="+str(d.get("coderState")));  print("---LOG---"); print(d.get("log","")[-1500:])' 2>/dev/null || echo "")
+        [ -n "${STATUS}" ] && echo "[microvm-bridge] /status: ${STATUS}"
+      fi
+      sleep 20
     done
 ---
 apiVersion: extensions.agents.x-k8s.io/v1beta1
