@@ -5,27 +5,27 @@ Mermaid (render on GitHub).
 
 ---
 
-## 1. Shared pipeline, substrate-branched claim
+## 1. Label-routed to two SEPARATE WorkflowTemplates
 
-Both substrates run the **same `df-run` WorkflowTemplate**. The only branch is which warm pool
-`claim-sandbox` claims from — decided by the issue's trigger label.
+The Argo Events sensor routes each label to a **different** WorkflowTemplate, so Kata's certified
+pipeline is never touched by Flow D. Kata keeps its SandboxClaim; Lambda provisions a MicroVM directly.
 
 ```mermaid
 flowchart TD
-    ISSUE["GitHub issue labeled<br/>dark-factory OR darkfactory-lambda"] --> SENSOR["Argo Events sensor"]
-    SENSOR --> DFRUN["df-run WorkflowTemplate"]
-    DFRUN --> CLAIM{"claim-sandbox<br/>trigger-label?"}
-    CLAIM -->|dark-factory| KP["coder-warmpool<br/>(Kata pool)"]
-    CLAIM -->|darkfactory-lambda| LP["coder-warmpool-microvm<br/>(Lambda bridge pool)"]
-    KP --> CODE["drive-coder"]
-    LP --> CODE
-    CODE --> GATES["holdout-gate · detect→deploy-test<br/>devops-gate → security-agent"]
+    ISSUE["GitHub issue labeled"] --> SENSOR["Argo Events sensor"]
+    SENSOR -->|"dark-factory<br/>(issue-labeled-kata)"| DFRUN["df-run<br/>(certified Kata)"]
+    SENSOR -->|"darkfactory-lambda<br/>(issue-labeled-lambda)"| DFRUNL["df-run-lambda<br/>(MicroVM-native)"]
+    DFRUN --> KCLAIM["claim-sandbox<br/>(warm Kata pod)"] --> KCODE["drive-coder"]
+    DFRUNL --> PROV["provision-microvm<br/>(create Microvm CR + POST /run)"] --> LCODE["drive-coder"]
+    LCODE --> SUSP["suspend-microvm<br/>(scale-to-zero)"]
+    KCODE --> GATES["holdout · detect→deploy-test<br/>devops-gate · security-agent"]
+    SUSP --> GATES
     GATES --> STATUS["status (consolidated verdict)"]
-    STATUS --> EXIT["onExit: teardown"]
+    STATUS --> EXIT["onExit: Kata deletes claim ·<br/>Lambda KEEPS suspended VM"]
 ```
 
-The DAG has **no MicroVM-specific node** — Lambda suspend/resume lives in the bridge (§4), so the
-Kata graph is 100% clean.
+The Kata graph has **zero MicroVM nodes**. `suspend-microvm` is explicit and lives only in
+`df-run-lambda`; suspend/resume is driven by the workflow itself (§4), not a bridge or controller.
 
 ---
 
@@ -50,48 +50,59 @@ flowchart LR
 
 ---
 
-## 3. Lambda MicroVM substrate (Flow D)
+## 3. Lambda MicroVM substrate (Flow D) — MicroVM-native, no bridge
 
 ```mermaid
 flowchart LR
-    CLAIM["SandboxClaim"] --> BR["bridge pod (in-cluster)"]
-    BR -->|reads handoff| IMG["MicrovmSandbox status<br/>imageARN + execRoleARN<br/>(built once by KRO/ACK)"]
-    BR -->|creates| MCR["Microvm CR<br/>(runHookPayload = Secret ref)"]
+    PROV["provision-microvm step<br/>(dark-factory-workflow SA<br/>+ lambda-microvms role)"] -->|reads handoff| IMG["MicrovmSandbox status<br/>imageARN + execRoleARN<br/>(built once by KRO/ACK)"]
+    PROV -->|creates mvm-&lt;issue-number&gt;| MCR["Microvm CR<br/>(runHookPayload = Secret ref,<br/>autoResume=false)"]
     MCR --> CTRL["lambdamicrovms controller"]
     CTRL -->|RunMicrovm cold-start| VM["Firecracker MicroVM<br/>hook-server :8080"]
-    BR -->|mint token, POST /run| VM
+    PROV -->|mint token, POST /run| VM
     VM --> ENT["entrypoint.js (USE_BEDROCK=1)"]
     ENT -->|models, direct| BED["Bedrock<br/>(exec role, public egress)"]
     ENT -->|git/gh :443| GH["GitHub → PR"]
     VM -.coder stdout.-> LOGS["GET /logs (token)"]
-    BR -->|after PR pushed| SUSP["suspend-microvm<br/>(free compute)"]
-    BR -->|teardown: delete CR| TERM["controller TerminateMicrovm"]
+    SUSP["suspend-microvm step<br/>(after PR)"] -->|suspend-microvm| VM
+    MERGE["df-merge-teardown<br/>(at merge)"] -->|delete CR| TERM["controller TerminateMicrovm"]
 ```
 
-- `RunMicrovm` **cold-start per session** (~90s); no node pool.
-- No cluster network dependency — **Bedrock-direct**. Logs via `/logs`. Bridge suspends the VM
-  after the PR, terminates on teardown.
+- One workflow **step** (`provision-microvm`) does create + drive `/run` — **no bridge pod, no
+  SandboxClaim, no warm pool**. `RunMicrovm` cold-start per session (~90s); no node pool.
+- No cluster network dependency — **Bedrock-direct**. Logs via `/logs`. The explicit
+  `suspend-microvm` step suspends after the PR; the VM stays suspended (autoResume=false) until a fix
+  round resumes it or merge terminates it.
 
 ---
 
-## 4. Lambda suspend / resume (bridge-owned, not a DAG step)
+## 4. Lambda suspend / resume (workflow-driven; warm resume + recreate-fallback)
 
 ```mermaid
 sequenceDiagram
-    participant B as bridge
+    participant W as df-run-lambda (workflow)
     participant C as lambdamicrovms controller
     participant V as MicroVM
-    B->>C: create Microvm CR (runHookPayload)
+    W->>C: provision: create Microvm CR (autoResume=false)
     C->>V: RunMicrovm (cold-start)
-    V-->>B: RUNNING + endpoint
-    B->>V: POST /run (token) → coder starts
-    V-->>B: /logs shows "PR opened"
-    B->>V: suspend-microvm (free compute during review)
-    Note over V: SUSPENDED (memory+disk preserved)
-    Note over B,V: on fix round, a fresh Microvm CR is created<br/>(Kata likewise claims a fresh coder per round)
-    B->>C: delete Microvm CR (on teardown)
+    V-->>W: RUNNING + endpoint
+    W->>V: POST /run (token) → coder starts → PR
+    W->>V: suspend-microvm step
+    Note over V: SUSPENDED — stays down (no endpoint polling)
+    Note over W,V: review gates run while VM is suspended (free)
+    Note over W,V: FIX ROUND (df-iterate → df-run-lambda):
+    W->>V: resume-microvm (warm — SAME VM)
+    alt resume OK (pre-GA happy path)
+        V-->>W: RUNNING → POST /run → coder re-runs → new commit
+    else resume fails (pre-GA flakiness → VM terminated)
+        W->>C: recreate: fresh Microvm CR
+        C->>V: RunMicrovm → coder re-runs → new commit
+    end
+    W->>C: at merge (df-merge-teardown): delete Microvm CR
     C->>V: TerminateMicrovm
 ```
+
+The CR is named `mvm-<issue-number>` (stable across rounds) → exactly one VM per issue, so
+suspend/resume never flap between competing owners.
 
 ---
 

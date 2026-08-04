@@ -18,10 +18,12 @@ difference is *where the coder executes* and *how it's provisioned*.
 
 | | Kata micro-VM (Flow B) | Lambda MicroVM (Flow D) |
 | --- | --- | --- |
-| **Provisioning** | pre-warmed pool → **instant claim** | **RunMicrovm cold-start per session** (~90–120s) |
-| **Time to first PR** (from label) | ~**2 min** | ~**3.5 min** |
+| **Workflow** | `df-run` (certified) | `df-run-lambda` (separate, MicroVM-native) |
+| **Provisioning** | pre-warmed pool → **instant claim** | **RunMicrovm cold-start per session** (~90s) |
+| **Time to first PR** (from label) | ~**2 min** | ~**2.5 min** |
 | **LLM path** | Bifrost gateway (in-cluster) + Langfuse traces | **Bedrock-direct** (exec role) — no cluster network |
-| **Scale-to-zero when idle** | ❌ node pool runs continuously | ✅ **suspend-to-zero**, resume on demand |
+| **Scale-to-zero when idle** | ❌ node pool runs continuously | ✅ **suspend-to-zero** between PR and merge |
+| **Fix-round mechanic** | fresh pod each round | **resume the SAME suspended VM** (warm); recreate if the pre-GA resume fails |
 | **Infra to manage** | nested-virt node group (Karpenter/MNG) | none — serverless MicroVMs |
 | **Observability** | native `kubectl logs` | custom `/logs` HTTP endpoint (no runtime CloudWatch) |
 | **Maturity** | production-ready today | pre-GA (preview) — pilot-grade |
@@ -29,40 +31,37 @@ difference is *where the coder executes* and *how it's provisioned*.
 
 **Bottom line:** at small scale the two feel equivalent (the LLM coding step ~2–4 min and the
 external review agents ~8–15 min dominate total time on *both*). The Lambda substrate's advantage
-is **not latency** — it's **operational + economic**: no node pool to run, and suspend-to-zero per
-idle session. Its cost is **maturity** (pre-GA control plane) and the extra plumbing below.
+is **not latency** — it's **operational + economic**: no node pool to run, and suspend-to-zero
+between the PR and the human's review/merge. Its cost is **maturity** (pre-GA control plane — resume
+from suspend is occasionally flaky, mitigated by the recreate-fallback) and the extra plumbing below.
 
 ---
 
-## Benchmarked run (identical issue, fired in parallel)
-
-Issue (both): *"Add an S3 bucket for log archives + an EC2 IAM role to write to it (Terraform)."*
-Fired simultaneously — `#117` labeled `dark-factory` (Kata), `#118` labeled `darkfactory-lambda` (Lambda).
+## Benchmarked run (identical issue, per substrate)
 
 ### Time to first PR (from label → PR opened)
-| Substrate | Issue | PR | Elapsed |
-| --- | --- | --- | --- |
-| Kata | #117 | #119 | ~**2 min** (16:32:54 → 16:34:58) |
-| Lambda | #118 | #120 | ~**3.7 min** (16:32:54 → 16:36:38) |
+| Substrate | Issue | PR | Elapsed | Notes |
+| --- | --- | --- | --- | --- |
+| Kata | #137 | — | ~**2 min** | pre-warmed pod, instant claim |
+| Lambda | #135 | #136 | ~**2.5 min** (20:53:03 → 20:55:35) | native `df-run-lambda`, RunMicrovm cold-start |
 
-**Δ ≈ 100s** — the MicroVM cold-start (`RunMicrovm` → RUNNING → hook-server ready → bridge drives
-`/run`) vs Kata's pre-warmed pod claim. This gap is the substrate's provisioning cost; everything
-after (clone → LLM agent → push) is identical code and takes the same time.
+**Δ ≈ 30–90s** — the MicroVM cold-start (`RunMicrovm` → RUNNING → `/run`) vs Kata's pre-warmed pod
+claim. Note the MicroVM-native `df-run-lambda` is **faster than the old bridge path** (~3.7 min):
+removing the SandboxClaim/warm-pool indirection cut ~1 min. Everything after (clone → LLM → push) is
+identical code and takes the same time.
 
-### Per-step workflow timing (Kata run #117)
-| Step | Time |
+### Lifecycle timing (Lambda #135, native pipeline)
+| Phase | Time |
 | --- | --- |
-| claim (warm pod) | ~17s |
-| **drive-coder** (clone→LLM→push→PR) | ~120s |
-| detect-deployable | ~28s |
-| holdout-gate | ~19s |
-| deploy-test (terraform validate) | ~37s |
-| security-agent (external) | several min |
-| devops-gate (external) | several min |
+| provision-microvm (RunMicrovm → RUNNING → `/run` HTTP 200) | ~90s |
+| **drive-coder** (clone → LLM → push → PR) | ~60s |
+| suspend-microvm (VM → SUSPENDED, stays down) | ~5s |
+| holdout / deploy-test (terraform validate) | ~20–40s each |
+| security-agent + devops-gate (external) | ~8–15 min combined (dominates) |
+| fix round: resume-or-recreate + coder re-run → new commit | ~2 min |
 
-*(The Lambda run's `drive-coder` is comparable for the coding itself; it just adds the ~90s
-RunMicrovm cold-start inside the claim/drive window. The two external review agents — DevOps +
-Security — take ~8–15 min combined and dominate total wall-clock on BOTH substrates.)*
+*(The external review agents dominate total wall-clock on BOTH substrates. The MicroVM is SUSPENDED
+for the entire multi-minute review window — that idle time is free on Lambda, billed on Kata.)*
 
 ---
 
@@ -76,54 +75,63 @@ Security — take ~8–15 min combined and dominate total wall-clock on BOTH sub
 
 ---
 
-## DAG — same pipeline, one substrate-branched step
+## DAG — two SEPARATE WorkflowTemplates (one per substrate)
 
-Both substrates run the **same `df-run` WorkflowTemplate**. The DAG is identical:
+The substrates run **different Argo WorkflowTemplates**, so each graph is clean and Kata's certified
+pipeline is never touched by Flow D changes. The Argo Events sensor routes by label:
+`dark-factory` → `df-run` (Kata), `darkfactory-lambda` → `df-run-lambda` (Flow D).
 
+**Kata — `df-run` (certified, byte-identical to the mature pipeline):**
 ```
-claim → drive-coder → { holdout-gate, devops-gate → security-agent, detect-deployable → deploy-test } → status → onExit(teardown)
+claim(SandboxClaim) → drive-coder → { holdout, devops-gate → security, detect → deploy-test } → status → onExit(teardown: delete claim)
 ```
 
-The **only** substrate branch is inside `claim-sandbox`: `trigger-label` selects the warm pool —
-`coder-warmpool` (Kata) vs `coder-warmpool-microvm` (Lambda). **There is no MicroVM-specific step in
-the DAG** — suspend/resume for Lambda is handled by the *bridge* itself (see below), so the Kata
-graph contains zero MicroVM nodes.
+**Lambda — `df-run-lambda` (MicroVM-native; NO SandboxClaim / bridge / warm pool):**
+```
+provision-microvm → drive-coder → suspend-microvm → { holdout, devops-gate, security, detect → deploy-test } → status → onExit(keep suspended VM)
+```
+The one extra node — `suspend-microvm` — is **explicit and lives only in the Lambda graph**, so the
+Kata graph still contains zero MicroVM nodes. Suspend/resume is owned by the workflow directly (it
+calls `aws lambda-microvms suspend/resume-microvm`), not a bridge or a lifecycle controller.
 
-### Substrate-specific mechanics (outside the DAG)
-- **Kata:** the operator materializes a pod from `SandboxTemplate/coder-sandbox`; the coder runs
-  in-cluster, reaches models via Bifrost, and its logs are native pod logs.
-- **Lambda:** `SandboxTemplate/coder-sandbox-microvm` materializes a **bridge pod** which:
-  1. reads the platform image handoff (imageARN + execRoleARN, built once by KRO/ACK),
-  2. creates a **`Microvm` CR** (declarative — the controller delivers the runHookPayload),
-  3. waits for RUNNING, mints an auth token, and **POSTs `/run`** to the VM endpoint → the
-     hook-server background-spawns the coder,
-  4. **suspends the MicroVM** once the coder pushes the PR (free compute during review),
-  5. terminates the VM on teardown (delete the `Microvm` CR).
+### Substrate-specific mechanics
+- **Kata:** `claim-sandbox` binds a **pre-warmed** pod from `coder-warmpool`; the operator injects
+  `DF_*` env; the baked `entrypoint.js` runs in-cluster, reaches models via **Bifrost**, native logs.
+- **Lambda:** `provision-microvm` (a single workflow step, running as `dark-factory-workflow` with the
+  lambda-microvms role via Pod Identity) does it all — no bridge pod, no warm pool:
+  1. reads the platform image handoff (imageARN + execRoleARN, built **once** by KRO/ACK),
+  2. creates the **`Microvm` CR** (stable name `mvm-<issue-number>`) + a runHookPayload Secret
+     (the review note is folded in here — the coder has no claim env),
+  3. waits RUNNING + endpoint, mints an auth token, **POSTs `/run`** → the hook-server
+     background-spawns the same `entrypoint.js` with `USE_BEDROCK=1` (Bedrock-direct, no cluster net),
+  4. the `suspend-microvm` DAG step suspends the VM once the PR is open (idlePolicy
+     `autoResumeEnabled=false` + nothing polls the endpoint → it **stays** suspended),
+  5. on a fix round `provision-microvm` **resumes the same suspended VM** (warm resume); if the
+     pre-GA service failed the resume (VM terminated), it **recreates a fresh VM** automatically,
+  6. `df-merge-teardown` deletes the `Microvm` CR at merge → controller `TerminateMicrovm`.
 
 ---
 
 ## Step-by-step: what actually happens
 
-### Kata (Flow B)
-1. Issue labeled `dark-factory` → Argo Events sensor → `df-run`.
-2. `claim-sandbox` claims a **pre-warmed** Kata pod from `coder-warmpool` (instant).
-3. Operator injects `DF_ISSUE_NUMBER` etc. → the baked-in `entrypoint.js` runs: clone → Claude
-   Code (`claude -p`, via **Bifrost**) → commit → **open PR**.
-4. Review gates: DevOps Agent (check-run) + Security Agent (findings). Consolidated verdict posted.
-5. Human comment "fix findings" → `df-iterate` → new Kata coder round → re-review.
-6. Approve → `df-merge-teardown` merges + releases the claim.
+### Kata (Flow B) — `df-run`
+1. Issue labeled `dark-factory` → sensor dep `issue-labeled-kata` → `df-run`.
+2. `claim-sandbox` binds a **pre-warmed** Kata pod from `coder-warmpool` (instant).
+3. Operator injects `DF_*` → baked `entrypoint.js`: clone → Claude Code (via **Bifrost**) → **open PR**.
+4. Review gates: DevOps Agent + Security Agent → consolidated verdict.
+5. "fix findings" → `df-iterate` → **new** Kata coder round → re-review.
+6. Approve → `df-merge-teardown` merges + deletes the claim.
 
-### Lambda MicroVM (Flow D)
-1. Issue labeled `darkfactory-lambda` → same sensor → `df-run` (warm-pool branched to Lambda).
-2. `claim-sandbox` claims the **bridge** pod from `coder-warmpool-microvm`.
-3. Bridge creates a `Microvm` CR → controller `RunMicrovm` (**cold-start ~90s**) → RUNNING.
-4. Bridge mints auth token → `POST /run` → hook-server background-spawns the **same
-   `entrypoint.js`**, but `USE_BEDROCK=1` so it calls **Bedrock directly** (exec role) — no cluster
-   network. Coder: clone → Claude Code → commit → **open PR**.
-5. Bridge **suspends** the MicroVM (free compute while gates run).
-6. Same review gates + verdict.
-7. "fix findings" → `df-iterate` (routes back to Lambda via `trigger-label`) → fresh MicroVM round.
-8. Approve → merge + teardown (bridge deletes the `Microvm` CR → controller terminates the VM).
+### Lambda MicroVM (Flow D) — `df-run-lambda`
+1. Issue labeled `darkfactory-lambda` → sensor dep `issue-labeled-lambda` → `df-run-lambda`.
+2. `provision-microvm` creates the `Microvm` CR → controller `RunMicrovm` (**cold-start ~90s**) →
+   RUNNING; mints token; `POST /run` → hook-server spawns the coder (`USE_BEDROCK=1`,
+   **Bedrock-direct**). Coder: clone → Claude Code → **open PR**.
+3. `suspend-microvm` step suspends the VM → it **stays SUSPENDED** while gates run (scale-to-zero).
+4. Same review gates + verdict.
+5. "fix findings" → `df-iterate` → `df-run-lambda` fix round: **resume the SAME VM** (warm) or, if the
+   pre-GA service failed the resume, **recreate fresh**; the coder re-runs with the note → new commit.
+6. Approve → `df-merge-teardown` merges + deletes the `Microvm` CR → controller `TerminateMicrovm`.
 
 ---
 
@@ -138,16 +146,23 @@ snapshot/hook execution model**:
 | 2 | Can't reach Bifrost's ClusterIP from a MicroVM | **Bedrock-direct** via the exec role (`bedrock:InvokeModel`); no Bifrost/NLB/VPC-connector |
 | 3 | Runtime logs don't reach CloudWatch | hook-server captures coder stdout → `/logs` HTTP endpoint |
 | 4 | Coder is one-shot but the MicroVM `/run` hook has a 30s timeout | `/run` **background-spawns** the coder + returns fast; pipeline polls GitHub for the PR |
-| 5 | Env injection needs a `coder` container | bridge container named `coder` (claim contract parity) |
-| 6 | aws-cli image lacks `lambda-microvms`; no node | bridge image = `aws-cli:latest` (has the verbs) + python3 for JSON + fetch kubectl at start |
-| 7 | Ingress: `ALL_INGRESS` blocks auth-token minting | use **`HTTP_INGRESS`** (+ `SHELL_INGRESS` for debug) |
-| 8 | `runHookPayload` is a `SecretKeyReference`; imperative `run-microvm --run-hook-payload` doesn't fire `/run` | deliver via the **declarative `Microvm` CR** |
-| 9 | Image rebuild: overwriting the same S3 key doesn't rebuild | use versioned artifact keys; bump `codeArtifactUri` |
-| 10 | Pre-GA controller state can wedge (ConflictException / hung build) on delete/recreate | delete the AWS image by ARN or the CR cleanly; keep the hook-server minimal |
-| — | IAM for the controller/bridge/exec roles | `iam:PassRole` (ARN-scoped), `lambda:PassNetworkConnector`, `lambda:CreateMicrovmAuthToken`, `bedrock:InvokeModel`, `s3:ListAllMyBuckets` on the capability role |
+| 5 | Ingress: `ALL_INGRESS` blocks auth-token minting | use **`HTTP_INGRESS`** |
+| 6 | aws-cli image lacks `lambda-microvms`; no node | step image = `aws-cli:latest` (has the verbs) + python3 for JSON + fetch kubectl at start |
+| 7 | `runHookPayload` is a `SecretKeyReference`; imperative `run-microvm --run-hook-payload` doesn't fire `/run` | deliver via the **declarative `Microvm` CR** |
+| 8 | Image rebuild: overwriting the same S3 key doesn't rebuild | use versioned artifact keys; bump `codeArtifactUri` |
+| 9 | **VM would not stay SUSPENDED** (console showed RUNNING) | `idlePolicy.autoResumeEnabled=false` **and** never hit the VM endpoint after `/run` — any request auto-resumes it |
+| 10 | **VM auto-terminated before the fix round** (resume hit "already terminated") | `suspendedDurationSeconds=28800` (Lambda's 8h max) so it survives the review→human window; 5 min was far too short |
+| 11 | **Fix round re-ran but committed nothing** (coder "done" on old sha) | the review note must ride on the **runHookPayload** (MicroVM has no claim env); hook-server keys its `/run` guard on a **per-invocation run-id** so a resumed VM accepts a fresh run |
+| 12 | Pre-GA **resume-from-suspend is intermittently flaky** (Internal service error → VM terminates) | `provision-microvm` checks the VM's real AWS state and **recreates a fresh VM** when resume isn't possible — the fix round self-heals |
+| 13 | Two Sandboxes fought over one VM → suspend/resume **flapped** until the VM died | name the CR/workflow by **issue-number** (stable across rounds) so there's exactly **one VM per issue** |
+| — | IAM: the workflow SA calls the lambda-microvms verbs | Pod Identity binds `dark-factory-workflow` → the lambda-microvms role (get/suspend/resume/terminate-microvm + create-auth-token); exec role keeps `bedrock:InvokeModel` |
+
+> **Note on the ACK CR status:** `Microvm.status.state` is **stale** — it does not reflect
+> suspend/resume/terminate. Always read AWS truth with `aws lambda-microvms get-microvm --query state`.
 
 Kata needs **none** of these — it's an in-cluster pod with a mounted workspace, native logs,
-Bifrost reachability, and a normal ECR image.
+Bifrost reachability, and a normal ECR image. That's why the two substrates are **separate
+WorkflowTemplates** (`df-run` vs `df-run-lambda`): Flow D's plumbing never touches the certified Kata graph.
 
 ---
 
