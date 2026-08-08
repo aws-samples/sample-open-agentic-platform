@@ -1,13 +1,31 @@
-// MCP Server ComponentDefinition with blue-green deployment and agentgateway registration
-
+// mcp-server ComponentDefinition
+//
+// An MCP server managed by an Argo Rollout (blue-green) that also registers
+// itself with AgentGateway. Aligned with `service-rollout`: it owns a dedicated
+// ServiceAccount (name == context.name) and names its container context.name,
+// so it is the workload's single identity anchor — attach `aws-service-identity`
+// and/or `gateway-identity` traits to grant AWS / AgentGateway identities with
+// no extra wiring. Workload parameters mirror `service-rollout`; the MCP-specific
+// additions are the AgentgatewayBackend, the /mcp/<name> HTTPRoute, and an
+// optional tool-level authorization policy.
+//
+// NOTE: the workload/SA/Service skeleton is intentionally duplicated with
+// `service-rollout` (see decision log): `vela def render` renders each
+// definition from a self-contained file and does not resolve local CUE imports,
+// so shared-template reuse would require a cluster-registered cue.oam.dev
+// Package. The duplication is the accepted, bounded cost of keeping mcp-server a
+// first-class, self-contained component.
 "mcp-server": {
-	alias: ""
+	alias:       ""
 	annotations: {}
-	attributes: workload: definition: {
-		apiVersion: "argoproj.io/v1alpha1"
-		kind:       "Rollout"
+	attributes: {
+		workload: definition: {
+			apiVersion: "argoproj.io/v1alpha1"
+			kind:       "Rollout"
+		}
+		status: healthPolicy: #"isHealth: (context.output.status.phase != _|_) && (context.output.status.phase == "Healthy")"#
 	}
-	description: "MCP server with blue-green deployment and agentgateway registration"
+	description: "MCP server (Argo Rollout blue-green) with a dedicated ServiceAccount and AgentGateway registration"
 	labels: {}
 	type: "component"
 }
@@ -17,18 +35,21 @@ template: {
 		apiVersion: "argoproj.io/v1alpha1"
 		kind:       "Rollout"
 		metadata: {
-			name:      parameter.name
-			namespace: parameter.namespace
+			name:      context.name
+			namespace: context.namespace
 			labels: {
-				"app.kubernetes.io/name":      parameter.name
+				"app.kubernetes.io/name":      context.name
 				"app.kubernetes.io/component": "mcp-server"
+			}
+			if parameter.description != _|_ {
+				annotations: "mcp.dev/description": parameter.description
 			}
 		}
 		spec: {
 			replicas: parameter.replicas
 			strategy: blueGreen: {
-				activeService:        parameter.name + "-stable"
-				previewService:       parameter.name + "-preview"
+				activeService:        context.name + "-stable"
+				previewService:       context.name + "-preview"
 				autoPromotionEnabled: parameter.autoPromotionEnabled
 				if parameter.autoPromotionSeconds != _|_ {
 					autoPromotionSeconds: parameter.autoPromotionSeconds
@@ -37,29 +58,37 @@ template: {
 					scaleDownDelaySeconds: parameter.scaleDownDelaySeconds
 				}
 			}
-			selector: matchLabels: "app.kubernetes.io/name": parameter.name
+			selector: matchLabels: "app.kubernetes.io/name": context.name
 			template: {
-				metadata: labels: "app.kubernetes.io/name": parameter.name
+				metadata: labels: "app.kubernetes.io/name": context.name
 				spec: {
-					serviceAccountName: parameter.serviceAccount
+					serviceAccountName: context.name
 					containers: [{
-						name:  "mcp-server"
+						name:  context.name
 						image: parameter.image
+						if parameter.command != _|_ {
+							command: parameter.command
+						}
+						if parameter.args != _|_ {
+							args: parameter.args
+						}
 						ports: [{
 							name:          "mcp"
-							containerPort: parameter.containerPort
+							containerPort: parameter.port
 							protocol:      "TCP"
 						}]
-						env: [for e in parameter.env {e}]
+						if len(parameter.env) > 0 {
+							env: parameter.env
+						}
 						livenessProbe: {
 							if parameter.healthPath != _|_ {
 								httpGet: {
 									path: parameter.healthPath
-									port: parameter.containerPort
+									port: parameter.port
 								}
 							}
 							if parameter.healthPath == _|_ {
-								tcpSocket: port: parameter.containerPort
+								tcpSocket: port: parameter.port
 							}
 							initialDelaySeconds: 10
 							periodSeconds:       30
@@ -68,11 +97,11 @@ template: {
 							if parameter.healthPath != _|_ {
 								httpGet: {
 									path: parameter.healthPath
-									port: parameter.containerPort
+									port: parameter.port
 								}
 							}
 							if parameter.healthPath == _|_ {
-								tcpSocket: port: parameter.containerPort
+								tcpSocket: port: parameter.port
 							}
 							initialDelaySeconds: 5
 							periodSeconds:       10
@@ -87,21 +116,33 @@ template: {
 	}
 
 	outputs: {
-		// Stable service (active) — used by AgentgatewayBackend
+		// Dedicated ServiceAccount — the workload's identity anchor (name ==
+		// context.name), so aws-service-identity / gateway-identity attach cleanly.
+		serviceAccount: {
+			apiVersion: "v1"
+			kind:       "ServiceAccount"
+			metadata: {
+				name:      context.name
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
+			}
+		}
+
+		// Stable service (active) — targeted by the AgentgatewayBackend.
 		stableService: {
 			apiVersion: "v1"
 			kind:       "Service"
 			metadata: {
-				name:      parameter.name + "-stable"
-				namespace: parameter.namespace
-				labels: "app.kubernetes.io/name": parameter.name
+				name:      context.name + "-stable"
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
 			}
 			spec: {
-				selector: "app.kubernetes.io/name": parameter.name
+				selector: "app.kubernetes.io/name": context.name
 				ports: [{
 					name:        "mcp"
-					port:        80
-					targetPort:  parameter.containerPort
+					port:        parameter.servicePort
+					targetPort:  parameter.port
 					protocol:    "TCP"
 					appProtocol: "agentgateway.dev/mcp"
 				}]
@@ -114,16 +155,16 @@ template: {
 			apiVersion: "v1"
 			kind:       "Service"
 			metadata: {
-				name:      parameter.name + "-preview"
-				namespace: parameter.namespace
-				labels: "app.kubernetes.io/name": parameter.name
+				name:      context.name + "-preview"
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
 			}
 			spec: {
-				selector: "app.kubernetes.io/name": parameter.name
+				selector: "app.kubernetes.io/name": context.name
 				ports: [{
 					name:        "mcp"
-					port:        80
-					targetPort:  parameter.containerPort
+					port:        parameter.servicePort
+					targetPort:  parameter.port
 					protocol:    "TCP"
 					appProtocol: "agentgateway.dev/mcp"
 				}]
@@ -131,34 +172,34 @@ template: {
 			}
 		}
 
-		// AgentgatewayBackend — static target pointing to stable service
+		// AgentgatewayBackend — static target pointing at the stable service.
 		mcpBackend: {
 			apiVersion: "agentgateway.dev/v1alpha1"
 			kind:       "AgentgatewayBackend"
 			metadata: {
-				name:      parameter.name + "-backend"
-				namespace: parameter.namespace
-				labels: "app.kubernetes.io/name": parameter.name
+				name:      context.name + "-backend"
+				namespace: context.namespace
+				labels: "app.kubernetes.io/name": context.name
 			}
 			spec: mcp: targets: [{
-				name: parameter.name + "-target"
+				name: context.name + "-target"
 				static: {
-					host:     parameter.name + "-stable." + parameter.namespace + ".svc.cluster.local"
-					port:     80
+					host:     context.name + "-stable." + context.namespace + ".svc.cluster.local"
+					port:     parameter.servicePort
 					protocol: parameter.mcpProtocol
 				}
 			}]
 		}
 
-		// HTTPRoute — registers MCP server with the gateway at /mcp/<name>
+		// HTTPRoute — registers the MCP server with the gateway at /mcp/<name>.
 		if parameter.registerWithGateway {
 			gatewayRoute: {
 				apiVersion: "gateway.networking.k8s.io/v1"
 				kind:       "HTTPRoute"
 				metadata: {
-					name:      parameter.name
-					namespace: parameter.namespace
-					labels: "app.kubernetes.io/name": parameter.name
+					name:      context.name
+					namespace: context.namespace
+					labels: "app.kubernetes.io/name": context.name
 				}
 				spec: {
 					parentRefs: [{
@@ -169,34 +210,34 @@ template: {
 						matches: [{
 							path: {
 								type:  "PathPrefix"
-								value: "/mcp/" + parameter.name
+								value: "/mcp/" + context.name
 							}
 						}]
 						backendRefs: [{
 							group: "agentgateway.dev"
 							kind:  "AgentgatewayBackend"
-							name:  parameter.name + "-backend"
+							name:  context.name + "-backend"
 						}]
 					}]
 				}
 			}
 		}
 
-		// Optional: AgentgatewayPolicy for tool-level authorization
+		// Optional: AgentgatewayPolicy for tool-level authorization (CEL).
 		if parameter.authPolicy != _|_ && len(parameter.authPolicy.matchExpressions) > 0 {
 			toolAccessPolicy: {
 				apiVersion: "agentgateway.dev/v1alpha1"
 				kind:       "AgentgatewayPolicy"
 				metadata: {
-					name:      parameter.name + "-tool-access"
-					namespace: parameter.namespace
-					labels: "app.kubernetes.io/name": parameter.name
+					name:      context.name + "-tool-access"
+					namespace: context.namespace
+					labels: "app.kubernetes.io/name": context.name
 				}
 				spec: {
 					targetRefs: [{
 						group: "agentgateway.dev"
 						kind:  "AgentgatewayBackend"
-						name:  parameter.name + "-backend"
+						name:  context.name + "-backend"
 					}]
 					backend: mcp: authorization: {
 						action: parameter.authPolicy.action
@@ -208,41 +249,38 @@ template: {
 	}
 
 	parameter: {
-		// Required fields
-		name:        string
-		namespace:   string
-		description: string
-		image:       string
-
-		// Container port — FastMCP default is 8000
-		containerPort: *8000 | int
-
-		// Health check path — if set, uses HTTP GET probe; if omitted, uses TCP socket
-		healthPath?: string
-
-		// MCP protocol
-		mcpProtocol: *"StreamableHTTP" | "SSE"
-
-		// Optional fields with defaults
-		replicas:       *1 | int
-		serviceAccount: *"default" | string
-
-		// Blue-green deployment settings
-		autoPromotionEnabled:  *true | bool
-		autoPromotionSeconds:  *10 | int
-		scaleDownDelaySeconds: *30 | int
-
-		// AgentGateway registration
-		registerWithGateway: *true | bool
-		gatewayNamespace:    *"agentgateway-system" | string
-
-		// Environment variables
+		// +usage=Container image
+		image: string
+		// +usage=Human-readable description (annotation only)
+		description?: string
+		// +usage=Number of replicas
+		replicas: *1 | int
+		// +usage=Container port the MCP server listens on (FastMCP default 8000)
+		port: *8000 | int
+		// +usage=Service port exposed by the stable/preview Services
+		servicePort: *80 | int
+		// +usage=Optional container command override
+		command?: [...string]
+		// +usage=Optional container args
+		args?: [...string]
+		// +usage=Environment variables
 		env: *[] | [...{
 			name:  string
 			value: string
 		}]
-
-		// Resource limits
+		// +usage=HTTP path for liveness/readiness probes; if unset, a TCP socket probe is used
+		healthPath?: string
+		// +usage=Blue-green auto-promotion
+		autoPromotionEnabled:   *true | bool
+		autoPromotionSeconds?:  int
+		scaleDownDelaySeconds?: int
+		// +usage=MCP transport protocol advertised to AgentGateway
+		mcpProtocol: *"StreamableHTTP" | "SSE"
+		// +usage=Register an HTTPRoute on the gateway at /mcp/<name>
+		registerWithGateway: *true | bool
+		// +usage=Namespace of the agentgateway-proxy Gateway
+		gatewayNamespace: *"agentgateway-system" | string
+		// +usage=Resource requests/limits
 		resources?: {
 			requests?: {
 				cpu?:    string
@@ -253,8 +291,7 @@ template: {
 				memory?: string
 			}
 		}
-
-		// Tool-level authorization policy (CEL-based)
+		// +usage=Tool-level authorization policy (CEL-based)
 		authPolicy?: {
 			action:           *"Allow" | "Deny"
 			matchExpressions: [...string]
