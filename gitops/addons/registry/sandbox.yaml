@@ -378,6 +378,24 @@ dark-factory:
       evalImage: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-coder:v0.2.5'
     deployTest:
       image: '{{.metadata.annotations.aws_account_id}}.dkr.ecr.{{.metadata.annotations.aws_region}}.amazonaws.com/dark-factory-deploy-test:v0.1.0'
+    # ── Flow D pod identity: account + cluster from THIS cluster's annotations ──
+    # 10-rbac.yaml builds the PodIdentityAssociation roleARN as
+    #   arn:aws:iam::<accountId>:role/<clusterName>-ack-lambdamicrovms-controller
+    # from microvm.podIdentity. The chart default hardcodes accountId 940019131157
+    # (the author's account) and clusterName `hub`, so on any other account the ACK
+    # eks controller rejects it with:
+    #   AccessDeniedException: Cross-account pass role is not allowed
+    # and — because ArgoCD health-waits on that CR — the dark-factory app never
+    # reaches Synced. Observed live on account 259732043995: the role DID exist
+    # locally (ACK created it), the ARN just named the wrong account.
+    #
+    # Templating both from annotations makes it correct on every cluster with no
+    # per-cluster overlay. Managed ACK/KRO capabilities themselves are enabled at
+    # the platform layer (appmod-blueprints) — verified ACTIVE here, not our concern.
+    microvm:
+      podIdentity:
+        clusterName: '{{.metadata.annotations.aws_cluster_name}}'
+        accountId: '{{.metadata.annotations.aws_account_id}}'
     # GitHub credentials, cluster-scoped in Secrets Manager (same pattern as
     # langfuse/keycloak in observability.yaml). Three DISTINCT credentials so the
     # untrusted coder VM never holds the orchestrator's merge-capable token
@@ -432,6 +450,16 @@ agent-sandbox-lambda:
     argocd.argoproj.io/sync-wave: '2'
   selectorMatchLabels:
     environment: control-plane
+  valuesObject:
+    # Same reason as the dark-factory entry above: this chart's shim also creates
+    # PodIdentityAssociations whose roleARN embeds the account + cluster. The chart
+    # default is correctly EMPTY, but the hub overlay carried a hardcoded foreign
+    # account; injecting from annotations here is authoritative (valuesObject wins
+    # over overlay value files) and portable.
+    microvm:
+      accountId: '{{.metadata.annotations.aws_account_id}}'
+      podIdentity:
+        clusterName: '{{.metadata.annotations.aws_cluster_name}}'
 
 # ack-lambdamicrovms — the SELF-MANAGED ACK controller for lambdamicrovms, which is
 # not yet in Managed ACK. Managed ACK and this controller COEXIST (different CRD
