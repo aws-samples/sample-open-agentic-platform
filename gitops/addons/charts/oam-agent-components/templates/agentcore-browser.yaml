@@ -55,8 +55,12 @@ spec:
         parameter: {
         	// +usage=Browser name in AWS. Defaults to <namespace>_<componentName>
         	browserName: *_autoName | string
-        	// +usage=AWS region
-        	region: *"us-east-1" | string
+        	// +usage=AWS region. Defaults to the cluster's region (global.awsRegion,
+        	// sourced from the cluster secret's aws_region annotation; the chart's
+        	// values.yaml carries a fallback), so the same OAM Application deploys
+        	// unchanged to any region. Override only to provision the browser in a
+        	// different region than the cluster.
+        	region: *"{{ .Values.global.awsRegion }}" | string
         	// +usage=Description of the browser
         	description: *"AgentCore Browser" | string
         	// +usage=Network mode: PUBLIC or VPC
