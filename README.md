@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This repository is archived and no longer maintained.** Development has moved to
+> **[awslabs/open-agentic-platform](https://github.com/awslabs/open-agentic-platform)**.
+> Please open issues and pull requests there. This repo stays available read-only for reference.
+
 # Open Agentic Platform (OAP) on Amazon EKS
 
 **A complete, production-shaped platform for building, running, securing, and observing AI agents on
